@@ -7,8 +7,11 @@ class VSCloneChatSessionBridge {
   +start(): void
   +stop(): void
 }
-class VSCloneChatHistoryViewPane {
+class VSCloneUnifiedChatViewPane {
   +renderBody(container): void
+  +layoutRegions(): void
+}
+class VSCloneChatHistoryRail {
   +refresh(): void
   +revealTurn(threadId, turnId): void
 }
@@ -53,13 +56,16 @@ class VSCloneChatHistoryMigrationService {
 }
 
 VSCloneChatHistoryContribution --> VSCloneChatSessionBridge
-VSCloneChatHistoryContribution --> VSCloneChatHistoryViewPane
 VSCloneChatHistoryContribution --> VSCloneChatHistoryCommandRegistrar
 VSCloneChatSessionBridge --> VSCloneChatHistoryService
-VSCloneChatHistoryViewPane --> VSCloneChatHistoryService
-VSCloneChatHistoryViewPane --> VSCloneChatHistoryTreeDataSource
 VSCloneChatHistoryTreeDataSource --> VSCloneChatHistoryService
 VSCloneChatHistoryService --> VSCloneChatHistoryModel
 VSCloneChatHistoryService --> VSCloneChatHistoryStore
 VSCloneChatHistoryStore --> VSCloneChatHistorySerializer
 VSCloneChatHistoryStore --> VSCloneChatHistoryMigrationService
+
+VSCloneChatHistoryContribution --> VSCloneUnifiedChatViewPane
+VSCloneUnifiedChatViewPane --> VSCloneChatHistoryRail
+VSCloneUnifiedChatViewPane --> VSCloneChatHistoryService
+VSCloneChatHistoryRail --> VSCloneChatHistoryTreeDataSource
+VSCloneChatHistoryRail --> VSCloneChatHistoryService

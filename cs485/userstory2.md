@@ -273,7 +273,7 @@ Rationale: The ledger and summary are split so we can keep detailed history with
       "totalTokens": 335000,
       "billedCostUsd": 2.46
     },
-    "today": {
+    "day": {
       "inputTokens": 32000,
       "outputTokens": 10400,
       "totalTokens": 42400,

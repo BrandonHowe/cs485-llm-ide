@@ -3,9 +3,9 @@
 Rationale: Because this is a fork of VSCode and not a standalone project, it's very important that LLMs adhere to the structure and contributing guidelines that VSCode has already established.
 
 - **Spec ID:** `BC-CHAT-HISTORY-001`
-- **Feature:** VSClone Chat History Side Panel
+- **Feature:** VSClone Unified Chat History Rail
 - **User Story:** As a developer, I want to maintain a chat history with the LLM in a side panel so that I can reference previous prompts and responses while I work.
-- **Scope:** Add a VSClone-owned history panel that captures prompt/response turns from existing chat sessions, persists them, and supports search/reference actions.
+- **Scope:** Implement history as a left rail inside a single unified chat pane (history rail + conversation + composer/model toolbar), while keeping prompt/response capture, persistence, and search/reference behavior.
 - **Non-goals:** Replacing VS Code’s core chat execution pipeline, multi-user sync, or introducing a new LLM provider protocol.
 - **Target code area:** `src/vs/workbench/contrib/vsclone`
 - **Proposed folders:**
@@ -14,6 +14,8 @@ Rationale: Because this is a fork of VSCode and not a standalone project, it's v
   - `src/vs/workbench/contrib/vsclone/electron-main` (reserved for future desktop-only enhancements; not required for MVP)
 - **Required integration touchpoints:**
   - `src/vs/workbench/workbench.common.main.ts` (register contribution import)
+  - unified chat host surface in `src/vs/workbench/contrib/vsclone/browser/vscloneUnifiedChatViewPane.ts`
+  - external dependency from Story 3: `IVSCloneThreadModelSelectionService` (`src/vs/workbench/contrib/vsclone/common/vscloneThreadModelSelectionService.ts`)
   - Existing chat services/events from `src/vs/workbench/contrib/chat/common/*` and `src/vs/workbench/contrib/chat/browser/*`
 
 # Architecture Diagram
@@ -23,7 +25,7 @@ Rationale: The architecture is designed to reflect the existing choices that VSC
 ![Architecture Diagram](diagrams/userstory1/architecture-diagram-1.svg)
 
 - **Runtime placement:**
-  - **Client:** side panel UI, bridge, in-memory model, persistence orchestration.
+  - **Client:** unified chat pane UI (history rail + conversation + composer), bridge, in-memory model, persistence orchestration.
   - **Server process:** existing chat session execution and model event source.
   - **Cloud:** existing LLM backend (no new endpoint introduced).
   - **Local:** workspace/profile-scoped history files.
@@ -36,20 +38,19 @@ Rationale: The class diagram is based on the list of classes. The classes are de
 
 # List of Classes
 
-Rationale: Each class is designed to do a single thing. Migration and serialization classes are implemented up front to prepare for those cases rather than trying to handle those issues when they arise. This also makes debugging easier because each problem area has a clear owner.
+Rationale: Each class is designed to do a single thing. Migration and serialization classes are implemented up front to prepare for those cases rather than trying to handle those issues when they arise. There are a number of chat UI elements such as the view pane and history rail that make it easy to add more UI elements in the future.
 
-- `VSCloneChatHistoryContribution` (`browser/vscloneChatHistory.contribution.ts`): registers view container/view, service singleton, and startup lifecycle hooks.
+- `VSCloneChatHistoryContribution` (`browser/vscloneChatHistory.contribution.ts`): registers unified chat integration, singleton services, and startup lifecycle hooks.
 - `VSCloneChatSessionBridge` (`browser/vscloneChatSessionBridge.ts`): subscribes to `IChatService`/`IChatModel` events and converts them into normalized turn updates.
-- `VSCloneChatHistoryViewPane` (`browser/vscloneChatHistoryViewPane.ts`): side-panel UI (filter/search + tree + details area) with live updates.
-- `VSCloneChatHistoryTreeDataSource` (`browser/vscloneChatHistoryTree.ts`): adapts history model into tree nodes (thread groups, threads, turns).
+- `VSCloneUnifiedChatViewPane` (`browser/vscloneUnifiedChatViewPane.ts`): hosts one-pane chat layout regions (history rail, conversation surface, composer hooks).
+- `VSCloneChatHistoryRail` (`browser/vscloneChatHistoryRail.ts`): renders the history rail and manages selection/search interactions.
+- `VSCloneChatHistoryTreeDataSource` (`browser/vscloneChatHistoryRailTree.ts`): adapts history model into rail nodes (thread groups, threads, turns).
 - `VSCloneChatHistoryCommandRegistrar` (`browser/vscloneChatHistoryActions.ts`): registers command handlers, context menu actions, and keybindings.
 - `VSCloneChatHistoryService` (`common/vscloneChatHistoryService.ts`): central orchestration service for loading, querying, mutating, and persistence scheduling.
 - `VSCloneChatHistoryModel` (`common/vscloneChatHistoryModel.ts`): in-memory store and query engine for thread/turn state.
 - `VSCloneChatHistoryStore` (`common/vscloneChatHistoryStore.ts`): file-backed persistence, retention pruning, and recovery.
 - `VSCloneChatHistorySerializer` (`common/vscloneChatHistorySerializer.ts`): JSON serialization/deserialization with deterministic ordering.
 - `VSCloneChatHistoryMigrationService` (`common/vscloneChatHistoryMigrationService.ts`): schema upgrades and backward compatibility logic.
-
-**Consistency check:** the 10 classes above match the 10 classes in the class diagram.
 
 # State Diagrams
 
@@ -72,6 +73,7 @@ Rationale: The risk table concentrates on the highest-probability integration fa
 | Risk | Failure Mode | Mitigation |
 |---|---|---|
 | Event ordering drift from chat internals | Turns attached to wrong thread or wrong status | Normalize by `sessionResource + requestId`; ignore stale sequence numbers |
+| Unified pane density issues | History rail or conversation area becomes cramped | Provide resizable rail width and collapse/expand rail action |
 | Streaming write pressure | UI jank and excessive disk writes | Keep streaming in memory; persist on terminal states + debounced checkpoints |
 | Corrupt history files | Panel fails to load | Atomic write (`.tmp` then replace), schema validation, backup + recovery path |
 | Large history volume | Slow startup/filtering | Lazy-load thread bodies, cap defaults (`maxThreads`, `maxTurnsPerThread`), prune old data |
@@ -84,7 +86,7 @@ Rationale: The risk table concentrates on the highest-probability integration fa
 Rationale: A lot of the technology stack is already specified because this is building off of the VSCode repository. I tried not to include anything new framework wise to make sure the project is as maintainable as possible. Reusing existing services and UI patterns should also make development easier for LLMs as they can utilize existing docs.
 
 - Language/runtime: TypeScript in VS Code workbench architecture.
-- UI: `ViewPane`/`FilterViewPane`, tree/list widgets, existing markdown rendering infra.
+- UI: unified chat view composition (`ViewPane` + embedded rail/list + conversation surface), existing markdown rendering infra.
 - State/events: `Emitter`, `Event`, and existing observable patterns.
 - Persistence: `IFileService`, `IStorageService`, workspace/profile storage paths.
 - Integration: existing `IChatService`, `IChatModel`, `IChatWidgetService`, `IClipboardService`.
@@ -101,8 +103,9 @@ Rationale: I kept API usage tied to existing chat events and service surfaces as
   - `IChatModel.onDidChange` (`addRequest`, `changedRequest`, `completedRequest`, `removeRequest`)
   - `IChatWidgetService.revealWidget(...)`, `IChatWidget.setInput(...)`
 - New commands:
-  - `vsclone.chatHistory.openView`
-  - `vsclone.chatHistory.focusFilter`
+  - `vsclone.chat.open`
+  - `vsclone.chatHistory.focusRail`
+  - `vsclone.chatHistory.toggleRail`
   - `vsclone.chatHistory.copyPrompt`
   - `vsclone.chatHistory.copyResponse`
   - `vsclone.chatHistory.reusePrompt`
@@ -114,6 +117,7 @@ Rationale: I kept API usage tied to existing chat events and service surfaces as
   - `vsclone.chatHistory.maxThreads` (`number`, default `200`)
   - `vsclone.chatHistory.maxTurnsPerThread` (`number`, default `100`)
   - `vsclone.chatHistory.retentionDays` (`number`, default `30`)
+  - `vsclone.chatHistory.railWidth` (`number`, default `320`)
   - `vsclone.chatHistory.persistScope` (`"workspace" | "profile"`, default `"workspace"`)
   - `vsclone.chatHistory.redactSecrets` (`boolean`, default `true`)
 - No new external cloud endpoint is introduced by this story; existing LLM transport remains unchanged.
@@ -147,6 +151,7 @@ export interface IVSCloneChatHistoryThread {
 	threadId: string;
 	sessionResource: string;
 	title: string;
+	activeModelIdentifier?: string;
 	createdAt: number;
 	updatedAt: number;
 	status: 'active' | 'completed' | 'failed' | 'archived';
@@ -159,6 +164,8 @@ export interface IVSCloneChatHistoryTurn {
 	turnId: string;
 	threadId: string;
 	sequence: number;
+	modelIdentifier?: string;
+	providerId?: string;
 	promptText: string;
 	responseMarkdown: string;
 	responsePlainText: string;
@@ -172,6 +179,8 @@ export interface IVSCloneChatTurnUpdate {
 	threadId: string;
 	turnId: string;
 	sequence: number;
+	modelIdentifier?: string;
+	providerId?: string;
 	phase: 'prompt' | 'stream' | 'complete' | 'error' | 'cancel';
 	promptText?: string;
 	responseMarkdownDelta?: string;
@@ -202,6 +211,7 @@ Rationale: The chat data can be broadly broken down into two sections: info abou
       "threadId": "3f4e...8a",
       "sessionResource": "vscode-local-chat-session://session/abc",
       "title": "Refactor auth middleware",
+      "activeModelIdentifier": "copilot/gpt-4.1",
       "createdAt": 1764999000000,
       "updatedAt": 1765000000000,
       "status": "completed",
@@ -222,6 +232,8 @@ Rationale: The chat data can be broadly broken down into two sections: info abou
     {
       "turnId": "t-001",
       "sequence": 1,
+      "modelIdentifier": "copilot/gpt-4.1",
+      "providerId": "copilot",
       "promptText": "Refactor this auth middleware for readability",
       "responseMarkdown": "Here is a cleaner structure...",
       "responsePlainText": "Here is a cleaner structure...",

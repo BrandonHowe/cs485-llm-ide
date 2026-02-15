@@ -1,11 +1,13 @@
 flowchart LR
   subgraph Client["Workbench Renderer (Client)"]
     Dev["Developer"]
-    ChatUI["Chat Input Toolbar"]
+    ChatUI["VSClone Unified Chat View"]
+    HistRail["History Rail"]
+    Composer["Composer Toolbar"]
     PickerCtl["VSCloneModelPickerController"]
     Catalog["VSCloneModelCatalogService"]
     Compat["VSCloneModelCompatibilityService"]
-    SelectSvc["VSCloneModelSelectionService"]
+    SelectSvc["VSCloneThreadModelSelectionService"]
     PrefStore["VSCloneModelPreferenceStore"]
     ConfigBridge["VSCloneProviderConfigurationBridge"]
   end
@@ -27,15 +29,19 @@ flowchart LR
     ProviderB["Provider B API"]
   end
 
-  Dev -->|open dropdown / select model| ChatUI
-  ChatUI --> PickerCtl
+  Dev -->|select active thread| HistRail
+  Dev -->|open dropdown / select model| Composer
+  ChatUI --> HistRail
+  ChatUI --> Composer
+  Composer --> PickerCtl
   PickerCtl --> Catalog
   PickerCtl --> Compat
   PickerCtl --> SelectSvc
+  HistRail -->|active thread context| SelectSvc
 
   Catalog -->|vendors + models + metadata| LMService
   Compat -->|capability checks| LMService
-  SelectSvc -->|persist selection + recents| PrefStore
+  SelectSvc -->|persist thread selection + recents| PrefStore
   PrefStore --> KVS
 
   PickerCtl -->|configure provider if needed| ConfigBridge
@@ -43,6 +49,6 @@ flowchart LR
   LMConfig --> LMFile
   LMConfig --> Secrets
 
-  SelectSvc -->|userSelectedModelId| ChatSvc
+  SelectSvc -->|userSelectedModelId for active thread| ChatSvc
   ChatSvc --> ProviderA
   ChatSvc --> ProviderB

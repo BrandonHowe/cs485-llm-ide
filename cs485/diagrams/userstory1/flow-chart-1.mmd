@@ -1,23 +1,26 @@
 flowchart TD
-  A[User sends prompt in Chat UI] --> B[Existing IChatService processes request]
-  B --> C[VSCloneChatSessionBridge receives addRequest event]
-  C --> D{Thread exists for sessionResource?}
-  D -- No --> E[Create thread metadata]
-  D -- Yes --> F[Reuse existing thread]
-  E --> G[Create pending turn with prompt text]
-  F --> G
-  G --> H[Receive streaming response events]
-  H --> I[Update in memory turn content throttled]
-  I --> J{Response terminal state?}
-  J -- No --> H
-  J -- Yes --> K[Finalize turn: completed/failed/cancelled]
-  K --> L[VSCloneChatHistoryService marks model dirty]
-  L --> M[Persist thread + index]
-  M --> N{Persist success?}
-  N -- Yes --> O[Notify view + refresh tree]
-  N -- No --> P[Retry with backoff + log]
-  O --> Q[User selects history item]
-  Q --> R{Action}
-  R -- Copy --> S[Copy prompt/response to clipboard]
-  R -- Reuse --> T[Set chat input via IChatWidgetService]
-  R -- Open --> U[Open original chat session]
+  A[User opens unified chat pane] --> B[User selects thread in history rail]
+  B --> C[Restore thread context and model selection]
+  C --> D[User sends prompt from composer]
+  D --> E[Existing IChatService processes request]
+  E --> F[VSCloneChatSessionBridge receives addRequest event]
+  F --> G{Thread exists for sessionResource?}
+  G -- No --> H[Create thread metadata]
+  G -- Yes --> I[Reuse existing thread]
+  H --> J[Create pending turn with prompt text]
+  I --> J
+  J --> K[Receive streaming response events]
+  K --> L[Update in-memory turn content]
+  L --> M{Response terminal state?}
+  M -- No --> K
+  M -- Yes --> N[Finalize turn and capture model metadata]
+  N --> O[VSCloneChatHistoryService marks model dirty]
+  O --> P[Persist thread plus index]
+  P --> Q{Persist success?}
+  Q -- Yes --> R[Refresh history rail in unified pane]
+  Q -- No --> S[Retry with backoff and log]
+  R --> T[User selects history item]
+  T --> U{Action}
+  U -- Copy --> V[Copy prompt or response to clipboard]
+  U -- Reuse --> W[Set chat input and restore turn model]
+  U -- Open --> X[Open and focus original session]

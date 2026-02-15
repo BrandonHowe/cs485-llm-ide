@@ -1,10 +1,12 @@
 flowchart LR
   subgraph Client["Workbench Renderer (Client)"]
     Dev["Developer"]
-    ChatUI["Existing Chat UI (chat contrib)"]
+    ChatUI["VSClone Unified Chat View"]
+    HistRail["History Rail (embedded)"]
+    Composer["Composer + Model Toolbar"]
     Bridge["VSCloneChatSessionBridge"]
     HistSvc["VSCloneChatHistoryService"]
-    HistView["VSCloneChatHistoryViewPane"]
+    ThreadSel["External: VSCloneThreadModelSelectionService (Story 3)"]
   end
 
   subgraph Server["Extension Host / Remote Agent (Server Process)"]
@@ -21,16 +23,21 @@ flowchart LR
     LLM["Model API (existing provider path)"]
   end
 
-  Dev -->|Prompt text + context| ChatUI
+  Dev -->|Select thread / browse history| HistRail
+  Dev -->|Prompt text + context| Composer
+  ChatUI --> HistRail
+  ChatUI --> Composer
   ChatUI -->|sendRequest| ChatSvc
   ChatSvc -->|Request| LLM
   LLM -->|Streaming tokens + final response| ChatSvc
 
   ChatSvc -->|onDidCreateModel/onDidChange events| Bridge
   Bridge -->|Normalized turn updates| HistSvc
-  HistSvc -->|Observable updates| HistView
+  HistSvc -->|Observable updates| HistRail
   HistSvc -->|Persist deltas| Store
   Store --> Index
   Store --> Threads
 
-  HistView -->|Copy/Reuse/Open Session| ChatUI
+  HistRail -->|Thread selection| ThreadSel
+  ThreadSel -->|Restore model for active thread| Composer
+  HistRail -->|Copy/Reuse/Open Session| ChatUI

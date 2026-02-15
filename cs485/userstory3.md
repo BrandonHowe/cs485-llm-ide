@@ -3,13 +3,13 @@
 Rationale: Given that the user is logged into multiple models, they should be able to switch between them seamlessly and with ease. Changes should be focused on quick selection, ensuring you can use the model, and persistence so request routing stays reliable.
 
 - **Spec ID:** `BC-MODEL-SWITCHER-001`
-- **Feature:** VSClone Provider/Model Switcher Dropdown
+- **Feature:** VSClone Unified Chat Model Switcher Dropdown
 - **User Story:** As a developer, I want to switch between different LLM providers and models from a dropdown so that I can use the best model for each task.
-- **Primary Outcome:** A reliable chat-pane dropdown that lets users choose provider/model quickly, with validation, persistence, and request routing.
+- **Primary Outcome:** A reliable model dropdown in the unified chat pane that lets users choose provider/model quickly, tied to the active history thread for correct routing.
 - **Scope (MVP):**
-  - Add a provider/model dropdown in the chat input toolbar.
+  - Add a provider/model dropdown in the unified chat composer toolbar.
   - Support switching models before sending a request.
-  - Persist selected model by chat location and restore it.
+  - Persist selected model per active thread (with location fallback) and restore it on thread switch.
   - Validate model compatibility with chat mode/capabilities.
   - Handle unavailable/unconfigured providers gracefully.
 - **Non-goals (MVP):**
@@ -22,10 +22,12 @@ Rationale: Given that the user is logged into multiple models, they should be ab
   - `src/vs/workbench/contrib/vsclone/browser`
   - `src/vs/workbench/contrib/vsclone/electron-main` (reserved for future desktop-only needs)
 - **Integration touchpoints in existing code:**
+  - unified chat host surface in `src/vs/workbench/contrib/vsclone/browser/vscloneUnifiedChatViewPane.ts`
   - chat input toolbar/model picker surface in `src/vs/workbench/contrib/chat/browser/widget/input/chatInputPart.ts`
   - model picker action shape in `src/vs/workbench/contrib/chat/browser/widget/input/modelPickerActionItem.ts`
   - request routing via `IChatSendRequestOptions.userSelectedModelId`
   - model catalog and provider groups via `ILanguageModelsService` and `ILanguageModelsConfigurationService`
+  - active-thread context from VSClone history rail service (`IVSCloneChatHistoryService`)
 
 # Architecture Diagram
 
@@ -34,13 +36,14 @@ Rationale: I kept this architecture aligned with existing VSCode services as muc
 ![Architecture Diagram](diagrams/userstory3/architecture-diagram-1.svg)
 
 - **Where components run:**
-  - **Client:** dropdown UI, catalog/filter logic, model selection state, commands.
+  - **Client:** unified chat pane UI (history rail + conversation + composer), dropdown UI, catalog/filter logic, thread-scoped model selection state, commands.
   - **Server/workbench services:** language model provider registration and request routing.
   - **Local storage:** profile-scoped model preferences, provider group config, encrypted secrets.
   - **Cloud:** selected provider/model inference endpoints.
 - **Information flow:**
+  - active history thread -> current model selection context.
   - model metadata -> dropdown options.
-  - selection -> persisted preferences + next request routing.
+  - thread selection -> persisted thread preference + next request routing.
   - provider configuration/secrets -> provider availability.
 
 # Class Diagram
@@ -51,17 +54,17 @@ Rationale: The class diagram is based on the class list and split into catalog, 
 
 # List of Classes
 
-Rationale: Each class maps to a concrete behavior users will notice, like switching, fallback, provider setup, or persistence. Dedicated action and migration classes are included early so those parts do not become patchwork later. This should make long-term maintenance cleaner as model catalogs and policies evolve.
+Rationale: Each class maps to a concrete behavior users will notice, like switching, fallback, provider setup, or persistence. Dedicated action and migration classes are included early so those parts do not become patchwork later. There's also a UI element for the switcher that is included that works with the classes in user story 1.
 
 - `VSCloneModelSwitcherContribution` (`browser/vscloneModelSwitcher.contribution.ts`): registers picker integration, services, and startup hooks.
 - `VSCloneModelCatalogService` (`common/vscloneModelCatalogService.ts`): builds provider/model catalog from `ILanguageModelsService`.
 - `VSCloneModelAvailabilityService` (`common/vscloneModelAvailabilityService.ts`): computes provider/model availability and readiness state.
-- `VSCloneModelCompatibilityService` (`common/vscloneModelCompatibilityService.ts`): filters models by mode/capabilities/location.
-- `VSCloneModelSelectionService` (`common/vscloneModelSelectionService.ts`): source of truth for active selection and next-model switching.
+- `VSCloneModelCompatibilityService` (`common/vscloneModelCompatibilityService.ts`): filters models by mode/capabilities and active thread context.
+- `VSCloneThreadModelSelectionService` (`common/vscloneThreadModelSelectionService.ts`): source of truth for per-thread selection, fallback, and next-model switching.
 - `VSCloneModelPreferenceStore` (`common/vscloneModelPreferenceStore.ts`): persists selected/default/recent models.
 - `VSCloneProviderConfigurationBridge` (`browser/vscloneProviderConfigurationBridge.ts`): launches provider config flows and validates provider-group setup.
 - `VSCloneModelPickerController` (`browser/vscloneModelPickerController.ts`): orchestrates dropdown data, sections, and selection application.
-- `VSCloneModelPickerActionItem` (`browser/vscloneModelPickerActionItem.ts`): toolbar action-view-item renderer for provider/model dropdown.
+- `VSCloneUnifiedChatModelSwitcherActionItem` (`browser/vscloneUnifiedChatModelSwitcherActionItem.ts`): composer toolbar renderer for provider/model dropdown inside unified chat view.
 - `VSCloneModelSwitcherActionRegistrar` (`browser/vscloneModelSwitcherActions.ts`): command IDs, menus, keyboard shortcuts.
 - `VSCloneModelSelectionMigrationService` (`common/vscloneModelSelectionMigrationService.ts`): migrates legacy model selection records to v1.
 
@@ -90,6 +93,7 @@ Rationale: Most of the risk here is integration risk, especially issues with imp
 | Provider/model catalog churn | Dropdown options stale or flicker | Debounced catalog refresh + stable sorting + diffed updates |
 | Incompatible model selected for mode | Request failure after send | Pre-send compatibility checks in selection service and picker UI badges |
 | Provider deconfigured mid-session | Selected model becomes invalid | Runtime availability checks + fallback/default model policy |
+| Thread/model mismatch | Wrong model used after switching threads | Restore selection on thread change and show active-model badge in composer |
 | Duplicate identifiers across vendors | Wrong model routed | Always persist internal model identifier; include vendor in display and telemetry context |
 | Secret/config errors | Provider appears selectable but unusable | Validate provider-group config before apply; actionable error in picker |
 | Accessibility regressions | Keyboard and screen-reader users blocked | ARIA labels, keyboard navigation parity, announced state changes |
@@ -97,7 +101,7 @@ Rationale: Most of the risk here is integration risk, especially issues with imp
 
 # Technology Stack
 
-Rationale: Since this is a VSCode fork, I reused the existing chat toolbar, model services, and storage patterns. There's no need to add new frameworks or libraries, everything can be done with the existing stack.
+Rationale: Since this is a VSCode fork, I reused the existing chat toolbar, model services, and storage patterns. There's no need to add new frameworks or libraries, everything can be done with the existing stack. This code does depend on some of the code we came up with in user story 1 though.
 
 - **Language/runtime:** TypeScript inside VS Code workbench contribution architecture.
 - **UI components:** Chat toolbar action item, dropdown widget, quick input, context keys.
@@ -106,6 +110,7 @@ Rationale: Since this is a VSCode fork, I reused the existing chat toolbar, mode
   - `IChatService` request routing via `userSelectedModelId`.
   - `ILanguageModelsConfigurationService` for provider group config.
   - `IStorageService` for selection persistence and recents.
+  - `IVSCloneChatHistoryService` for active thread context in unified chat.
 - **Security dependencies:** `ISecretStorageService` through language model configuration flow.
 - **Testing:** browser/common unit tests under `src/vs/workbench/contrib/vsclone/test`.
 
@@ -120,9 +125,11 @@ Rationale: I stayed on existing model catalog and send-request APIs and only add
   - `ILanguageModelsService.onDidChangeLanguageModels`
   - `ILanguageModelsConfigurationService.getLanguageModelsProviderGroups()`
   - `IChatService.sendRequest(..., { userSelectedModelId })`
+  - `IVSCloneChatHistoryService.onDidChange`
 
 - **New commands (proposed):**
   - `vsclone.modelSwitcher.openPicker`
+  - `vsclone.modelSwitcher.setModelForActiveThread`
   - `vsclone.modelSwitcher.switchToNextModel`
   - `vsclone.modelSwitcher.setDefaultModelForLocation`
   - `vsclone.modelSwitcher.manageProviders`
@@ -132,7 +139,8 @@ Rationale: I stayed on existing model catalog and send-request APIs and only add
 - **New settings (proposed):**
   - `vsclone.modelSwitcher.enabled` (`boolean`, default `true`)
   - `vsclone.modelSwitcher.autoFallbackOnUnavailable` (`boolean`, default `true`)
-  - `vsclone.modelSwitcher.defaultModelByLocation` (`object`, default `{}`)
+  - `vsclone.modelSwitcher.defaultModelFallbackByLocation` (`object`, default `{}`)
+  - `vsclone.modelSwitcher.rememberPerThread` (`boolean`, default `true`)
   - `vsclone.modelSwitcher.maxRecentModels` (`number`, default `8`)
   - `vsclone.modelSwitcher.strictCapabilityFiltering` (`boolean`, default `true`)
   - `vsclone.modelSwitcher.showProviderSections` (`boolean`, default `true`)
@@ -142,14 +150,14 @@ Rationale: I stayed on existing model catalog and send-request APIs and only add
 Rationale: The interfaces define a small, stable selection lifecycle that UI code can consume and test easily. Explicit change reasons make fallback and restore behavior easier to handle correctly. This helps keep selection state transitions easy to deal with instead of being inferred implicitly by UI components.
 
 ```ts
-export interface IVSCloneModelSelectionService {
+export interface IVSCloneThreadModelSelectionService {
 	readonly _serviceBrand: undefined;
 	readonly onDidChangeSelection: Event<IVSCloneModelSelectionChangeEvent>;
 	initialize(): Promise<void>;
-	getCurrentSelection(location: IVSCloneChatLocation): IVSCloneModelSelection | undefined;
-	setCurrentSelection(selection: IVSCloneModelSelection): Promise<void>;
-	switchToNextModel(location: IVSCloneChatLocation): Promise<IVSCloneModelSelection | undefined>;
-	resetSelection(location: IVSCloneChatLocation): Promise<void>;
+	getCurrentSelectionForThread(threadId: string, location: IVSCloneChatLocation): IVSCloneModelSelection | undefined;
+	setSelectionForThread(threadId: string, selection: IVSCloneModelSelection): Promise<void>;
+	switchToNextModel(threadId: string, location: IVSCloneChatLocation): Promise<IVSCloneModelSelection | undefined>;
+	resetSelectionForThread(threadId: string): Promise<void>;
 }
 
 export interface IVSCloneModelCatalogService {
@@ -161,6 +169,7 @@ export interface IVSCloneModelCatalogService {
 }
 
 export interface IVSCloneModelSelection {
+	threadId?: string;
 	location: IVSCloneChatLocation;
 	modelIdentifier: string;
 	vendor: string;
@@ -194,6 +203,7 @@ export interface IVSCloneProviderDescriptor {
 }
 
 export interface IVSCloneModelSelectionChangeEvent {
+	threadId?: string;
 	previous: IVSCloneModelSelection | undefined;
 	current: IVSCloneModelSelection | undefined;
 	reason: 'user' | 'restore' | 'fallback' | 'reset';
@@ -214,21 +224,25 @@ Rationale: Selection and recents are stored separately so restore stays fast and
 ```json
 {
   "version": 1,
-  "selectedByLocation": {
-    "chat": {
+  "selectedByThread": {
+    "thread_3f4e8a": {
       "modelIdentifier": "copilot/gpt-4.1",
       "vendor": "copilot",
       "modelId": "gpt-4.1",
       "modelName": "GPT-4.1",
       "selectedAt": 1765003000000
     },
-    "editorInline": {
+    "thread_61bd0d": {
       "modelIdentifier": "anthropic/claude-3.7-sonnet",
       "vendor": "anthropic",
       "modelId": "claude-3.7-sonnet",
       "modelName": "Claude 3.7 Sonnet",
       "selectedAt": 1765003010000
     }
+  },
+  "defaultFallbackByLocation": {
+    "chat": "copilot/gpt-4.1",
+    "editorInline": "copilot/gpt-4.1"
   }
 }
 ```
@@ -264,8 +278,8 @@ Rationale: Selection and recents are stored separately so restore stays fast and
 ```
 
 - **Migration policy:**
-  - Migrate legacy selection keys (if present) into `selection.v1` once.
-  - Unknown/invalid models are dropped and replaced by default-per-location fallback.
+  - Migrate legacy location-only keys (if present) into `selection.v1` once.
+  - Unknown/invalid models are dropped and replaced by fallback-per-location defaults.
   - Migration is non-blocking and idempotent.
 
 # Security and Privacy

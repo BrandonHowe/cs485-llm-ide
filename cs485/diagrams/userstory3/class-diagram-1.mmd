@@ -20,11 +20,12 @@ class VSCloneModelCompatibilityService {
   +explainIncompatibility(model, context): string|undefined
 }
 
-class VSCloneModelSelectionService {
+class VSCloneThreadModelSelectionService {
   +initialize(): Promise~void~
-  +getCurrentSelection(location): Selection|undefined
-  +setCurrentSelection(selection): Promise~void~
-  +switchToNextModel(location): Promise~Selection|undefined~
+  +getCurrentSelectionForThread(threadId, location): Selection|undefined
+  +setSelectionForThread(threadId, selection): Promise~void~
+  +switchToNextModel(threadId, location): Promise~Selection|undefined~
+  +resetSelectionForThread(threadId): Promise~void~
 }
 
 class VSCloneModelPreferenceStore {
@@ -46,7 +47,7 @@ class VSCloneModelPickerController {
   +applySelection(selection): Promise~void~
 }
 
-class VSCloneModelPickerActionItem {
+class VSCloneUnifiedChatModelSwitcherActionItem {
   +renderLabel(container): void
   +show(): void
   +updateActions(): void
@@ -62,16 +63,16 @@ class VSCloneModelSelectionMigrationService {
 
 VSCloneModelSwitcherContribution --> VSCloneModelSwitcherActionRegistrar
 VSCloneModelSwitcherContribution --> VSCloneModelPickerController
-VSCloneModelSwitcherContribution --> VSCloneModelSelectionService
+VSCloneModelSwitcherContribution --> VSCloneThreadModelSelectionService
 
 VSCloneModelPickerController --> VSCloneModelCatalogService
 VSCloneModelPickerController --> VSCloneModelAvailabilityService
 VSCloneModelPickerController --> VSCloneModelCompatibilityService
-VSCloneModelPickerController --> VSCloneModelSelectionService
+VSCloneModelPickerController --> VSCloneThreadModelSelectionService
 VSCloneModelPickerController --> VSCloneProviderConfigurationBridge
 
-VSCloneModelSelectionService --> VSCloneModelPreferenceStore
-VSCloneModelSelectionService --> VSCloneModelSelectionMigrationService
-VSCloneModelSelectionService --> VSCloneModelCatalogService
+VSCloneThreadModelSelectionService --> VSCloneModelPreferenceStore
+VSCloneThreadModelSelectionService --> VSCloneModelSelectionMigrationService
+VSCloneThreadModelSelectionService --> VSCloneModelCatalogService
 
-VSCloneModelPickerActionItem --> VSCloneModelPickerController
+VSCloneUnifiedChatModelSwitcherActionItem --> VSCloneModelPickerController
