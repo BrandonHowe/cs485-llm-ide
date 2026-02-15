@@ -8,11 +8,13 @@ class VSCloneUsageSessionBridge {
   +start(): void
   +stop(): void
   +onChatModelEvent(): void
+  +emitRequestReference(): void
 }
 
 class VSCloneUsageService {
   +initialize(): Promise~void~
-  +appendUsage(event): Promise~void~
+  +recordRequest(event): Promise~void~
+  +syncPendingUsage(options): Promise~void~
   +getEntries(query): UsageEntry[]
   +getSummary(scope): UsageSummary
   +export(format, query): Promise~URI~
@@ -21,13 +23,14 @@ class VSCloneUsageService {
 
 class VSCloneUsageModel {
   +upsertEntry(entry): void
+  +markSyncStatus(entryId, status): void
   +queryEntries(query): UsageEntry[]
   +setQuotaSnapshot(snapshot): void
   +getSummary(scope): UsageSummary
 }
 
 class VSCloneUsageAggregationService {
-  +recompute(): void
+  +recomputeFromProviderRows(): void
   +getDailyRollups(): DailyRollup[]
 }
 
@@ -55,6 +58,7 @@ class VSCloneUsageSerializer {
 class VSCloneUsageMigrationService {
   +migrateLedger(lines): UsageEntry[]
   +migrateSummary(raw): UsageSummary
+  +archiveLegacyLocalRows(): void
 }
 
 class VSCloneUsageLogViewPane {

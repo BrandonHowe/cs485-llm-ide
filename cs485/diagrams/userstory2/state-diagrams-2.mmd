@@ -1,8 +1,8 @@
-stateDiagram-v2
+stateDiagram
   [*] --> UnderBudget
-  UnderBudget --> Warning: threshold reached
-  Warning --> UnderBudget: usage drops/reset period
-  Warning --> Exceeded: budget crossed
+  UnderBudget --> Warning: provider-billed usage reaches threshold
+  Warning --> UnderBudget: reset period or budget increased
+  Warning --> Exceeded: provider-billed budget crossed
   Exceeded --> Acknowledged: user dismisses alert
-  Acknowledged --> Exceeded: usage still above budget
+  Acknowledged --> Exceeded: latest sync still above budget
   Exceeded --> UnderBudget: reset period / clear budget

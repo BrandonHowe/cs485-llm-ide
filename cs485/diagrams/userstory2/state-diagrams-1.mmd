@@ -1,12 +1,15 @@
-stateDiagram-v2
+stateDiagram
   [*] --> RequestObserved
-  RequestObserved --> AwaitingUsage
-  AwaitingUsage --> UsageStreaming: usage update arrives
-  AwaitingUsage --> MissingUsageFallback: request completes with no usage payload
-  UsageStreaming --> UsageStreaming: additional usage update
-  UsageStreaming --> Finalized: request completed/cancelled/failed
-  MissingUsageFallback --> Finalized: finalize with unknown usage flag
-  Finalized --> PersistQueued
+  RequestObserved --> AwaitingProviderReference
+  AwaitingProviderReference --> PendingSync: provider correlation captured
+  AwaitingProviderReference --> SyncFailed: request completed without correlation id
+  PendingSync --> SyncInFlight: scheduler dispatches sync
+  SyncInFlight --> Synced: provider usage row received
+  SyncInFlight --> SyncRetry: transient provider error
+  SyncRetry --> SyncInFlight
+  SyncInFlight --> SyncFailed: terminal provider error
+  Synced --> PersistQueued
+  SyncFailed --> PersistQueued
   PersistQueued --> Persisted
   PersistQueued --> PersistRetry: write failure
   PersistRetry --> PersistQueued

@@ -13,25 +13,32 @@ flowchart LR
     ChatModel["IChatService + IChatModel"]
   end
 
-  subgraph Cloud["Cloud Providers"]
-    LLM["LLM Provider\n(prompt/completion tokens)"]
-    Ent["Entitlement/Quota API\n(remaining request quotas)"]
+  subgraph Cloud["Provider Cloud APIs"]
+    Inference["Provider Inference API"]
+    UsageAPI["Provider Usage API\n(OpenAI/Anthropic/...)"]
+    QuotaAPI["Provider Quota/Billing API"]
   end
 
   subgraph Local["Local Persistence"]
     Store["VSCloneUsageStore"]
-    Ledger[("usage-ledger.v1.jsonl")]
-    Summary[("usage-summary.v1.json")]
+    Ledger[("usage-ledger.jsonl")]
+    Summary[("usage-summary.json")]
   end
 
   Dev -->|prompt| ChatUI
   ChatUI -->|request| ChatModel
-  ChatModel -->|inference request| LLM
-  LLM -->|response + usage tokens| ChatModel
+  ChatModel -->|inference request| Inference
+  Inference -->|response + provider correlation id| ChatModel
 
-  Ent -->|quota snapshots| UsageSvc
-  ChatModel -->|request/response + usage updates| Bridge
-  Bridge -->|normalized usage events| UsageSvc
+  ChatModel -->|request lifecycle + provider references| Bridge
+  Bridge -->|normalized request references| UsageSvc
+
+  UsageSvc -->|sync query by provider request id| UsageAPI
+  UsageAPI -->|authoritative token/cost rows| UsageSvc
+
+  UsageSvc -->|quota query| QuotaAPI
+  QuotaAPI -->|remaining quota snapshot| UsageSvc
+
   UsageSvc --> Agg
   Agg --> Budget
   UsageSvc -->|state updates| View
@@ -39,4 +46,4 @@ flowchart LR
   Store --> Ledger
   Store --> Summary
 
-  View -->|export/copy/filter/clear| UsageSvc
+  View -->|export/copy/filter/clear/sync| UsageSvc

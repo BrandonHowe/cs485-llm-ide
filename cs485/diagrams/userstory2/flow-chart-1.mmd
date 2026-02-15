@@ -1,22 +1,20 @@
 flowchart TD
   A[User sends request in Chat] --> B[Chat model starts request]
-  B --> C[Bridge records request start]
-  C --> D{response.usage available?}
-  D -- no --> E[Keep pending entry]
-  D -- yes --> F[Capture prompt/completion tokens]
-  F --> G[Lookup model metadata via ILanguageModelsService]
-  G --> H[Compute total + remaining context tokens]
-  H --> I[Read quota snapshot + budgets]
-  I --> J[Compute budget state + warnings]
+  B --> C[Bridge records request reference]
+  C --> D{provider correlation id available?}
+  D -- no --> E[Mark entry sync_failed no_correlation]
+  D -- yes --> F[Queue provider usage sync]
+  F --> G[Call provider usage API]
+  G --> H{usage row returned?}
+  H -- no --> I[Mark entry sync_failed with provider error]
+  H -- yes --> J[Normalize provider tokens cost and quota fields]
   J --> K[Append/update usage entry in model]
+  E --> K
+  I --> K
   K --> L[Debounced persist to ledger + summary]
   L --> M{persist ok?}
   M -- yes --> N[Refresh side panel and totals]
   M -- no --> O[Retry with backoff + telemetry/log]
-  E --> P{request completed?}
-  P -- no --> D
-  P -- yes --> Q[Finalize with missing-usage marker]
-  Q --> K
-  N --> R[User filters / exports / clears]
-  R --> S[Action registrar routes command]
-  S --> T[Usage service executes action]
+  N --> P[User filters exports clears syncs]
+  P --> Q[Action registrar routes command]
+  Q --> R[Usage service executes action]
