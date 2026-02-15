@@ -1,5 +1,7 @@
 # Header
 
+Rationale: Given that the user is logged into multiple models, they should be able to switch between them seamlessly and with ease. Changes should be focused on quick selection, ensuring you can use the model, and persistence so request routing stays reliable.
+
 - **Spec ID:** `BC-MODEL-SWITCHER-001`
 - **Feature:** VSClone Provider/Model Switcher Dropdown
 - **User Story:** As a developer, I want to switch between different LLM providers and models from a dropdown so that I can use the best model for each task.
@@ -27,6 +29,8 @@
 
 # Architecture Diagram
 
+Rationale: I kept this architecture aligned with existing VSCode services as much as possible. The client handles picker state and UI while workbench services handle model registration and request routing. This avoids duplicating provider logic and keeps model availability changes visible where users are already interacting.
+
 ![Architecture Diagram](diagrams/userstory3/architecture-diagram-1.svg)
 
 - **Where components run:**
@@ -41,9 +45,13 @@
 
 # Class Diagram
 
+Rationale: The class diagram is based on the class list and split into catalog, availability, compatibility, selection, and rendering concerns. This separation makes changes easier when upstream picker or provider behavior shifts. It also keeps testing more focused, since each piece has a smaller and clearer responsibility.
+
 ![Class Diagram](diagrams/userstory3/class-diagram-1.svg)
 
 # List of Classes
+
+Rationale: Each class maps to a concrete behavior users will notice, like switching, fallback, provider setup, or persistence. Dedicated action and migration classes are included early so those parts do not become patchwork later. This should make long-term maintenance cleaner as model catalogs and policies evolve.
 
 - `VSCloneModelSwitcherContribution` (`browser/vscloneModelSwitcher.contribution.ts`): registers picker integration, services, and startup hooks.
 - `VSCloneModelCatalogService` (`common/vscloneModelCatalogService.ts`): builds provider/model catalog from `ILanguageModelsService`.
@@ -61,15 +69,21 @@
 
 # State Diagrams
 
+Rationale: Model selection can fail for several runtime reasons, like provider changes, auth issues, or capability mismatches, so those transitions are explicit here. This helps prevent broken routing when users actually send a request. I wanted failure behavior to be predictable so fallback handling does not feel random.
+
 ![State Diagram 1](diagrams/userstory3/state-diagrams-1.svg)
 
 ![State Diagram 2](diagrams/userstory3/state-diagrams-2.svg)
 
 # Flow Chart
 
+Rationale: The flow chart follows the same path users take: refresh catalog, validate selection, apply it, persist it, then route the next request. Keeping that path linear makes behavior easier to reason about. It also makes debugging simpler when a selected model does not match what was expected at send time.
+
 ![Flow Chart](diagrams/userstory3/flow-chart-1.svg)
 
 # Development Risks and Failures
+
+Rationale: Most of the risk here is integration risk, especially issues with implementation or poor vendor authentication. The mitigations focus on visible errors and graceful fallback instead of silently letting bad selections through. This keeps user trust higher because invalid selections fail clearly instead of failing deep in request execution logic.
 
 | Risk | Failure Mode | Mitigation |
 |---|---|---|
@@ -83,6 +97,8 @@
 
 # Technology Stack
 
+Rationale: Since this is a VSCode fork, I reused the existing chat toolbar, model services, and storage patterns. There's no need to add new frameworks or libraries, everything can be done with the existing stack.
+
 - **Language/runtime:** TypeScript inside VS Code workbench contribution architecture.
 - **UI components:** Chat toolbar action item, dropdown widget, quick input, context keys.
 - **Core dependencies:**
@@ -94,6 +110,8 @@
 - **Testing:** browser/common unit tests under `src/vs/workbench/contrib/vsclone/test`.
 
 # APIs
+
+Rationale: I stayed on existing model catalog and send-request APIs and only added a small command/settings layer. This keeps the implementation focused on orchestration rather than building new provider abstractions. A narrow API surface should be easier to stabilize across provider and product changes.
 
 - **Existing APIs consumed:**
   - `ILanguageModelsService.getLanguageModelIds()`
@@ -120,6 +138,8 @@
   - `vsclone.modelSwitcher.showProviderSections` (`boolean`, default `true`)
 
 # Public Interfaces
+
+Rationale: The interfaces define a small, stable selection lifecycle that UI code can consume and test easily. Explicit change reasons make fallback and restore behavior easier to handle correctly. This helps keep selection state transitions easy to deal with instead of being inferred implicitly by UI components.
 
 ```ts
 export interface IVSCloneModelSelectionService {
@@ -183,6 +203,8 @@ export type IVSCloneChatLocation = 'chat' | 'editorInline' | 'notebook' | 'termi
 ```
 
 # Data Schemas
+
+Rationale: Selection and recents are stored separately so restore stays fast and recents can stay bounded. Versioned keys and idempotent migration reduce the chance of breaking users during future catalog changes. Available models may change over time (newly supported providers, new model releases), so persistence should be simple but still resilient to this kind of thing.
 
 - **Persistence scope:** profile-level by default (mirrors existing model preference behavior).
 - **Storage keys (proposed):**
@@ -248,6 +270,8 @@ export type IVSCloneChatLocation = 'chat' | 'editorInline' | 'notebook' | 'termi
 
 # Security and Privacy
 
+Rationale: Secrets stay in secret storage and never in model-switcher preference data. That keeps this feature focused on selection metadata instead of turning it into a credential surface. Keeping that boundary strict also makes audits and future security reviews much easier.
+
 - Provider secrets are never stored in plain text model-switcher preferences.
 - Provider credentials remain in secret storage; config stores secret placeholders only.
 - Telemetry should avoid raw secrets and should treat model identifiers as system metadata only.
@@ -256,6 +280,8 @@ export type IVSCloneChatLocation = 'chat' | 'editorInline' | 'notebook' | 'termi
 - Exporting model preferences (if added later) must exclude secret-bearing provider configuration.
 
 # Risks to Completion
+
+Rationale: The biggest completion risks are changes in the chat window and other product UX decisions. Planning for those early should reduce last-minute issues.
 
 - Upstream model picker internals in `chatInputPart` may change, requiring repeated merge adjustments.
 - Provider configuration UX may expand scope if users expect full onboarding for each vendor.

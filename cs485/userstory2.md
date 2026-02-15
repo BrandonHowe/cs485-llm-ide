@@ -1,5 +1,7 @@
 # Header
 
+Rationale: The most important goal is to acquire accurate usage data from OpenAI/Claude/etc APIs. This data needs to be integrated with VSCode in a way that the user can see it, but not in the chat panel. If the numbers are not reliable, budget warnings and cost visibility lose most of their value.
+
 - **Spec ID:** `BC-USAGE-LOG-001`
 - **Feature:** VSClone Provider-Verified Usage + Remaining Quota Side Panel
 - **User Story:** As a developer, I want to see a running log of my LLM usage and remaining tokens so that I can manage my spending and avoid unexpected costs.
@@ -27,6 +29,8 @@
 
 # Architecture Diagram
 
+Rationale: I kept the architecture close to existing VSCode patterns. Request lifecycle capture stays local, and provider sync fills in authoritative usage so the UI can stay responsive even when provider APIs take a long time to respond. This split gives us faster UI updates while still keeping final totals grounded in accurate API data.
+
 ![Architecture Diagram](diagrams/userstory2/architecture-diagram-1.svg)
 
 - **Where components run:**
@@ -42,9 +46,13 @@
 
 # Class Diagram
 
+Rationale: The class diagram is based on the class list and split by clear responsibilities like ingestion, sync, policy, storage, and UI. That makes the code easier to test and update without causing wide regressions.
+
 ![Class Diagram](diagrams/userstory2/class-diagram-1.svg)
 
 # List of Classes
+
+Rationale: Each class has one clear job so usage issues are easier to reason about and debug. I also included migration, serialization, and action classes up front so those concerns are not bolted on later.
 
 - `VSCloneUsageContribution` (`browser/vscloneUsage.contribution.ts`): registers view container/view, singleton services, startup hooks.
 - `VSCloneUsageSessionBridge` (`browser/vscloneUsageSessionBridge.ts`): listens to chat model lifecycle and emits normalized request references with provider correlation fields.
@@ -63,15 +71,21 @@
 
 # State Diagrams
 
+Rationale: Usage APIs can go through many different states so pending, synced, failed, and unsupported states need to be explicit. This makes it clear whether data is delayed, unavailable, or actually broken. It also gives retry logic and UI behavior a shared contract instead of hidden assumptions.
+
 ![State Diagram 1](diagrams/userstory2/state-diagrams-1.svg)
 
 ![State Diagram 2](diagrams/userstory2/state-diagrams-2.svg)
 
 # Flow Chart
 
+Rationale: The flow chart keeps ordering simple: capture request references, sync against provider APIs, then persist and roll up. This keeps totals grounded in the actual API data while still providing live feedback.
+
 ![Flow Chart](diagrams/userstory2/flow-chart-1.svg)
 
 # Development Risks and Failures
+
+Rationale: Most risk here comes from outside dependencies, especially provider latency, schema drift, and rate limits. The mitigations focus on clear failure states, retries, and graceful degradation instead of trying to hide those failures. That keeps behavior honest when provider systems are slow or partially unavailable.
 
 | Risk | Failure Mode | Mitigation |
 |---|---|---|
@@ -86,6 +100,8 @@
 
 # Technology Stack
 
+Rationale: This is being built in a VSCode fork, so I reused existing workbench and chat services instead of adding new frameworks. JSONL plus a compact summary file gives a good balance of write performance and query speed. Reusing existing primitives also keeps maintenance and onboarding easier for LLMs that can leverage existing docs.
+
 - **Language/runtime:** TypeScript in VS Code workbench architecture.
 - **UI:** `ViewPane`/tree components in `browser/`, context menus/actions, optional details panel.
 - **State/events:** `Emitter`, `Event`, observable patterns used by workbench services.
@@ -99,6 +115,8 @@
 - **Logging/telemetry:** existing log + telemetry infra, content-redacted usage metrics only.
 
 # APIs
+
+Rationale: The API surface stays narrow on purpose: listen to chat lifecycle events, sync with provider usage/quota endpoints, and expose a small set of user actions. A smaller API should also be easier to keep stable as providers evolve.
 
 - **Existing APIs consumed:**
   - `IChatService.onDidCreateModel`
@@ -135,6 +153,8 @@
 - **Provider APIs are required for MVP:** providers without a supported usage API are marked unsupported and are excluded from this feature until integrated.
 
 # Public Interfaces
+
+Rationale: The interfaces are centered on recording requests, syncing provider-backed usage, and querying summaries. Explicit sync status fields make UI behavior clearer when data is still pending or has failed. I wanted callers to handle incomplete data intentionally instead of assuming every row is finalized.
 
 ```ts
 export interface IVSCloneUsageService {
@@ -228,6 +248,8 @@ export interface IVSCloneUsageQuery {
 
 # Data Schemas
 
+Rationale: The ledger and summary are split so we can keep detailed history without making every read expensive. Migration rules are conservative so schema changes can happen safely without breaking older data. This design is also better for append-heavy usage where new rows are written frequently.
+
 - **Storage roots:**
   - Workspace scope: `<workspaceStorage>/<workspaceId>/vsclone/usage`
   - Profile scope (empty window/global): `<profileGlobalStorage>/vsclone/usage`
@@ -277,6 +299,8 @@ export interface IVSCloneUsageQuery {
 
 # Security and Privacy
 
+Rationale: I kept privacy strict by storing usage metadata only and avoiding prompt/response content. Export and clear operations are explicit user actions so users stay in control of what data is retained or shared. Since these are just usage API calls, the attack surface is rather small, but it's still important to stay vigilant.
+
 - Do **not** persist prompt/response content in this feature by default; store usage metrics and technical identifiers only.
 - Persist provider request identifiers only as needed for correlation and supportability.
 - Telemetry excludes raw prompt text, response text, file contents, and provider secrets.
@@ -286,6 +310,8 @@ export interface IVSCloneUsageQuery {
 - Provider credentials are handled by existing auth/session services and are never persisted by this feature.
 
 # Risks to Completion
+
+Rationale: The main completion risks are provider differences and evolving product expectations around export and scope. A lot of uncertainty here comes from external API behavior, not just implementation effort.
 
 - Provider usage API contracts may evolve, requiring adapter maintenance.
 - Some providers may not support near-real-time usage retrieval, causing temporary pending states.
