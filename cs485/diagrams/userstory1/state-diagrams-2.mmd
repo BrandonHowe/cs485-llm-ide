@@ -1,0 +1,11 @@
+stateDiagram-v2
+  [*] --> ColdStart
+  ColdStart --> Loading: initialize()
+  Loading --> Ready: snapshot loaded
+  Loading --> Error: load failure
+  Ready --> Dirty: new turn/update/archive/delete
+  Dirty --> Persisting: debounce or shutdown flush
+  Persisting --> Ready: success
+  Persisting --> RetryBackoff: write failure
+  RetryBackoff --> Persisting: retry timer
+  Error --> Loading: manual retry

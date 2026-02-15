@@ -1,0 +1,36 @@
+flowchart LR
+  subgraph Client["Workbench Renderer (Client)"]
+    Dev["Developer"]
+    ChatUI["Existing Chat UI (chat contrib)"]
+    Bridge["VSCloneChatSessionBridge"]
+    HistSvc["VSCloneChatHistoryService"]
+    HistView["VSCloneChatHistoryViewPane"]
+  end
+
+  subgraph Server["Extension Host / Remote Agent (Server Process)"]
+    ChatSvc["IChatService + IChatModel (existing)"]
+  end
+
+  subgraph Local["Local Persistence (Workspace/Profile Storage)"]
+    Store["VSCloneChatHistoryStore"]
+    Index[("history.index.v1.json")]
+    Threads[("threads/{threadId}.v1.json")]
+  end
+
+  subgraph Cloud["LLM Provider (Cloud)"]
+    LLM["Model API (existing provider path)"]
+  end
+
+  Dev -->|Prompt text + context| ChatUI
+  ChatUI -->|sendRequest| ChatSvc
+  ChatSvc -->|Request| LLM
+  LLM -->|Streaming tokens + final response| ChatSvc
+
+  ChatSvc -->|onDidCreateModel/onDidChange events| Bridge
+  Bridge -->|Normalized turn updates| HistSvc
+  HistSvc -->|Observable updates| HistView
+  HistSvc -->|Persist deltas| Store
+  Store --> Index
+  Store --> Threads
+
+  HistView -->|Copy/Reuse/Open Session| ChatUI

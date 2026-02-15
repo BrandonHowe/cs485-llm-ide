@@ -1,0 +1,91 @@
+classDiagram
+class VSCloneUsageContribution {
+  +register(): void
+  +dispose(): void
+}
+
+class VSCloneUsageSessionBridge {
+  +start(): void
+  +stop(): void
+  +onChatModelEvent(): void
+}
+
+class VSCloneUsageService {
+  +initialize(): Promise~void~
+  +appendUsage(event): Promise~void~
+  +getEntries(query): UsageEntry[]
+  +getSummary(scope): UsageSummary
+  +export(format, query): Promise~URI~
+  +clear(scope): Promise~void~
+}
+
+class VSCloneUsageModel {
+  +upsertEntry(entry): void
+  +queryEntries(query): UsageEntry[]
+  +setQuotaSnapshot(snapshot): void
+  +getSummary(scope): UsageSummary
+}
+
+class VSCloneUsageAggregationService {
+  +recompute(): void
+  +getDailyRollups(): DailyRollup[]
+}
+
+class VSCloneUsageBudgetPolicy {
+  +evaluate(summary): BudgetState
+  +remainingTokens(summary): number|undefined
+  +remainingCost(summary): number|undefined
+}
+
+class VSCloneUsageStore {
+  +load(): Promise~UsageSnapshot~
+  +append(entry): Promise~void~
+  +saveSummary(summary): Promise~void~
+  +prune(policy): Promise~number~
+  +clear(scope): Promise~void~
+}
+
+class VSCloneUsageSerializer {
+  +serializeEntry(entry): string
+  +deserializeEntry(line): UsageEntry
+  +serializeSummary(summary): string
+  +deserializeSummary(raw): UsageSummary
+}
+
+class VSCloneUsageMigrationService {
+  +migrateLedger(lines): UsageEntry[]
+  +migrateSummary(raw): UsageSummary
+}
+
+class VSCloneUsageLogViewPane {
+  +renderBody(container): void
+  +refresh(): void
+  +setLiveTail(enabled): void
+}
+
+class VSCloneUsageTreeDataSource {
+  +getChildren(element): Promise~Node[]~
+  +getLabel(node): string
+}
+
+class VSCloneUsageActionRegistrar {
+  +registerCommands(): void
+}
+
+VSCloneUsageContribution --> VSCloneUsageSessionBridge
+VSCloneUsageContribution --> VSCloneUsageService
+VSCloneUsageContribution --> VSCloneUsageLogViewPane
+VSCloneUsageContribution --> VSCloneUsageActionRegistrar
+
+VSCloneUsageSessionBridge --> VSCloneUsageService
+VSCloneUsageService --> VSCloneUsageModel
+VSCloneUsageService --> VSCloneUsageAggregationService
+VSCloneUsageService --> VSCloneUsageBudgetPolicy
+VSCloneUsageService --> VSCloneUsageStore
+
+VSCloneUsageStore --> VSCloneUsageSerializer
+VSCloneUsageStore --> VSCloneUsageMigrationService
+
+VSCloneUsageLogViewPane --> VSCloneUsageService
+VSCloneUsageLogViewPane --> VSCloneUsageTreeDataSource
+VSCloneUsageTreeDataSource --> VSCloneUsageService

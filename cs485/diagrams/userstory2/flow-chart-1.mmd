@@ -1,0 +1,22 @@
+flowchart TD
+  A[User sends request in Chat] --> B[Chat model starts request]
+  B --> C[Bridge records request start]
+  C --> D{response.usage available?}
+  D -- no --> E[Keep pending entry]
+  D -- yes --> F[Capture prompt/completion tokens]
+  F --> G[Lookup model metadata via ILanguageModelsService]
+  G --> H[Compute total + remaining context tokens]
+  H --> I[Read quota snapshot + budgets]
+  I --> J[Compute budget state + warnings]
+  J --> K[Append/update usage entry in model]
+  K --> L[Debounced persist to ledger + summary]
+  L --> M{persist ok?}
+  M -- yes --> N[Refresh side panel and totals]
+  M -- no --> O[Retry with backoff + telemetry/log]
+  E --> P{request completed?}
+  P -- no --> D
+  P -- yes --> Q[Finalize with missing-usage marker]
+  Q --> K
+  N --> R[User filters / exports / clears]
+  R --> S[Action registrar routes command]
+  S --> T[Usage service executes action]

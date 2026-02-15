@@ -1,0 +1,10 @@
+stateDiagram-v2
+  [*] --> SelectionRestored
+  SelectionRestored --> Active
+  Active --> Unavailable: provider/model removed or disabled
+  Unavailable --> FallbackCandidate: auto-fallback enabled
+  FallbackCandidate --> Active: fallback model applied
+  Unavailable --> ManualResolution: auto-fallback disabled
+  ManualResolution --> Active: user selects model
+  Active --> Persisted: selection changed
+  Persisted --> Active

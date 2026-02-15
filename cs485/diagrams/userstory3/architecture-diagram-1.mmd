@@ -1,0 +1,48 @@
+flowchart LR
+  subgraph Client["Workbench Renderer (Client)"]
+    Dev["Developer"]
+    ChatUI["Chat Input Toolbar"]
+    PickerCtl["VSCloneModelPickerController"]
+    Catalog["VSCloneModelCatalogService"]
+    Compat["VSCloneModelCompatibilityService"]
+    SelectSvc["VSCloneModelSelectionService"]
+    PrefStore["VSCloneModelPreferenceStore"]
+    ConfigBridge["VSCloneProviderConfigurationBridge"]
+  end
+
+  subgraph Server["Extension Host / Workbench Services"]
+    LMService["ILanguageModelsService"]
+    LMConfig["ILanguageModelsConfigurationService"]
+    ChatSvc["IChatService (sendRequest)"]
+  end
+
+  subgraph Local["Local Profile Storage"]
+    KVS[("storage keys\nselection + recents")]
+    LMFile[("chatLanguageModels.json")]
+    Secrets[("Secret Storage")]
+  end
+
+  subgraph Cloud["LLM Providers (Cloud)"]
+    ProviderA["Provider A API"]
+    ProviderB["Provider B API"]
+  end
+
+  Dev -->|open dropdown / select model| ChatUI
+  ChatUI --> PickerCtl
+  PickerCtl --> Catalog
+  PickerCtl --> Compat
+  PickerCtl --> SelectSvc
+
+  Catalog -->|vendors + models + metadata| LMService
+  Compat -->|capability checks| LMService
+  SelectSvc -->|persist selection + recents| PrefStore
+  PrefStore --> KVS
+
+  PickerCtl -->|configure provider if needed| ConfigBridge
+  ConfigBridge --> LMConfig
+  LMConfig --> LMFile
+  LMConfig --> Secrets
+
+  SelectSvc -->|userSelectedModelId| ChatSvc
+  ChatSvc --> ProviderA
+  ChatSvc --> ProviderB

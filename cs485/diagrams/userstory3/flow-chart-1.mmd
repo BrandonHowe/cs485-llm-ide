@@ -1,0 +1,19 @@
+flowchart TD
+  A[User clicks provider/model dropdown] --> B[ModelPickerController.open]
+  B --> C[Fetch providers/models from CatalogService]
+  C --> D[Apply compatibility filtering by chat context]
+  D --> E{Any valid models?}
+  E -- No --> F[Show empty-state + Manage Providers action]
+  E -- Yes --> G[Render grouped dropdown sections]
+  G --> H[User selects provider/model]
+  H --> I[Validate availability + compatibility]
+  I --> J{Provider configured/authenticated?}
+  J -- No --> K[Open provider configuration flow]
+  K --> C
+  J -- Yes --> L[SelectionService.setCurrentSelection]
+  L --> M[Persist selection + update recents]
+  M --> N[Update chat input label + aria]
+  N --> O[Next sendRequest uses userSelectedModelId]
+  O --> P{Model unavailable at send time?}
+  P -- Yes --> Q[Apply fallback or prompt re-selection]
+  P -- No --> R[Request routed to selected provider/model]

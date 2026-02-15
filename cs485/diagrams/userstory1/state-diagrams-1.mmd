@@ -1,0 +1,12 @@
+stateDiagram-v2
+  [*] --> PromptCaptured
+  PromptCaptured --> StreamingResponse: first response chunk
+  StreamingResponse --> StreamingResponse: chunk update
+  StreamingResponse --> Completed: response finished
+  StreamingResponse --> Failed: provider error
+  StreamingResponse --> Cancelled: user cancelled
+  Completed --> Persisted
+  Failed --> Persisted
+  Cancelled --> Persisted
+  Persisted --> Purged: delete/retention policy
+  Purged --> [*]

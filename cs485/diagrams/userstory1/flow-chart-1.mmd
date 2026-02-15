@@ -1,0 +1,23 @@
+flowchart TD
+  A[User sends prompt in Chat UI] --> B[Existing IChatService processes request]
+  B --> C[VSCloneChatSessionBridge receives addRequest event]
+  C --> D{Thread exists for sessionResource?}
+  D -- No --> E[Create thread metadata]
+  D -- Yes --> F[Reuse existing thread]
+  E --> G[Create pending turn with prompt text]
+  F --> G
+  G --> H[Receive streaming response events]
+  H --> I[Update in memory turn content throttled]
+  I --> J{Response terminal state?}
+  J -- No --> H
+  J -- Yes --> K[Finalize turn: completed/failed/cancelled]
+  K --> L[VSCloneChatHistoryService marks model dirty]
+  L --> M[Persist thread + index]
+  M --> N{Persist success?}
+  N -- Yes --> O[Notify view + refresh tree]
+  N -- No --> P[Retry with backoff + log]
+  O --> Q[User selects history item]
+  Q --> R{Action}
+  R -- Copy --> S[Copy prompt/response to clipboard]
+  R -- Reuse --> T[Set chat input via IChatWidgetService]
+  R -- Open --> U[Open original chat session]

@@ -1,0 +1,42 @@
+flowchart LR
+  subgraph Client["Workbench Renderer (Client)"]
+    Dev["Developer"]
+    ChatUI["Existing Chat UI"]
+    Bridge["VSCloneUsageSessionBridge"]
+    UsageSvc["VSCloneUsageService"]
+    Agg["VSCloneUsageAggregationService"]
+    Budget["VSCloneUsageBudgetPolicy"]
+    View["VSCloneUsageLogViewPane"]
+  end
+
+  subgraph Server["Extension Host / Chat Runtime"]
+    ChatModel["IChatService + IChatModel"]
+  end
+
+  subgraph Cloud["Cloud Providers"]
+    LLM["LLM Provider\n(prompt/completion tokens)"]
+    Ent["Entitlement/Quota API\n(remaining request quotas)"]
+  end
+
+  subgraph Local["Local Persistence"]
+    Store["VSCloneUsageStore"]
+    Ledger[("usage-ledger.v1.jsonl")]
+    Summary[("usage-summary.v1.json")]
+  end
+
+  Dev -->|prompt| ChatUI
+  ChatUI -->|request| ChatModel
+  ChatModel -->|inference request| LLM
+  LLM -->|response + usage tokens| ChatModel
+
+  Ent -->|quota snapshots| UsageSvc
+  ChatModel -->|request/response + usage updates| Bridge
+  Bridge -->|normalized usage events| UsageSvc
+  UsageSvc --> Agg
+  Agg --> Budget
+  UsageSvc -->|state updates| View
+  UsageSvc -->|append + compact| Store
+  Store --> Ledger
+  Store --> Summary
+
+  View -->|export/copy/filter/clear| UsageSvc

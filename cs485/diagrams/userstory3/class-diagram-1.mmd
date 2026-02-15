@@ -1,0 +1,77 @@
+classDiagram
+class VSCloneModelSwitcherContribution {
+  +register(): void
+  +dispose(): void
+}
+
+class VSCloneModelCatalogService {
+  +refreshCatalog(): Promise~void~
+  +getProviders(): Provider[]
+  +getModels(providerId): Model[]
+}
+
+class VSCloneModelAvailabilityService {
+  +getProviderState(providerId): AvailabilityState
+  +getModelState(modelId): AvailabilityState
+}
+
+class VSCloneModelCompatibilityService {
+  +filterSupported(models, context): Model[]
+  +explainIncompatibility(model, context): string|undefined
+}
+
+class VSCloneModelSelectionService {
+  +initialize(): Promise~void~
+  +getCurrentSelection(location): Selection|undefined
+  +setCurrentSelection(selection): Promise~void~
+  +switchToNextModel(location): Promise~Selection|undefined~
+}
+
+class VSCloneModelPreferenceStore {
+  +load(): PreferencesSnapshot
+  +saveSelection(selection): void
+  +saveRecent(modelId): void
+  +clear(): void
+}
+
+class VSCloneProviderConfigurationBridge {
+  +listProviderGroups(providerId): Group[]
+  +openProviderConfig(providerId): Promise~void~
+  +validateProviderConfiguration(providerId): Promise~ValidationResult~
+}
+
+class VSCloneModelPickerController {
+  +open(context): Promise~void~
+  +buildSections(context): PickerSection[]
+  +applySelection(selection): Promise~void~
+}
+
+class VSCloneModelPickerActionItem {
+  +renderLabel(container): void
+  +show(): void
+  +updateActions(): void
+}
+
+class VSCloneModelSwitcherActionRegistrar {
+  +registerCommands(): void
+}
+
+class VSCloneModelSelectionMigrationService {
+  +migrate(snapshot): PreferencesSnapshot
+}
+
+VSCloneModelSwitcherContribution --> VSCloneModelSwitcherActionRegistrar
+VSCloneModelSwitcherContribution --> VSCloneModelPickerController
+VSCloneModelSwitcherContribution --> VSCloneModelSelectionService
+
+VSCloneModelPickerController --> VSCloneModelCatalogService
+VSCloneModelPickerController --> VSCloneModelAvailabilityService
+VSCloneModelPickerController --> VSCloneModelCompatibilityService
+VSCloneModelPickerController --> VSCloneModelSelectionService
+VSCloneModelPickerController --> VSCloneProviderConfigurationBridge
+
+VSCloneModelSelectionService --> VSCloneModelPreferenceStore
+VSCloneModelSelectionService --> VSCloneModelSelectionMigrationService
+VSCloneModelSelectionService --> VSCloneModelCatalogService
+
+VSCloneModelPickerActionItem --> VSCloneModelPickerController

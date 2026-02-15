@@ -1,0 +1,14 @@
+stateDiagram-v2
+  [*] --> Idle
+  Idle --> Opening: user opens picker
+  Opening --> LoadingCatalog
+  LoadingCatalog --> Ready
+  LoadingCatalog --> LoadError
+  Ready --> Filtering: user types filter
+  Filtering --> Ready
+  Ready --> SelectionPendingValidation: user chooses model
+  SelectionPendingValidation --> NeedsConfiguration: provider not configured/auth missing
+  NeedsConfiguration --> LoadingCatalog: config completed
+  SelectionPendingValidation --> Applied: selection valid
+  Applied --> Idle
+  LoadError --> Idle
