@@ -14,62 +14,7 @@
   - `src/vs/workbench/workbench.common.main.ts` (register contribution import)
   - Existing chat services/events from `src/vs/workbench/contrib/chat/common/*` and `src/vs/workbench/contrib/chat/browser/*`
 
-## Source-Code-Organization Alignment
-
-- This feature is designed as a **workbench contribution** under `src/vs/workbench/contrib/vsclone`, not under `workbench/services`, to match VS Code contribution boundaries.
-- Add a **single contribution entrypoint**: `src/vs/workbench/contrib/vsclone/browser/vsclone.contribution.ts`.
-- Expose cross-contrib API from a **single common API file**: `src/vs/workbench/contrib/vsclone/common/vsclone.ts`.
-- Keep runtime split aligned with VS Code layering rules:
-  - `common/` for runtime-agnostic logic
-  - `browser/` for DOM/workbench UI logic
-  - `electron-browser/` only when renderer needs Electron-main IPC
-  - `electron-main/` only for true Electron-main functionality (not needed for MVP)
-- Register contribution imports in entrypoints by environment:
-  - shared: `src/vs/workbench/workbench.common.main.ts`
-  - desktop-only: `src/vs/workbench/workbench.desktop.main.ts` (only if `electron-browser` contribution is added)
-  - web-only: `src/vs/workbench/workbench.web.main.ts` (only if web-specific contribution is added)
-- Respect contrib dependency rule: other areas may depend only on `common/vsclone.ts`, not VSClone internals.
-
 ## Architecture Diagram
-
-```mermaid
-flowchart LR
-  subgraph Client["Workbench Renderer (Client)"]
-    Dev["Developer"]
-    ChatUI["Existing Chat UI (`chat` contrib)"]
-    Bridge["VSCloneChatSessionBridge"]
-    HistSvc["VSCloneChatHistoryService"]
-    HistView["VSCloneChatHistoryViewPane"]
-  end
-
-  subgraph Server["Extension Host / Remote Agent (Server Process)"]
-    ChatSvc["`IChatService` + `IChatModel` (existing)"]
-  end
-
-  subgraph Local["Local Persistence (Workspace/Profile Storage)"]
-    Store["VSCloneChatHistoryStore"]
-    Index[("history.index.v1.json")]
-    Threads[("threads/{threadId}.v1.json")]
-  end
-
-  subgraph Cloud["LLM Provider (Cloud)"]
-    LLM["Model API (existing provider path)"]
-  end
-
-  Dev -->|Prompt text + context| ChatUI
-  ChatUI -->|sendRequest| ChatSvc
-  ChatSvc -->|Request| LLM
-  LLM -->|Streaming tokens + final response| ChatSvc
-
-  ChatSvc -->|onDidCreateModel/onDidChange events| Bridge
-  Bridge -->|Normalized turn updates| HistSvc
-  HistSvc -->|Observable updates| HistView
-  HistSvc -->|Persist deltas| Store
-  Store --> Index
-  Store --> Threads
-
-  HistView -->|Copy/Reuse/Open Session| ChatUI
-```
 
 ![Architecture Diagram](diagrams/userstory1/architecture-diagram-1.svg)
 
@@ -80,74 +25,6 @@ flowchart LR
   - **Local:** workspace/profile-scoped history files.
 
 ## Class Diagram
-
-```mermaid
-classDiagram
-class VSCloneChatHistoryContribution {
-  +register(): void
-  +dispose(): void
-}
-class VSCloneChatSessionBridge {
-  +start(): void
-  +stop(): void
-}
-class VSCloneChatHistoryViewPane {
-  +renderBody(container): void
-  +refresh(): void
-  +revealTurn(threadId, turnId): void
-}
-class VSCloneChatHistoryTreeDataSource {
-  +getChildren(element): Promise~Node[]~
-  +getLabel(node): string
-}
-class VSCloneChatHistoryCommandRegistrar {
-  +registerCommands(): void
-}
-class VSCloneChatHistoryService {
-  +initialize(): Promise~void~
-  +getThreads(query): Thread[]
-  +getTurns(threadId): Turn[]
-  +applyTurnUpdate(update): Promise~void~
-  +archiveThread(threadId, archived): Promise~void~
-  +deleteThread(threadId): Promise~void~
-  +clearAll(scope): Promise~void~
-}
-class VSCloneChatHistoryModel {
-  +upsertThread(meta): void
-  +upsertTurn(update): void
-  +queryThreads(query): Thread[]
-  +getTurns(threadId): Turn[]
-}
-class VSCloneChatHistoryStore {
-  +loadSnapshot(): Promise~Snapshot~
-  +persistThread(threadId): Promise~void~
-  +persistIndex(): Promise~void~
-  +deleteThread(threadId): Promise~void~
-  +purge(policy): Promise~number~
-}
-class VSCloneChatHistorySerializer {
-  +serializeIndex(snapshot): string
-  +serializeThread(thread): string
-  +deserializeIndex(raw): Snapshot
-  +deserializeThread(raw): Thread
-}
-class VSCloneChatHistoryMigrationService {
-  +migrateIndex(raw): Snapshot
-  +migrateThread(raw): Thread
-}
-
-VSCloneChatHistoryContribution --> VSCloneChatSessionBridge
-VSCloneChatHistoryContribution --> VSCloneChatHistoryViewPane
-VSCloneChatHistoryContribution --> VSCloneChatHistoryCommandRegistrar
-VSCloneChatSessionBridge --> VSCloneChatHistoryService
-VSCloneChatHistoryViewPane --> VSCloneChatHistoryService
-VSCloneChatHistoryViewPane --> VSCloneChatHistoryTreeDataSource
-VSCloneChatHistoryTreeDataSource --> VSCloneChatHistoryService
-VSCloneChatHistoryService --> VSCloneChatHistoryModel
-VSCloneChatHistoryService --> VSCloneChatHistoryStore
-VSCloneChatHistoryStore --> VSCloneChatHistorySerializer
-VSCloneChatHistoryStore --> VSCloneChatHistoryMigrationService
-```
 
 ![Class Diagram](diagrams/userstory1/class-diagram-1.svg)
 
@@ -168,66 +45,11 @@ VSCloneChatHistoryStore --> VSCloneChatHistoryMigrationService
 
 ## State Diagrams
 
-```mermaid
-stateDiagram-v2
-  [*] --> PromptCaptured
-  PromptCaptured --> StreamingResponse: first response chunk
-  StreamingResponse --> StreamingResponse: chunk update
-  StreamingResponse --> Completed: response finished
-  StreamingResponse --> Failed: provider error
-  StreamingResponse --> Cancelled: user cancelled
-  Completed --> Persisted
-  Failed --> Persisted
-  Cancelled --> Persisted
-  Persisted --> Purged: delete/retention policy
-  Purged --> [*]
-```
-
 ![State Diagram 1](diagrams/userstory1/state-diagrams-1.svg)
-
-```mermaid
-stateDiagram-v2
-  [*] --> ColdStart
-  ColdStart --> Loading: initialize()
-  Loading --> Ready: snapshot loaded
-  Loading --> Error: load failure
-  Ready --> Dirty: new turn/update/archive/delete
-  Dirty --> Persisting: debounce or shutdown flush
-  Persisting --> Ready: success
-  Persisting --> RetryBackoff: write failure
-  RetryBackoff --> Persisting: retry timer
-  Error --> Loading: manual retry
-```
 
 ![State Diagram 2](diagrams/userstory1/state-diagrams-2.svg)
 
 ## Flow Chart
-
-```mermaid
-flowchart TD
-  A[User sends prompt in Chat UI] --> B[Existing IChatService processes request]
-  B --> C[VSCloneChatSessionBridge receives addRequest event]
-  C --> D{Thread exists for sessionResource?}
-  D -- No --> E[Create thread metadata]
-  D -- Yes --> F[Reuse existing thread]
-  E --> G[Create pending turn with prompt text]
-  F --> G
-  G --> H[Receive streaming response events]
-  H --> I[Update in-memory turn content (throttled)]
-  I --> J{Response terminal state?}
-  J -- No --> H
-  J -- Yes --> K[Finalize turn: completed/failed/cancelled]
-  K --> L[VSCloneChatHistoryService marks model dirty]
-  L --> M[Persist thread + index]
-  M --> N{Persist success?}
-  N -- Yes --> O[Notify view + refresh tree]
-  N -- No --> P[Retry with backoff + log]
-  O --> Q[User selects history item]
-  Q --> R{Action}
-  R -- Copy --> S[Copy prompt/response to clipboard]
-  R -- Reuse --> T[Set chat input via IChatWidgetService]
-  R -- Open --> U[Open original chat session]
-```
 
 ![Flow Chart](diagrams/userstory1/flow-chart-1.svg)
 

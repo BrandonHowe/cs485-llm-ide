@@ -27,64 +27,7 @@
     - model metadata (`ILanguageModelsService`)
     - quota snapshots (`IChatEntitlementService`)
 
-# Source-Code-Organization Alignment
-
-- Implement as a **workbench contribution** in `vs/workbench/contrib`, not in `workbench/services`.
-- Provide a single contribution entrypoint: `src/vs/workbench/contrib/vsclone/browser/vsclone.contribution.ts`.
-- Expose VSClone public API from one common file: `src/vs/workbench/contrib/vsclone/common/vsclone.ts`.
-- Keep environment boundaries:
-  - `common/` runtime-agnostic model/store/contracts
-  - `browser/` UI and workbench wiring
-  - `electron-browser/` only if desktop-only IPC becomes required
-  - `electron-main/` only for true main-process functionality
-- Register in `workbench.common.main.ts` for shared behavior across desktop/web.
-
 # Architecture Diagram
-
-```mermaid
-flowchart LR
-  subgraph Client["Workbench Renderer (Client)"]
-    Dev["Developer"]
-    ChatUI["Existing Chat UI"]
-    Bridge["VSCloneUsageSessionBridge"]
-    UsageSvc["VSCloneUsageService"]
-    Agg["VSCloneUsageAggregationService"]
-    Budget["VSCloneUsageBudgetPolicy"]
-    View["VSCloneUsageLogViewPane"]
-  end
-
-  subgraph Server["Extension Host / Chat Runtime"]
-    ChatModel["IChatService + IChatModel"]
-  end
-
-  subgraph Cloud["Cloud Providers"]
-    LLM["LLM Provider\n(prompt/completion tokens)"]
-    Ent["Entitlement/Quota API\n(remaining request quotas)"]
-  end
-
-  subgraph Local["Local Persistence"]
-    Store["VSCloneUsageStore"]
-    Ledger[("usage-ledger.v1.jsonl")]
-    Summary[("usage-summary.v1.json")]
-  end
-
-  Dev -->|prompt| ChatUI
-  ChatUI -->|request| ChatModel
-  ChatModel -->|inference request| LLM
-  LLM -->|response + usage tokens| ChatModel
-
-  Ent -->|quota snapshots| UsageSvc
-  ChatModel -->|request/response + usage updates| Bridge
-  Bridge -->|normalized usage events| UsageSvc
-  UsageSvc --> Agg
-  Agg --> Budget
-  UsageSvc -->|state updates| View
-  UsageSvc -->|append + compact| Store
-  Store --> Ledger
-  Store --> Summary
-
-  View -->|export/copy/filter/clear| UsageSvc
-```
 
 ![Architecture Diagram](diagrams/userstory2/architecture-diagram-1.svg)
 
@@ -99,100 +42,6 @@ flowchart LR
   - quota snapshots + user budgets -> warnings and remaining budget indicators.
 
 # Class Diagram
-
-```mermaid
-classDiagram
-class VSCloneUsageContribution {
-  +register(): void
-  +dispose(): void
-}
-
-class VSCloneUsageSessionBridge {
-  +start(): void
-  +stop(): void
-  +onChatModelEvent(): void
-}
-
-class VSCloneUsageService {
-  +initialize(): Promise~void~
-  +appendUsage(event): Promise~void~
-  +getEntries(query): UsageEntry[]
-  +getSummary(scope): UsageSummary
-  +export(format, query): Promise~URI~
-  +clear(scope): Promise~void~
-}
-
-class VSCloneUsageModel {
-  +upsertEntry(entry): void
-  +queryEntries(query): UsageEntry[]
-  +setQuotaSnapshot(snapshot): void
-  +getSummary(scope): UsageSummary
-}
-
-class VSCloneUsageAggregationService {
-  +recompute(): void
-  +getDailyRollups(): DailyRollup[]
-}
-
-class VSCloneUsageBudgetPolicy {
-  +evaluate(summary): BudgetState
-  +remainingTokens(summary): number|undefined
-  +remainingCost(summary): number|undefined
-}
-
-class VSCloneUsageStore {
-  +load(): Promise~UsageSnapshot~
-  +append(entry): Promise~void~
-  +saveSummary(summary): Promise~void~
-  +prune(policy): Promise~number~
-  +clear(scope): Promise~void~
-}
-
-class VSCloneUsageSerializer {
-  +serializeEntry(entry): string
-  +deserializeEntry(line): UsageEntry
-  +serializeSummary(summary): string
-  +deserializeSummary(raw): UsageSummary
-}
-
-class VSCloneUsageMigrationService {
-  +migrateLedger(lines): UsageEntry[]
-  +migrateSummary(raw): UsageSummary
-}
-
-class VSCloneUsageLogViewPane {
-  +renderBody(container): void
-  +refresh(): void
-  +setLiveTail(enabled): void
-}
-
-class VSCloneUsageTreeDataSource {
-  +getChildren(element): Promise~Node[]~
-  +getLabel(node): string
-}
-
-class VSCloneUsageActionRegistrar {
-  +registerCommands(): void
-}
-
-VSCloneUsageContribution --> VSCloneUsageSessionBridge
-VSCloneUsageContribution --> VSCloneUsageService
-VSCloneUsageContribution --> VSCloneUsageLogViewPane
-VSCloneUsageContribution --> VSCloneUsageActionRegistrar
-
-VSCloneUsageSessionBridge --> VSCloneUsageService
-VSCloneUsageService --> VSCloneUsageModel
-VSCloneUsageService --> VSCloneUsageAggregationService
-VSCloneUsageService --> VSCloneUsageBudgetPolicy
-VSCloneUsageService --> VSCloneUsageStore
-
-VSCloneUsageStore --> VSCloneUsageSerializer
-VSCloneUsageStore --> VSCloneUsageMigrationService
-
-VSCloneUsageLogViewPane --> VSCloneUsageService
-VSCloneUsageLogViewPane --> VSCloneUsageTreeDataSource
-VSCloneUsageTreeDataSource --> VSCloneUsageService
-```
 
 ![Class Diagram](diagrams/userstory2/class-diagram-1.svg)
 
@@ -215,64 +64,11 @@ VSCloneUsageTreeDataSource --> VSCloneUsageService
 
 # State Diagrams
 
-```mermaid
-stateDiagram-v2
-  [*] --> RequestObserved
-  RequestObserved --> AwaitingUsage
-  AwaitingUsage --> UsageStreaming: usage update arrives
-  AwaitingUsage --> MissingUsageFallback: request completes with no usage payload
-  UsageStreaming --> UsageStreaming: additional usage update
-  UsageStreaming --> Finalized: request completed/cancelled/failed
-  MissingUsageFallback --> Finalized: finalize with unknown usage flag
-  Finalized --> PersistQueued
-  PersistQueued --> Persisted
-  PersistQueued --> PersistRetry: write failure
-  PersistRetry --> PersistQueued
-  Persisted --> Pruned: retention/clear action
-  Pruned --> [*]
-```
-
 ![State Diagram 1](diagrams/userstory2/state-diagrams-1.svg)
-
-```mermaid
-stateDiagram-v2
-  [*] --> UnderBudget
-  UnderBudget --> Warning: threshold reached
-  Warning --> UnderBudget: usage drops/reset period
-  Warning --> Exceeded: budget crossed
-  Exceeded --> Acknowledged: user dismisses alert
-  Acknowledged --> Exceeded: usage still above budget
-  Exceeded --> UnderBudget: reset period / clear budget
-```
 
 ![State Diagram 2](diagrams/userstory2/state-diagrams-2.svg)
 
 # Flow Chart
-
-```mermaid
-flowchart TD
-  A[User sends request in Chat] --> B[Chat model starts request]
-  B --> C[Bridge records request start]
-  C --> D{response.usage available?}
-  D -- no --> E[Keep pending entry]
-  D -- yes --> F[Capture prompt/completion tokens]
-  F --> G[Lookup model metadata via ILanguageModelsService]
-  G --> H[Compute total + remaining context tokens]
-  H --> I[Read quota snapshot + budgets]
-  I --> J[Compute budget state + warnings]
-  J --> K[Append/update usage entry in model]
-  K --> L[Debounced persist to ledger + summary]
-  L --> M{persist ok?}
-  M -- yes --> N[Refresh side panel and totals]
-  M -- no --> O[Retry with backoff + telemetry/log]
-  E --> P{request completed?}
-  P -- no --> D
-  P -- yes --> Q[Finalize with missing-usage marker]
-  Q --> K
-  N --> R[User filters / exports / clears]
-  R --> S[Action registrar routes command]
-  S --> T[Usage service executes action]
-```
 
 ![Flow Chart](diagrams/userstory2/flow-chart-1.svg)
 

@@ -25,68 +25,7 @@
   - request routing via `IChatSendRequestOptions.userSelectedModelId`
   - model catalog and provider groups via `ILanguageModelsService` and `ILanguageModelsConfigurationService`
 
-# Source-Code-Organization Alignment
-
-- Implement this as a **workbench contribution** under `vs/workbench/contrib/vsclone`.
-- Provide one contribution entrypoint: `src/vs/workbench/contrib/vsclone/browser/vsclone.contribution.ts`.
-- Expose public VSClone contracts from one common API surface: `src/vs/workbench/contrib/vsclone/common/vsclone.ts`.
-- Keep runtime separation aligned with VS Code guidance:
-  - `common/` for contracts, state, persistence, filtering logic.
-  - `browser/` for UI, commands, toolbar integration.
-  - `electron-*` only if required later.
-
 # Architecture Diagram
-
-```mermaid
-flowchart LR
-  subgraph Client["Workbench Renderer (Client)"]
-    Dev["Developer"]
-    ChatUI["Chat Input Toolbar"]
-    PickerCtl["VSCloneModelPickerController"]
-    Catalog["VSCloneModelCatalogService"]
-    Compat["VSCloneModelCompatibilityService"]
-    SelectSvc["VSCloneModelSelectionService"]
-    PrefStore["VSCloneModelPreferenceStore"]
-    ConfigBridge["VSCloneProviderConfigurationBridge"]
-  end
-
-  subgraph Server["Extension Host / Workbench Services"]
-    LMService["ILanguageModelsService"]
-    LMConfig["ILanguageModelsConfigurationService"]
-    ChatSvc["IChatService (sendRequest)"]
-  end
-
-  subgraph Local["Local Profile Storage"]
-    KVS[("storage keys\nselection + recents")]
-    LMFile[("chatLanguageModels.json")]
-    Secrets[("Secret Storage")]
-  end
-
-  subgraph Cloud["LLM Providers (Cloud)"]
-    ProviderA["Provider A API"]
-    ProviderB["Provider B API"]
-  end
-
-  Dev -->|open dropdown / select model| ChatUI
-  ChatUI --> PickerCtl
-  PickerCtl --> Catalog
-  PickerCtl --> Compat
-  PickerCtl --> SelectSvc
-
-  Catalog -->|vendors + models + metadata| LMService
-  Compat -->|capability checks| LMService
-  SelectSvc -->|persist selection + recents| PrefStore
-  PrefStore --> KVS
-
-  PickerCtl -->|configure provider if needed| ConfigBridge
-  ConfigBridge --> LMConfig
-  LMConfig --> LMFile
-  LMConfig --> Secrets
-
-  SelectSvc -->|userSelectedModelId| ChatSvc
-  ChatSvc --> ProviderA
-  ChatSvc --> ProviderB
-```
 
 ![Architecture Diagram](diagrams/userstory3/architecture-diagram-1.svg)
 
@@ -101,86 +40,6 @@ flowchart LR
   - provider configuration/secrets -> provider availability.
 
 # Class Diagram
-
-```mermaid
-classDiagram
-class VSCloneModelSwitcherContribution {
-  +register(): void
-  +dispose(): void
-}
-
-class VSCloneModelCatalogService {
-  +refreshCatalog(): Promise~void~
-  +getProviders(): Provider[]
-  +getModels(providerId): Model[]
-}
-
-class VSCloneModelAvailabilityService {
-  +getProviderState(providerId): AvailabilityState
-  +getModelState(modelId): AvailabilityState
-}
-
-class VSCloneModelCompatibilityService {
-  +filterSupported(models, context): Model[]
-  +explainIncompatibility(model, context): string|undefined
-}
-
-class VSCloneModelSelectionService {
-  +initialize(): Promise~void~
-  +getCurrentSelection(location): Selection|undefined
-  +setCurrentSelection(selection): Promise~void~
-  +switchToNextModel(location): Promise~Selection|undefined~
-}
-
-class VSCloneModelPreferenceStore {
-  +load(): PreferencesSnapshot
-  +saveSelection(selection): void
-  +saveRecent(modelId): void
-  +clear(): void
-}
-
-class VSCloneProviderConfigurationBridge {
-  +listProviderGroups(providerId): Group[]
-  +openProviderConfig(providerId): Promise~void~
-  +validateProviderConfiguration(providerId): Promise~ValidationResult~
-}
-
-class VSCloneModelPickerController {
-  +open(context): Promise~void~
-  +buildSections(context): PickerSection[]
-  +applySelection(selection): Promise~void~
-}
-
-class VSCloneModelPickerActionItem {
-  +renderLabel(container): void
-  +show(): void
-  +updateActions(): void
-}
-
-class VSCloneModelSwitcherActionRegistrar {
-  +registerCommands(): void
-}
-
-class VSCloneModelSelectionMigrationService {
-  +migrate(snapshot): PreferencesSnapshot
-}
-
-VSCloneModelSwitcherContribution --> VSCloneModelSwitcherActionRegistrar
-VSCloneModelSwitcherContribution --> VSCloneModelPickerController
-VSCloneModelSwitcherContribution --> VSCloneModelSelectionService
-
-VSCloneModelPickerController --> VSCloneModelCatalogService
-VSCloneModelPickerController --> VSCloneModelAvailabilityService
-VSCloneModelPickerController --> VSCloneModelCompatibilityService
-VSCloneModelPickerController --> VSCloneModelSelectionService
-VSCloneModelPickerController --> VSCloneProviderConfigurationBridge
-
-VSCloneModelSelectionService --> VSCloneModelPreferenceStore
-VSCloneModelSelectionService --> VSCloneModelSelectionMigrationService
-VSCloneModelSelectionService --> VSCloneModelCatalogService
-
-VSCloneModelPickerActionItem --> VSCloneModelPickerController
-```
 
 ![Class Diagram](diagrams/userstory3/class-diagram-1.svg)
 
@@ -202,63 +61,11 @@ VSCloneModelPickerActionItem --> VSCloneModelPickerController
 
 # State Diagrams
 
-```mermaid
-stateDiagram-v2
-  [*] --> Idle
-  Idle --> Opening: user opens picker
-  Opening --> LoadingCatalog
-  LoadingCatalog --> Ready
-  LoadingCatalog --> LoadError
-  Ready --> Filtering: user types filter
-  Filtering --> Ready
-  Ready --> SelectionPendingValidation: user chooses model
-  SelectionPendingValidation --> NeedsConfiguration: provider not configured/auth missing
-  NeedsConfiguration --> LoadingCatalog: config completed
-  SelectionPendingValidation --> Applied: selection valid
-  Applied --> Idle
-  LoadError --> Idle
-```
-
 ![State Diagram 1](diagrams/userstory3/state-diagrams-1.svg)
-
-```mermaid
-stateDiagram-v2
-  [*] --> SelectionRestored
-  SelectionRestored --> Active
-  Active --> Unavailable: provider/model removed or disabled
-  Unavailable --> FallbackCandidate: auto-fallback enabled
-  FallbackCandidate --> Active: fallback model applied
-  Unavailable --> ManualResolution: auto-fallback disabled
-  ManualResolution --> Active: user selects model
-  Active --> Persisted: selection changed
-  Persisted --> Active
-```
 
 ![State Diagram 2](diagrams/userstory3/state-diagrams-2.svg)
 
 # Flow Chart
-
-```mermaid
-flowchart TD
-  A[User clicks provider/model dropdown] --> B[ModelPickerController.open]
-  B --> C[Fetch providers/models from CatalogService]
-  C --> D[Apply compatibility filtering by chat context]
-  D --> E{Any valid models?}
-  E -- No --> F[Show empty-state + Manage Providers action]
-  E -- Yes --> G[Render grouped dropdown sections]
-  G --> H[User selects provider/model]
-  H --> I[Validate availability + compatibility]
-  I --> J{Provider configured/authenticated?}
-  J -- No --> K[Open provider configuration flow]
-  K --> C
-  J -- Yes --> L[SelectionService.setCurrentSelection]
-  L --> M[Persist selection + update recents]
-  M --> N[Update chat input label + aria]
-  N --> O[Next sendRequest uses userSelectedModelId]
-  O --> P{Model unavailable at send time?}
-  P -- Yes --> Q[Apply fallback or prompt re-selection]
-  P -- No --> R[Request routed to selected provider/model]
-```
 
 ![Flow Chart](diagrams/userstory3/flow-chart-1.svg)
 
