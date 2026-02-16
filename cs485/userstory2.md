@@ -46,13 +46,13 @@ Rationale: I kept the architecture close to existing VSCode patterns. Request li
 
 # Class Diagram
 
-Rationale: The class diagram is based on the class list and split by clear responsibilities like ingestion, sync, policy, storage, and UI. That makes the code easier to test and update without causing wide regressions.
+Rationale: The class diagram is based on the class list and split by clear responsibilities like ingestion, sync, policy, storage, and UI. That makes the code easier to test and update without causing wide regressions. The links between classes are intentionally minimized to reduce coupling.
 
 ![Class Diagram](diagrams/userstory2/class-diagram-1.svg)
 
 # List of Classes
 
-Rationale: Each class has one clear job so usage issues are easier to reason about and debug. I also included migration, serialization, and action classes up front so those concerns are not bolted on later.
+Rationale: Each class has one clear job so usage issues are easier to reason about and debug. I also included migration, serialization, and action classes up front so those concerns are not bolted on later. Each class is designed to do one thing which helps make code simpler and reduce coupling between unrelated components.
 
 - `VSCloneUsageContribution` (`browser/vscloneUsage.contribution.ts`): registers view container/view, singleton services, startup hooks.
 - `VSCloneUsageSessionBridge` (`browser/vscloneUsageSessionBridge.ts`): listens to chat model lifecycle and emits normalized request references with provider correlation fields.
@@ -311,7 +311,7 @@ Rationale: I kept privacy strict by storing usage metadata only and avoiding pro
 
 # Risks to Completion
 
-Rationale: The main completion risks are provider differences and evolving product expectations around export and scope. A lot of uncertainty here comes from external API behavior, not just implementation effort.
+Rationale: The main completion risks are provider differences and evolving product expectations around export and scope. A lot of uncertainty here comes from external API behavior, not just implementation effort. The other main completion risk is if project specifications change the requirements for the usage panel.
 
 - Provider usage API contracts may evolve, requiring adapter maintenance.
 - Some providers may not support near-real-time usage retrieval, causing temporary pending states.

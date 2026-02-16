@@ -38,7 +38,7 @@ Rationale: The class diagram is based on the list of classes. The classes are de
 
 # List of Classes
 
-Rationale: Each class is designed to do a single thing. Migration and serialization classes are implemented up front to prepare for those cases rather than trying to handle those issues when they arise. There are a number of chat UI elements such as the view pane and history rail that make it easy to add more UI elements in the future.
+Rationale: Each class is designed to do a single thing. Migration and serialization classes are implemented up front to prepare for those cases rather than trying to handle those issues when they arise. There are a number of chat UI elements such as the view pane and history rail that make it easy to add more UI elements in the future. Aside from that each class is correlated to one aspect of the application.
 
 - `VSCloneChatHistoryContribution` (`browser/vscloneChatHistory.contribution.ts`): registers unified chat integration, singleton services, and startup lifecycle hooks.
 - `VSCloneChatSessionBridge` (`browser/vscloneChatSessionBridge.ts`): subscribes to `IChatService`/`IChatModel` events and converts them into normalized turn updates.
@@ -95,7 +95,7 @@ Rationale: A lot of the technology stack is already specified because this is bu
 
 # APIs
 
-Rationale: I kept API usage tied to existing chat events and service surfaces as much as possible. The new command/config set is intentionally small so the feature is easy to use without expanding scope too much. This should keep integrations stable even if provider details change later.
+Rationale: I kept API usage tied to existing chat events and service surfaces as much as possible. The new command/config set is intentionally small so the feature is easy to use without expanding scope too much. This should keep integrations stable even if provider details change later. Each of the commands is correlated with one thing that the user can do.
 
 - Existing consumed APIs:
   - `IChatService.onDidCreateModel`
@@ -267,7 +267,7 @@ Rationale: User data is local as much as possible, very little information needs
 
 # Risks to Completion
 
-Rationale: A lot of the risks to completion are related to difficulties working with other services, specifically the VSCode codebase and LLM APIs.
+Rationale: A lot of the risks to completion are related to difficulties working with other services, specifically the VSCode codebase and LLM APIs. The other main source of delay would be increases in scope in the actual project, such as adding new features to the chat panel.
 
 - It may prove more difficult than expected to integrate with the existing VSCode codebase.
 - High churn in upstream chat internals may require adapter updates during rebases.

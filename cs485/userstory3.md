@@ -68,8 +68,6 @@ Rationale: Each class maps to a concrete behavior users will notice, like switch
 - `VSCloneModelSwitcherActionRegistrar` (`browser/vscloneModelSwitcherActions.ts`): command IDs, menus, keyboard shortcuts.
 - `VSCloneModelSelectionMigrationService` (`common/vscloneModelSelectionMigrationService.ts`): migrates legacy model selection records to v1.
 
-**Consistency check:** class diagram and class list contain the same 11 classes.
-
 # State Diagrams
 
 Rationale: Model selection can fail for several runtime reasons, like provider changes, auth issues, or capability mismatches, so those transitions are explicit here. This helps prevent broken routing when users actually send a request. I wanted failure behavior to be predictable so fallback handling does not feel random.
@@ -116,7 +114,7 @@ Rationale: Since this is a VSCode fork, I reused the existing chat toolbar, mode
 
 # APIs
 
-Rationale: I stayed on existing model catalog and send-request APIs and only added a small command/settings layer. This keeps the implementation focused on orchestration rather than building new provider abstractions. A narrow API surface should be easier to stabilize across provider and product changes.
+Rationale: I stayed on existing model catalog and send-request APIs and only added a small command/settings layer. This keeps the implementation focused on orchestration rather than building new provider abstractions. A narrow API surface should be easier to stabilize across provider and product changes. Each command is designed to correspond to one thing that the user can do.
 
 - **Existing APIs consumed:**
   - `ILanguageModelsService.getLanguageModelIds()`
@@ -284,7 +282,7 @@ Rationale: Selection and recents are stored separately so restore stays fast and
 
 # Security and Privacy
 
-Rationale: Secrets stay in secret storage and never in model-switcher preference data. That keeps this feature focused on selection metadata instead of turning it into a credential surface. Keeping that boundary strict also makes audits and future security reviews much easier.
+Rationale: Secrets stay in secret storage and never in model-switcher preference data. That keeps this feature focused on selection metadata instead of turning it into a credential surface. Keeping that boundary strict also makes audits and future security reviews much easier. It's still important to keep secuity in mind when dealing with model credentials though.
 
 - Provider secrets are never stored in plain text model-switcher preferences.
 - Provider credentials remain in secret storage; config stores secret placeholders only.
@@ -295,7 +293,7 @@ Rationale: Secrets stay in secret storage and never in model-switcher preference
 
 # Risks to Completion
 
-Rationale: The biggest completion risks are changes in the chat window and other product UX decisions. Planning for those early should reduce last-minute issues.
+Rationale: The biggest completion risks are changes in the chat window and other product UX decisions. Planning for those early should reduce last-minute issues. Unlike the other user stories, there are less error states since this doesn't interface as much with LLMs directly.
 
 - Upstream model picker internals in `chatInputPart` may change, requiring repeated merge adjustments.
 - Provider configuration UX may expand scope if users expect full onboarding for each vendor.
