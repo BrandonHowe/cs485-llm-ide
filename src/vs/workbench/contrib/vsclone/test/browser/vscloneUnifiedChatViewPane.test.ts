@@ -4,9 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { Event } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
 import { VSCloneChatHistoryRail } from '../../browser/vscloneChatHistoryRail.js';
+import type { IVSCloneChatSubmitOptions } from '../../browser/vscloneChatSessionService.js';
 import { VSCloneUnifiedChatViewPane, toVSCloneHistoryQuery } from '../../browser/vscloneUnifiedChatViewPane.js';
 
 interface ITestPaneTarget {
@@ -17,8 +19,6 @@ interface ITestPaneTarget {
 	rootContainer: HTMLElement;
 	railContainer: HTMLElement;
 	railResizeHandle: HTMLElement;
-	titleElement: HTMLElement;
-	backButton: HTMLButtonElement;
 	threadsById: Map<string, unknown>;
 	rail: {
 		focusSearch?: () => void;
@@ -27,9 +27,18 @@ interface ITestPaneTarget {
 	};
 	activeThreadId?: string;
 	refreshConversation: () => void;
-	updateThreadHeader: () => void;
 	focusInput: () => void;
 	applyRailLayout: () => void;
+}
+
+interface IRenderConversationSurfaceTarget {
+	[key: string]: unknown;
+	renderConversationSurface: (parent: HTMLElement) => void;
+}
+
+interface ISubmitPromptTarget {
+	[key: string]: unknown;
+	submitPrompt: () => Promise<void>;
 }
 
 suite('VSCloneUnifiedChatViewPane', () => {
@@ -46,8 +55,6 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		target.rootContainer = document.createElement('div');
 		target.railContainer = document.createElement('div');
 		target.railResizeHandle = document.createElement('div');
-		target.titleElement = document.createElement('div');
-		target.backButton = document.createElement('button');
 		target.threadsById = new Map();
 		target.rail = {
 			focusSearch: () => { focusRailCalled = true; },
@@ -74,8 +81,6 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		target.rootContainer = document.createElement('div');
 		target.railContainer = document.createElement('div');
 		target.railResizeHandle = document.createElement('div');
-		target.titleElement = document.createElement('div');
-		target.backButton = document.createElement('button');
 		target.threadsById = new Map([
 			['thread-1', {
 				threadId: 'thread-1',
@@ -94,7 +99,6 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			setSelectedThread: (threadId: string | undefined) => { selectedThread = threadId; },
 		};
 		target.refreshConversation = () => { };
-		target.updateThreadHeader = () => { };
 		target.focusInput = () => { focusInputCalled = true; };
 		target.applyRailLayout = () => { };
 
@@ -113,8 +117,6 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		target.rootContainer = document.createElement('div');
 		target.railContainer = document.createElement('div');
 		target.railResizeHandle = document.createElement('div');
-		target.titleElement = document.createElement('div');
-		target.backButton = document.createElement('button');
 		target.threadsById = new Map([
 			['thread-1', {
 				threadId: 'thread-1',
@@ -133,7 +135,6 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			setSelectedThread: (_threadId: string | undefined) => { },
 		};
 		target.refreshConversation = () => { };
-		target.updateThreadHeader = () => { };
 		target.focusInput = () => { };
 		target.applyRailLayout = () => { };
 
@@ -176,5 +177,128 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.deepStrictEqual(toVSCloneHistoryQuery('', 'all'), { text: '', tab: 'all', includeArchived: true });
 		assert.deepStrictEqual(toVSCloneHistoryQuery('abc', 'active'), { text: 'abc', tab: 'active', includeArchived: false });
 		assert.deepStrictEqual(toVSCloneHistoryQuery('abc', 'archived'), { text: 'abc', tab: 'archived', includeArchived: false });
+	});
+
+	test('composer surface includes model switcher host when enabled', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderConversationSurfaceTarget;
+		target._register = (value: unknown) => value;
+		target.activeThreadId = undefined;
+		target.submittingPrompt = false;
+		target.composerFocusDisposable = { value: undefined };
+		target.contextMenuService = {
+			showContextMenu: () => undefined,
+		};
+		target.configurationService = {
+			getValue: (key: string) => key === 'vsclone.modelSwitcher.enabled' ? true : undefined,
+		};
+		target.modelCatalogService = {
+			onDidChangeCatalog: Event.None,
+			getState: () => ({ status: 'ready', providers: [], models: [] }),
+			refreshCatalog: async () => undefined,
+			getProviders: () => [],
+			getModels: () => [],
+			getModel: () => undefined,
+			getSelectableModels: () => [],
+		};
+		target.modelSelectionService = {
+			onDidChangeSelection: Event.None,
+			initialize: async () => undefined,
+			getCurrentSelectionForThread: () => undefined,
+			setSelectionForThread: async () => undefined,
+			switchToNextModel: async () => undefined,
+			resetSelectionForThread: async () => undefined,
+			hasSelectionForThread: () => false,
+			getRecentModelIdentifiers: () => [],
+		};
+		target.providerConfigurationBridge = {
+			openManageProvidersPicker: async () => undefined,
+		};
+
+		const parent = document.createElement('div');
+		target.renderConversationSurface(parent);
+		assert.ok(parent.querySelector('.vsclone-thread-model-switcher'));
+	});
+
+	test('submitPrompt passes selected model metadata to session service', async () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as ISubmitPromptTarget;
+		const selectedModel = {
+			threadId: undefined,
+			location: 'chat',
+			modelIdentifier: 'openai/gpt-5.3-codex',
+			vendor: 'openai',
+			modelId: 'gpt-5.3-codex',
+			modelName: 'GPT-5.3-Codex',
+			selectedAt: Date.now(),
+		};
+
+		let capturedOptions: IVSCloneChatSubmitOptions | undefined;
+		let boundThreadId: string | undefined;
+		target.activeThreadId = undefined;
+		target.submittingPrompt = false;
+		target.railVisible = false;
+		const composerInput = document.createElement('textarea');
+		composerInput.value = 'hello';
+		target.composerInput = composerInput;
+		target.composerSendButton = document.createElement('button');
+		target.rail = { setSelectedThread: () => undefined };
+		target.threadsById = new Map();
+		target.historyService = { getThreads: () => [] };
+		target.updateComposerState = () => undefined;
+		target.updateComposerMetrics = () => undefined;
+		target.refreshConversation = () => undefined;
+		target.applyRailLayout = () => undefined;
+		target.modelSwitcher = { refresh: () => undefined };
+		target.modelSelectionService = {
+			getCurrentSelectionForThread: () => selectedModel,
+			setSelectionForThread: async (threadId: string) => { boundThreadId = threadId; },
+		};
+		target.sessionService = {
+			submitPrompt: async (_prompt: string, options: IVSCloneChatSubmitOptions) => {
+				capturedOptions = options;
+				return { threadId: 'thread-new', sessionResource: 'vsclone://mock/thread-new', mocked: true };
+			},
+		};
+
+		await target.submitPrompt();
+
+		assert.strictEqual(capturedOptions?.modelSelection?.modelIdentifier, 'openai/gpt-5.3-codex');
+		assert.strictEqual(boundThreadId, 'thread-new');
+	});
+
+	test('thread selection refreshes model switcher context on openSession', async () => {
+		let refreshCount = 0;
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as ITestPaneTarget & { modelSwitcher: { refresh: () => void } };
+		target.railVisible = true;
+		target.isCompactLayout = false;
+		target.rootContainer = document.createElement('div');
+		target.railContainer = document.createElement('div');
+		target.railResizeHandle = document.createElement('div');
+		target.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://thread/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'active',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Preview',
+			}],
+		]);
+		target.rail = {
+			getSelectedThread: () => 'thread-1',
+			setSelectedThread: () => undefined,
+		};
+		target.modelSwitcher = { refresh: () => { refreshCount += 1; } };
+		target.refreshConversation = () => { };
+		target.focusInput = () => { };
+		target.applyRailLayout = () => { };
+
+		await pane.openSession('thread-1');
+		assert.strictEqual(refreshCount, 1);
 	});
 });

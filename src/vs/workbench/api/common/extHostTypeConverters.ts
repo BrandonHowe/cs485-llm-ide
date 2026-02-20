@@ -41,6 +41,7 @@ import { DEFAULT_EDITOR_ASSOCIATION, SaveReason } from '../../common/editor.js';
 import { IViewBadge } from '../../common/views.js';
 import { IChatAgentRequest, IChatAgentResult } from '../../contrib/chat/common/participants/chatAgents.js';
 import { IChatRequestModeInstructions } from '../../contrib/chat/common/model/chatModel.js';
+import { HookType, HookTypeValue } from '../../contrib/chat/common/promptSyntax/hookSchema.js';
 import { IChatAgentMarkdownContentWithVulnerability, IChatCodeCitation, IChatCommandButton, IChatConfirmation, IChatContentInlineReference, IChatContentReference, IChatExtensionsContent, IChatExternalToolInvocationUpdate, IChatFollowup, IChatHookPart, IChatMarkdownContent, IChatMoveMessage, IChatMultiDiffDataSerialized, IChatProgressMessage, IChatPullRequestContent, IChatQuestionCarousel, IChatResponseCodeblockUriPart, IChatTaskDto, IChatTaskResult, IChatTerminalToolInvocationData, IChatTextEdit, IChatThinkingPart, IChatToolInvocationSerialized, IChatTreeData, IChatUserActionEvent, IChatWarningMessage, IChatWorkspaceEdit } from '../../contrib/chat/common/chatService/chatService.js';
 import { LocalChatSessionUri } from '../../contrib/chat/common/model/chatUri.js';
 import { ChatRequestToolReferenceEntry, IChatRequestVariableEntry, isImageVariableEntry, isPromptFileVariableEntry, isPromptTextVariableEntry } from '../../contrib/chat/common/attachments/chatVariableEntries.js';
@@ -2822,17 +2823,61 @@ export namespace ChatResponseThinkingProgressPart {
 }
 
 export namespace ChatResponseHookPart {
+	function toInternalHookType(hookType: vscode.ChatResponseHookType): HookTypeValue {
+		switch (hookType) {
+			case types.ChatResponseHookType.SessionStart:
+				return HookType.SessionStart;
+			case types.ChatResponseHookType.UserPromptSubmit:
+				return HookType.UserPromptSubmit;
+			case types.ChatResponseHookType.PreToolUse:
+				return HookType.PreToolUse;
+			case types.ChatResponseHookType.PostToolUse:
+				return HookType.PostToolUse;
+			case types.ChatResponseHookType.PreCompact:
+				return HookType.PreCompact;
+			case types.ChatResponseHookType.SubagentStart:
+				return HookType.SubagentStart;
+			case types.ChatResponseHookType.SubagentStop:
+				return HookType.SubagentStop;
+			case types.ChatResponseHookType.Stop:
+				return HookType.Stop;
+		}
+		return HookType.Stop;
+	}
+
+	function toApiHookType(hookType: HookTypeValue): vscode.ChatResponseHookType {
+		switch (hookType) {
+			case HookType.SessionStart:
+				return types.ChatResponseHookType.SessionStart;
+			case HookType.UserPromptSubmit:
+				return types.ChatResponseHookType.UserPromptSubmit;
+			case HookType.PreToolUse:
+				return types.ChatResponseHookType.PreToolUse;
+			case HookType.PostToolUse:
+				return types.ChatResponseHookType.PostToolUse;
+			case HookType.PreCompact:
+				return types.ChatResponseHookType.PreCompact;
+			case HookType.SubagentStart:
+				return types.ChatResponseHookType.SubagentStart;
+			case HookType.SubagentStop:
+				return types.ChatResponseHookType.SubagentStop;
+			case HookType.Stop:
+				return types.ChatResponseHookType.Stop;
+		}
+		return types.ChatResponseHookType.Stop;
+	}
+
 	export function from(part: vscode.ChatResponseHookPart): Dto<IChatHookPart> {
 		return {
 			kind: 'hook',
-			hookType: part.hookType,
+			hookType: toInternalHookType(part.hookType),
 			stopReason: part.stopReason,
 			systemMessage: part.systemMessage,
 			metadata: part.metadata
 		};
 	}
 	export function to(part: Dto<IChatHookPart>): vscode.ChatResponseHookPart {
-		return new types.ChatResponseHookPart(part.hookType, part.stopReason, part.systemMessage, part.metadata);
+		return new types.ChatResponseHookPart(toApiHookType(part.hookType), part.stopReason, part.systemMessage, part.metadata);
 	}
 }
 

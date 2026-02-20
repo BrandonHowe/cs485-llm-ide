@@ -37,11 +37,17 @@ export class VSCloneChatHistoryRail extends Disposable {
 	private readonly _onDidSelectThread = this._register(new Emitter<string>());
 	readonly onDidSelectThread: Event<string> = this._onDidSelectThread.event;
 
+	private readonly _onDidRequestNewChat = this._register(new Emitter<void>());
+	readonly onDidRequestNewChat: Event<void> = this._onDidRequestNewChat.event;
+
 	private readonly _onDidRequestRetry = this._register(new Emitter<void>());
 	readonly onDidRequestRetry: Event<void> = this._onDidRequestRetry.event;
 
 	private readonly _onDidRequestAction = this._register(new Emitter<IVSCloneChatHistoryRailActionEvent>());
 	readonly onDidRequestAction: Event<IVSCloneChatHistoryRailActionEvent> = this._onDidRequestAction.event;
+
+	private readonly _onDidRequestClose = this._register(new Emitter<void>());
+	readonly onDidRequestClose: Event<void> = this._onDidRequestClose.event;
 
 	private readonly _onDidChangeFilterState = this._register(new Emitter<IVSCloneChatHistoryRailFilterState>());
 	readonly onDidChangeFilterState: Event<IVSCloneChatHistoryRailFilterState> = this._onDidChangeFilterState.event;
@@ -76,10 +82,29 @@ export class VSCloneChatHistoryRail extends Disposable {
 		const header = document.createElement('div');
 		header.className = 'vsclone-chat-history-rail-header';
 
+		const headerRow = document.createElement('div');
+		headerRow.className = 'vsclone-chat-history-rail-header-row';
+
+		const backButton = document.createElement('button');
+		backButton.type = 'button';
+		backButton.className = 'vsclone-chat-history-back';
+		backButton.textContent = '\u2190';
+		backButton.title = localize('vsclone.rail.back.tooltip', 'Back to conversation');
+		this._register(DOM.addDisposableListener(backButton, DOM.EventType.CLICK, () => this._onDidRequestClose.fire()));
+		headerRow.appendChild(backButton);
+
 		const title = document.createElement('div');
 		title.className = 'vsclone-chat-history-rail-title';
 		title.textContent = localize('vsclone.rail.title', 'Chat History').toUpperCase();
-		header.appendChild(title);
+		headerRow.appendChild(title);
+
+		const newChatButton = document.createElement('button');
+		newChatButton.type = 'button';
+		newChatButton.className = 'vsclone-chat-history-new-chat';
+		newChatButton.textContent = localize('vsclone.rail.newChat', 'New Chat');
+		this._register(DOM.addDisposableListener(newChatButton, DOM.EventType.CLICK, () => this._onDidRequestNewChat.fire()));
+		headerRow.appendChild(newChatButton);
+		header.appendChild(headerRow);
 
 		const search = document.createElement('input');
 		search.className = 'vsclone-chat-history-search';

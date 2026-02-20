@@ -4,12 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IChatService } from '../../chat/common/chatService/chatService.js';
 import { ChatAgentLocation } from '../../chat/common/constants.js';
 import { IChatModel } from '../../chat/common/model/chatModel.js';
 import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { VSCloneChatSessionBridge } from './vscloneChatSessionBridge.js';
 
 export class VSCloneChatRuntimeService extends Disposable implements IWorkbenchContribution {
@@ -21,6 +23,7 @@ export class VSCloneChatRuntimeService extends Disposable implements IWorkbenchC
 	constructor(
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
 		@IChatService private readonly chatService: IChatService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService logService: ILogService,
 	) {
 		super();
@@ -28,15 +31,13 @@ export class VSCloneChatRuntimeService extends Disposable implements IWorkbenchC
 		// Keep history initialization startup-scoped so rail state is ready even before the view opens.
 		void this.historyService.initialize().then(() => {
 			this.historyInitialized = true;
-			for (const model of this.chatService.chatModels.get()) {
-				this.attachModel(model);
-			}
+			this.syncBridgeAttachment();
 		}).catch(error => {
 			logService.error('Failed to initialize VSClone history runtime', error);
 		});
 
 		this._register(this.chatService.onDidCreateModel(model => {
-			if (!this.historyInitialized) {
+			if (!this.historyInitialized || !this.useVSCodeChatBackend) {
 				return;
 			}
 			this.attachModel(model);
@@ -46,6 +47,17 @@ export class VSCloneChatRuntimeService extends Disposable implements IWorkbenchC
 				this.detachModel(sessionResource.toString());
 			}
 		}));
+
+		this._register(this.configurationService.onDidChangeConfiguration(event => {
+			if (!event.affectsConfiguration(VSCloneUseVSCodeChatBackendSetting) || !this.historyInitialized) {
+				return;
+			}
+			this.syncBridgeAttachment();
+		}));
+	}
+
+	private get useVSCodeChatBackend(): boolean {
+		return this.configurationService.getValue<boolean>(VSCloneUseVSCodeChatBackendSetting) ?? false;
 	}
 
 	override dispose(): void {
@@ -54,6 +66,19 @@ export class VSCloneChatRuntimeService extends Disposable implements IWorkbenchC
 		}
 		this.bridgeStoresBySessionResource.clear();
 		super.dispose();
+	}
+
+	private syncBridgeAttachment(): void {
+		if (!this.useVSCodeChatBackend) {
+			for (const sessionResource of [...this.bridgeStoresBySessionResource.keys()]) {
+				this.detachModel(sessionResource);
+			}
+			return;
+		}
+
+		for (const model of this.chatService.chatModels.get()) {
+			this.attachModel(model);
+		}
 	}
 
 	private attachModel(model: IChatModel): void {

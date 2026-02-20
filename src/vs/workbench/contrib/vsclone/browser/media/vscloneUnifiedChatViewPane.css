@@ -15,58 +15,6 @@
 	position: relative;
 }
 
-.vsclone-chat-header {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	height: 40px;
-	padding: 0 10px;
-	border-bottom: 1px solid var(--vscode-panel-border);
-	background: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--vscode-widget-shadow) 15%);
-}
-
-.vsclone-chat-header-back,
-.vsclone-chat-header-overflow {
-	height: 24px;
-	border: none;
-	background: transparent;
-	color: var(--vscode-foreground);
-	border-radius: 4px;
-	cursor: pointer;
-	opacity: 0.9;
-}
-
-.vsclone-chat-header-back:hover,
-.vsclone-chat-header-overflow:hover {
-	background: var(--vscode-toolbar-hoverBackground);
-}
-
-.vsclone-chat-header-back {
-	display: none;
-	font-size: 12px;
-	padding: 0 8px;
-}
-
-.vsclone-chat-header-back.visible {
-	display: inline-flex;
-	align-items: center;
-}
-
-.vsclone-chat-header-title {
-	flex: 1;
-	min-width: 0;
-	font-weight: 600;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.vsclone-chat-header-overflow {
-	width: 24px;
-	padding: 0;
-	font-size: 14px;
-}
-
 .vsclone-chat-content {
 	flex: 1;
 	display: flex;
@@ -110,11 +58,54 @@
 	border-right: none;
 }
 
+.vsclone-unified-chat-view-pane.history-screen .vsclone-chat-left-rail {
+	width: 100% !important;
+	border-right: none;
+}
+
+.vsclone-unified-chat-view-pane.history-screen .vsclone-chat-conversation {
+	display: none;
+}
+
+.vsclone-thread-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 10px 12px 0;
+}
+
+.vsclone-thread-action-button,
+.vsclone-thread-action-overflow {
+	height: 26px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 5px;
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 600;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+.vsclone-thread-action-button {
+	padding: 0 10px;
+}
+
+.vsclone-thread-action-overflow {
+	width: 28px;
+	padding: 0;
+}
+
+.vsclone-thread-action-button:hover,
+.vsclone-thread-action-overflow:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
+
 .vsclone-thread-messages {
 	flex: 1;
 	min-height: 0;
 	overflow: auto;
-	padding: 14px;
+	padding: 12px 14px 14px;
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
@@ -186,6 +177,7 @@
 	grid-template-columns: minmax(0, 1fr) auto;
 	grid-template-areas:
 		'input send'
+		'controls controls'
 		'hint hint';
 	gap: 8px 10px;
 	background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorWidget-background) 10%);
@@ -193,7 +185,8 @@
 
 .vsclone-thread-composer-input {
 	grid-area: input;
-	width: 100%;
+	width: auto;
+	min-width: 0;
 	resize: none;
 	min-height: 40px;
 	max-height: 132px;
@@ -206,6 +199,7 @@
 	font: inherit;
 	line-height: 1.4;
 	overflow: auto;
+	box-sizing: border-box;
 }
 
 .vsclone-thread-composer-input:focus {
@@ -226,6 +220,7 @@
 	font-weight: 600;
 	background: var(--vscode-button-background);
 	color: var(--vscode-button-foreground);
+	margin-left: 0;
 }
 
 .vsclone-thread-composer-send:hover {
@@ -239,8 +234,355 @@
 
 .vsclone-thread-composer-hint {
 	grid-area: hint;
-	font-size: 11px;
+	font-size: 12px;
+	text-align: center;
 	color: var(--vscode-descriptionForeground);
+}
+
+.vsclone-thread-composer-controls {
+	grid-area: controls;
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 8px;
+}
+
+.vsclone-thread-model-switcher {
+	position: relative;
+	flex: 0 1 auto;
+	width: fit-content;
+	max-width: 100%;
+	min-width: 0;
+}
+
+.vsclone-model-switcher-root {
+	position: relative;
+	width: fit-content;
+	max-width: 100%;
+}
+
+.vsclone-model-switcher-button {
+	height: 28px;
+	width: fit-content;
+	max-width: 100%;
+	min-width: 0;
+	border-radius: 5px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 90%, white 10%);
+	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 72%, var(--vscode-editor-background) 28%);
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 94%, white 6%);
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 8px;
+	font-size: 11px;
+	font-weight: 600;
+	cursor: pointer;
+	box-sizing: border-box;
+	transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.vsclone-model-switcher-button:hover {
+	background: color-mix(in srgb, var(--vscode-button-secondaryHoverBackground) 76%, var(--vscode-editor-background) 24%);
+}
+
+.vsclone-model-switcher-root.open .vsclone-model-switcher-button,
+.vsclone-model-switcher-button:focus-visible {
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 88%, white 12%);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 30%, transparent 70%);
+	outline: none;
+}
+
+.vsclone-model-switcher-button-model {
+	flex: 0 0 auto;
+	min-width: auto;
+	max-width: none;
+	white-space: nowrap;
+	text-overflow: clip;
+	overflow: visible;
+}
+
+.vsclone-model-switcher-button-provider {
+	flex: 1 1 12ch;
+	min-width: 0;
+	font-size: 10px;
+	font-weight: 500;
+	opacity: 0.82;
+	text-transform: lowercase;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vsclone-model-switcher-button-chevron {
+	flex: none;
+	font-size: 11px;
+	opacity: 0.78;
+}
+
+.vsclone-model-switcher-menu {
+	position: absolute;
+	left: 0;
+	bottom: calc(100% + 6px);
+	width: min(380px, calc(100vw - 56px));
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, white 18%);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 88%, var(--vscode-editor-background) 12%);
+	box-shadow: 0 16px 34px color-mix(in srgb, black 54%, transparent 46%);
+	z-index: 30;
+	overflow: hidden;
+}
+
+.vsclone-model-switcher-menu.hidden {
+	display: none;
+}
+
+.vsclone-model-switcher-menu-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px 12px;
+	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 85%, transparent 15%);
+}
+
+.vsclone-model-switcher-menu-title {
+	font-size: 14px;
+	font-weight: 700;
+	line-height: 1.15;
+}
+
+.vsclone-model-switcher-refresh {
+	height: 26px;
+	width: 26px;
+	border: none;
+	border-radius: 5px;
+	cursor: pointer;
+	background: transparent;
+	color: var(--vscode-editor-foreground);
+	opacity: 0.72;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.vsclone-model-switcher-refresh .codicon {
+	font-size: 16px;
+}
+
+.vsclone-model-switcher-refresh:hover {
+	opacity: 0.95;
+	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 60%, transparent 40%);
+}
+
+.vsclone-model-switcher-menu-body {
+	max-height: min(360px, 56vh);
+	overflow: auto;
+	padding: 6px 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.vsclone-model-switcher-section {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0 10px;
+	height: 32px;
+	border-radius: 5px;
+	background: color-mix(in srgb, var(--vscode-editor-background) 72%, black 28%);
+}
+
+.vsclone-model-switcher-section-label {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.1em;
+	opacity: 0.82;
+}
+
+.vsclone-model-switcher-section-count {
+	font-size: 12px;
+	opacity: 0.64;
+	font-weight: 550;
+}
+
+.vsclone-model-switcher-row {
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 92%, white 8%);
+	min-height: 32px;
+	padding: 0 10px;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	column-gap: 10px;
+	row-gap: 2px;
+	cursor: pointer;
+	text-align: left;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.vsclone-model-switcher-row:hover {
+	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 65%, transparent 35%);
+}
+
+.vsclone-model-switcher-row.selected {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 52%, #0f3e6c 48%);
+	color: var(--vscode-button-foreground);
+}
+
+.vsclone-model-switcher-row.locked {
+	min-height: 50px;
+	padding-top: 6px;
+	padding-bottom: 5px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 72%, transparent 28%);
+}
+
+.vsclone-model-switcher-row-label {
+	grid-column: 1;
+	grid-row: 1;
+	font-size: 13px;
+	font-weight: 580;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vsclone-model-switcher-row-check,
+.vsclone-model-switcher-row-lock {
+	grid-column: 2;
+	grid-row: 1;
+	flex: none;
+	font-size: 15px;
+	opacity: 0.86;
+}
+
+.vsclone-model-switcher-row-subtext {
+	grid-column: 1 / span 2;
+	grid-row: 2;
+	font-size: 11px;
+	opacity: 0.68;
+	line-height: 1.2;
+	padding-top: 1px;
+}
+
+.vsclone-model-switcher-row.selected .vsclone-model-switcher-row-check {
+	opacity: 1;
+}
+
+.vsclone-model-switcher-menu-footer {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 85%, transparent 15%);
+	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 42%, transparent 58%);
+}
+
+.vsclone-model-switcher-menu-footer.single-action {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.vsclone-model-switcher-footer-button {
+	height: 38px;
+	border: none;
+	border-right: 1px solid color-mix(in srgb, var(--vscode-panel-border) 80%, transparent 20%);
+	background: transparent;
+	color: var(--vscode-button-secondaryForeground);
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 6px;
+	padding: 0 12px;
+	line-height: 1.15;
+	text-align: left;
+}
+
+.vsclone-model-switcher-footer-button:last-child {
+	border-right: none;
+}
+
+.vsclone-model-switcher-footer-button .codicon {
+	font-size: 14px;
+	opacity: 0.78;
+}
+
+.vsclone-model-switcher-footer-button:hover {
+	background: color-mix(in srgb, var(--vscode-button-secondaryHoverBackground) 62%, transparent 38%);
+}
+
+.vsclone-model-switcher-state {
+	min-height: 160px;
+	padding: 20px 16px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	gap: 6px;
+}
+
+.vsclone-model-switcher-state.error {
+	align-items: flex-start;
+	text-align: left;
+	gap: 6px;
+}
+
+.vsclone-model-switcher-spinner {
+	font-size: 24px;
+	opacity: 0.72;
+}
+
+.vsclone-model-switcher-state-leading {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.vsclone-model-switcher-state-icon {
+	font-size: 24px;
+	opacity: 0.72;
+}
+
+.vsclone-model-switcher-state-title {
+	font-size: 14px;
+	font-weight: 680;
+	line-height: 1.2;
+}
+
+.vsclone-model-switcher-state.error .vsclone-model-switcher-state-title,
+.vsclone-model-switcher-state.error .vsclone-model-switcher-state-icon {
+	color: color-mix(in srgb, var(--vscode-errorForeground) 86%, #ff957f 14%);
+	opacity: 1;
+}
+
+.vsclone-model-switcher-state-description {
+	font-size: 12px;
+	line-height: 1.35;
+	opacity: 0.78;
+	max-width: 280px;
+}
+
+.vsclone-model-switcher-state-action {
+	margin-top: 4px;
+	height: 32px;
+	padding: 0 14px;
+	border: none;
+	border-radius: 4px;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	cursor: pointer;
+	font-weight: 600;
+	font-size: 12px;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.vsclone-model-switcher-state-action:hover {
+	background: var(--vscode-button-hoverBackground);
 }
 
 .vsclone-unified-chat-view-pane.compact-layout .vsclone-chat-left-rail {
@@ -258,6 +600,12 @@
 	box-shadow: none;
 }
 
+.vsclone-unified-chat-view-pane.compact-layout.history-screen .vsclone-chat-left-rail {
+	position: relative;
+	max-width: none;
+	box-shadow: none;
+}
+
 .vsclone-unified-chat-view-pane.compact-layout .vsclone-chat-rail-resize-handle {
 	display: none;
 }
@@ -271,20 +619,58 @@
 }
 
 @media (max-width: 620px) {
-	.vsclone-chat-header-title {
-		font-size: 12px;
+	.vsclone-thread-composer {
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-areas:
+			'input send'
+			'controls controls'
+			'hint hint';
 	}
 
-	.vsclone-thread-composer {
-		grid-template-columns: minmax(0, 1fr);
-		grid-template-areas:
-			'input'
-			'send'
-			'hint';
+	.vsclone-thread-composer-controls {
+		flex-direction: row;
+		align-items: center;
+	}
+
+	.vsclone-thread-model-switcher {
+		flex: 1 1 auto;
+		width: 100%;
+		min-width: 0;
+		max-width: none;
 	}
 
 	.vsclone-thread-composer-send {
+		width: auto;
+		margin-left: 0;
+	}
+
+	.vsclone-model-switcher-button {
 		width: 100%;
+	}
+
+	.vsclone-model-switcher-button-model {
+		flex: 0 0 auto;
+		min-width: auto;
+		max-width: none;
+		white-space: nowrap;
+		overflow: visible;
+		text-overflow: clip;
+	}
+
+	.vsclone-model-switcher-button-provider {
+		flex: 1 1 9ch;
+		min-width: 0;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.vsclone-model-switcher-root {
+		width: 100%;
+	}
+
+	.vsclone-model-switcher-menu {
+		width: min(380px, 96vw);
 	}
 
 	.vsclone-thread-message {
@@ -308,11 +694,54 @@
 	border-bottom: 1px solid var(--vscode-panel-border);
 }
 
+.vsclone-chat-history-rail-header-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
 .vsclone-chat-history-rail-title {
+	flex: 1;
 	font-size: 12px;
 	font-weight: 700;
 	letter-spacing: 0.08em;
 	opacity: 0.85;
+}
+
+.vsclone-chat-history-back {
+	height: 26px;
+	width: 26px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 5px;
+	cursor: pointer;
+	font-size: 14px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+}
+
+.vsclone-chat-history-back:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.vsclone-chat-history-new-chat {
+	height: 26px;
+	padding: 0 10px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 5px;
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 600;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+.vsclone-chat-history-new-chat:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
 }
 
 .vsclone-chat-history-search {

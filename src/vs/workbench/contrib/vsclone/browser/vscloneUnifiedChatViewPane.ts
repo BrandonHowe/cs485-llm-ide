@@ -8,6 +8,7 @@ import { addDisposableListener, EventType, getWindow } from '../../../../base/br
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Action } from '../../../../base/common/actions.js';
 import { fromNow } from '../../../../base/common/date.js';
+import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
@@ -22,15 +23,19 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IVSCloneChatHistoryQuery, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { IVSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
+import { IVSCloneChatLocation, IVSCloneThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
 import { VSCloneChatHistoryRail, VSCloneRailTab } from './vscloneChatHistoryRail.js';
 import { IVSCloneChatSessionService } from './vscloneChatSessionService.js';
+import { VSCloneModelSwitcherWidget } from './vscloneModelSwitcherWidget.js';
+import { IVSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
 import { toVSCloneRailRows } from './vscloneChatHistoryRailTree.js';
 
 const railWidthSetting = 'vsclone.chatHistory.railWidth';
+const modelSwitcherEnabledSetting = 'vsclone.modelSwitcher.enabled';
 const railMinWidth = 220;
 const railMaxWidth = 520;
 const compactRailBreakpoint = 900;
-const autoCollapseBreakpoint = 760;
 
 export function toVSCloneHistoryQuery(query: string, tab: VSCloneRailTab): IVSCloneChatHistoryQuery {
 	return {
@@ -45,30 +50,28 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private rootContainer: HTMLElement | undefined;
 	private railContainer: HTMLElement | undefined;
-	private titleElement: HTMLElement | undefined;
-	private backButton: HTMLButtonElement | undefined;
 	private railResizeHandle: HTMLElement | undefined;
+	private conversationContainer: HTMLElement | undefined;
 	private conversationList: HTMLElement | undefined;
 	private conversationEmptyState: HTMLElement | undefined;
 	private composerInput: HTMLTextAreaElement | undefined;
 	private composerSendButton: HTMLButtonElement | undefined;
+	private modelSwitcher: VSCloneModelSwitcherWidget | undefined;
 
 	private readonly rail = this._register(this.instantiationService.createInstance(VSCloneChatHistoryRail));
 	private readonly threadsById = new Map<string, IVSCloneChatHistoryThread>();
 	private readonly refreshRailScheduler = this._register(new RunOnceScheduler(() => {
 		this.refreshRailRows();
-		this.updateThreadHeader();
 	}, 90));
 	private readonly refreshConversationScheduler = this._register(new RunOnceScheduler(() => {
 		this.refreshConversation();
 	}, 34));
 
-	private railVisible = true;
+	private railVisible = false;
 	private railWidth = 320;
 	private activeThreadId: string | undefined;
 	private historyReady = false;
 	private isCompactLayout = false;
-	private hasAutoCollapsedRail = false;
 	private bodyWidth = 0;
 	private submittingPrompt = false;
 
@@ -85,6 +88,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IHoverService hoverService: IHoverService,
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
 		@IVSCloneChatSessionService private readonly sessionService: IVSCloneChatSessionService,
+		@IVSCloneThreadModelSelectionService private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
+		@IVSCloneModelCatalogService private readonly modelCatalogService: IVSCloneModelCatalogService,
+		@IVSCloneProviderConfigurationBridge private readonly providerConfigurationBridge: IVSCloneProviderConfigurationBridge,
 		@IClipboardService private readonly clipboardService: IClipboardService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
@@ -96,6 +102,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}));
 		this._register(this.rail.onDidRequestRetry(() => {
 			void this.reloadHistory();
+		}));
+		this._register(this.rail.onDidRequestNewChat(() => {
+			this.showComposerForNewChat();
+		}));
+		this._register(this.rail.onDidRequestClose(() => {
+			this.railVisible = false;
+			this.applyRailLayout();
+			this.focusInput();
 		}));
 		this._register(this.rail.onDidChangeFilterState(() => {
 			this.refreshRailRows();
@@ -142,11 +156,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}
 			this.refreshRailScheduler.schedule(0);
 		}));
+
+		this._register(this.modelSelectionService.onDidChangeSelection(() => {
+			this.modelSwitcher?.refresh();
+		}));
+		this._register(this.modelCatalogService.onDidChangeCatalog(() => {
+			this.modelSwitcher?.refresh();
+		}));
+
+		void this.modelSelectionService.initialize();
 	}
 
 	override focus(): void {
 		super.focus();
-		if (!this.historyReady) {
+		if (!this.historyReady || this.railVisible) {
 			this.rail.focusSearch();
 			return;
 		}
@@ -165,22 +188,54 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	focusRail(): void {
+		this.railVisible = true;
+		this.applyRailLayout();
 		this.rail.focusSearch();
 	}
 
 	toggleRail(): void {
 		this.railVisible = !this.railVisible;
 		this.applyRailLayout();
+		if (this.railVisible) {
+			this.rail.focusSearch();
+		} else {
+			this.focusInput();
+		}
+	}
+
+	openModelPicker(): void {
+		this.modelSwitcher?.open();
+	}
+
+	async refreshModelCatalog(): Promise<void> {
+		await this.modelCatalogService.refreshCatalog();
+		this.modelSwitcher?.refresh();
+	}
+
+	async manageProviders(): Promise<void> {
+		await this.providerConfigurationBridge.openManageProvidersPicker();
+		await this.modelCatalogService.refreshCatalog();
+		this.modelSwitcher?.refresh();
+	}
+
+	async resetModelSelection(): Promise<void> {
+		if (!this.activeThreadId) {
+			return;
+		}
+		await this.modelSelectionService.resetSelectionForThread(this.activeThreadId);
+		this.modelSwitcher?.refresh();
+	}
+
+	async switchToNextModel(): Promise<void> {
+		const context = this.getModelSwitcherContext();
+		await this.modelSelectionService.switchToNextModel(context.threadId, context.location);
+		this.modelSwitcher?.refresh();
 	}
 
 	async openSession(threadId?: string): Promise<void> {
 		const targetThreadId = threadId ?? this.activeThreadId ?? this.rail.getSelectedThread();
 		if (!targetThreadId) {
-			this.activeThreadId = undefined;
-			this.rail.setSelectedThread(undefined);
-			this.refreshConversation();
-			this.updateThreadHeader();
-			this.focusInput();
+			this.showComposerForNewChat();
 			return;
 		}
 
@@ -190,14 +245,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		this.activeThreadId = targetThreadId;
 		this.rail.setSelectedThread(targetThreadId);
+		this.railVisible = false;
+		this.modelSwitcher?.refresh();
 		this.refreshConversation();
-		this.updateThreadHeader();
-
-		if (this.isCompactLayout) {
-			// In compact layouts we collapse the rail after opening a thread so the message area keeps usable width.
-			this.railVisible = false;
-			this.applyRailLayout();
-		}
+		this.applyRailLayout();
 		this.focusInput();
 	}
 
@@ -241,29 +292,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.rootContainer = parent;
 		parent.replaceChildren();
 
-		const header = document.createElement('div');
-		header.className = 'vsclone-chat-header';
-		const backButton = document.createElement('button');
-		backButton.type = 'button';
-		backButton.className = 'vsclone-chat-header-back';
-		backButton.textContent = localize('vsclone.header.back', 'Back');
-		backButton.title = localize('vsclone.header.back.tooltip', 'Show chat history');
-		this.backButton = backButton;
-		header.appendChild(backButton);
-
-		const title = document.createElement('div');
-		title.className = 'vsclone-chat-header-title';
-		title.textContent = localize('vsclone.header.defaultTitle', 'New Chat');
-		this.titleElement = title;
-		header.appendChild(title);
-
-		const overflow = document.createElement('button');
-		overflow.type = 'button';
-		overflow.className = 'vsclone-chat-header-overflow';
-		overflow.textContent = '...';
-		overflow.title = localize('vsclone.header.more', 'More actions');
-		header.appendChild(overflow);
-
 		const content = document.createElement('div');
 		content.className = 'vsclone-chat-content';
 
@@ -280,35 +308,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const conversation = document.createElement('div');
 		conversation.className = 'vsclone-chat-conversation';
+		this.conversationContainer = conversation;
 		content.appendChild(conversation);
-		this.renderConversationSurface(conversation);
 
-		parent.appendChild(header);
 		parent.appendChild(content);
+		try {
+			this.renderConversationSurface(conversation);
+		} catch (error) {
+			onUnexpectedError(error);
+			this.renderConversationFallback(conversation);
+		}
 
 		this.applyResponsiveLayout(this.bodyWidth || parent.clientWidth);
 		this.applyRailLayout();
-		this.updateThreadHeader();
 		this.refreshConversation();
-
-		this._register(addDisposableListener(backButton, EventType.CLICK, () => {
-			this.railVisible = true;
-			this.applyRailLayout();
-			this.rail.focusSearch();
-		}));
-
-		this._register(addDisposableListener(overflow, EventType.CLICK, (event: MouseEvent) => {
-			event.stopPropagation();
-			this.contextMenuService.showContextMenu({
-				getAnchor: () => ({ x: event.clientX, y: event.clientY }),
-				getActions: () => [
-					new Action('vsclone.chatHistory.copyPrompt', localize('vsclone.header.copyPrompt', 'Copy Prompt'), undefined, true, () => this.copyPrompt()),
-					new Action('vsclone.chatHistory.copyResponse', localize('vsclone.header.copyResponse', 'Copy Response'), undefined, true, () => this.copyResponse()),
-					new Action('vsclone.chatHistory.reusePrompt', localize('vsclone.header.reusePrompt', 'Reuse Prompt'), undefined, true, () => this.reusePrompt()),
-					new Action('vsclone.chatHistory.deleteThread', localize('vsclone.header.deleteThread', 'Delete Thread'), undefined, true, () => this.deleteActiveThread()),
-				],
-			});
-		}));
 
 		if (resizeHandle) {
 			this.installRailResizer(resizeHandle);
@@ -318,6 +331,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private renderConversationSurface(parent: HTMLElement): void {
+		const actions = document.createElement('div');
+		actions.className = 'vsclone-thread-actions';
+
+		const historyButton = document.createElement('button');
+		historyButton.type = 'button';
+		historyButton.className = 'vsclone-thread-action-button';
+		historyButton.textContent = localize('vsclone.thread.actions.history', 'Chat History');
+		historyButton.title = localize('vsclone.thread.actions.history.tooltip', 'Show chat history');
+		actions.appendChild(historyButton);
+
+		const overflowButton = document.createElement('button');
+		overflowButton.type = 'button';
+		overflowButton.className = 'vsclone-thread-action-overflow';
+		overflowButton.textContent = '...';
+		overflowButton.title = localize('vsclone.thread.actions.more', 'More actions');
+		actions.appendChild(overflowButton);
+
 		const messages = document.createElement('div');
 		messages.className = 'vsclone-thread-messages';
 		this.conversationList = messages;
@@ -342,17 +372,60 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		send.textContent = localize('vsclone.composer.send', 'Send');
 		this.composerSendButton = send;
 
+		const controls = document.createElement('div');
+		controls.className = 'vsclone-thread-composer-controls';
+
+		const modelSwitcherEnabled = this.configurationService.getValue<boolean>(modelSwitcherEnabledSetting) ?? true;
+		if (modelSwitcherEnabled) {
+			const modelSwitcherHost = document.createElement('div');
+			modelSwitcherHost.className = 'vsclone-thread-model-switcher';
+			controls.appendChild(modelSwitcherHost);
+			try {
+				this.modelSwitcher = this._register(new VSCloneModelSwitcherWidget(
+					this.modelCatalogService,
+					this.modelSelectionService,
+					this.providerConfigurationBridge,
+					() => this.getModelSwitcherContext(),
+				));
+				this.modelSwitcher.render(modelSwitcherHost);
+			} catch (error) {
+				onUnexpectedError(error);
+				modelSwitcherHost.remove();
+				this.modelSwitcher = undefined;
+			}
+		}
 		const hint = document.createElement('div');
 		hint.className = 'vsclone-thread-composer-hint';
 		hint.textContent = localize('vsclone.composer.hint', 'Press Enter to send, Shift+Enter for new line');
 
 		composer.appendChild(input);
 		composer.appendChild(send);
+		composer.appendChild(controls);
 		composer.appendChild(hint);
 
+		parent.appendChild(actions);
 		parent.appendChild(messages);
 		parent.appendChild(emptyState);
 		parent.appendChild(composer);
+
+		this._register(addDisposableListener(historyButton, EventType.CLICK, () => {
+			this.railVisible = true;
+			this.applyRailLayout();
+			this.rail.focusSearch();
+		}));
+
+		this._register(addDisposableListener(overflowButton, EventType.CLICK, (event: MouseEvent) => {
+			event.stopPropagation();
+			this.contextMenuService.showContextMenu({
+				getAnchor: () => ({ x: event.clientX, y: event.clientY }),
+				getActions: () => [
+					new Action('vsclone.chatHistory.copyPrompt', localize('vsclone.thread.actions.copyPrompt', 'Copy Prompt'), undefined, true, () => this.copyPrompt()),
+					new Action('vsclone.chatHistory.copyResponse', localize('vsclone.thread.actions.copyResponse', 'Copy Response'), undefined, true, () => this.copyResponse()),
+					new Action('vsclone.chatHistory.reusePrompt', localize('vsclone.thread.actions.reusePrompt', 'Reuse Prompt'), undefined, true, () => this.reusePrompt()),
+					new Action('vsclone.chatHistory.deleteThread', localize('vsclone.thread.actions.deleteThread', 'Delete Thread'), undefined, true, () => this.deleteActiveThread()),
+				],
+			});
+		}));
 
 		this._register(addDisposableListener(input, EventType.INPUT, () => {
 			this.updateComposerMetrics();
@@ -376,6 +449,18 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		});
 		this.updateComposerMetrics();
 		this.updateComposerState();
+		if (this.modelSwitcher) {
+			void this.modelCatalogService.refreshCatalog();
+		}
+	}
+
+	private renderConversationFallback(parent: HTMLElement): void {
+		parent.replaceChildren();
+
+		const fallback = document.createElement('div');
+		fallback.className = 'vsclone-thread-empty-state';
+		fallback.textContent = localize('vsclone.thread.renderError', 'Failed to render the chat UI. Reload the window and try again.');
+		parent.appendChild(fallback);
 	}
 
 	private async submitPrompt(): Promise<void> {
@@ -395,6 +480,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
+		const selectedModel = this.modelSelectionService.getCurrentSelectionForThread(activeThreadId ?? '', 'chat');
 		const existingThread = activeThreadId ? this.resolveThreadById(activeThreadId) : undefined;
 		this.submittingPrompt = true;
 		this.updateComposerState();
@@ -403,17 +489,29 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			const submission = await this.sessionService.submitPrompt(promptText, {
 				threadId: activeThreadId,
 				sessionResource: existingThread?.sessionResource,
+				modelSelection: selectedModel,
 			});
 			if (!submission) {
 				return;
 			}
 
+			if (!activeThreadId && selectedModel) {
+				await this.modelSelectionService.setSelectionForThread(submission.threadId, {
+					...selectedModel,
+					threadId: submission.threadId,
+					location: 'chat',
+					selectedAt: Date.now(),
+				});
+			}
+
 			this.activeThreadId = submission.threadId;
 			this.rail.setSelectedThread(submission.threadId);
+			this.railVisible = false;
 			this.composerInput.value = '';
 			this.updateComposerMetrics();
-			this.updateThreadHeader();
+			this.modelSwitcher?.refresh();
 			this.refreshConversation();
+			this.applyRailLayout();
 		} finally {
 			this.submittingPrompt = false;
 			this.updateComposerState();
@@ -424,26 +522,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const compact = width > 0 && width < compactRailBreakpoint;
 		this.isCompactLayout = compact;
 		this.rootContainer?.classList.toggle('compact-layout', compact);
-
-		// We collapse rail once when crossing into very narrow widths to avoid a stuck two-column layout.
-		if (compact && width < autoCollapseBreakpoint && this.railVisible && this.activeThreadId && !this.hasAutoCollapsedRail) {
-			this.railVisible = false;
-			this.hasAutoCollapsedRail = true;
-		}
-		if (!compact) {
-			this.hasAutoCollapsedRail = false;
-		}
-	}
-
-	private getEffectiveRailWidth(): number {
-		const viewportWidth = this.bodyWidth || this.rootContainer?.clientWidth || railMaxWidth;
-		if (this.isCompactLayout) {
-			return Math.min(Math.max(railMinWidth, viewportWidth - 56), railMaxWidth);
-		}
-
-		// Clamp to at most 55% of the pane so the composer and thread view stay usable while resizing.
-		const maxFromPane = Math.max(railMinWidth, Math.floor(viewportWidth * 0.55));
-		return Math.min(railMaxWidth, maxFromPane, this.railWidth);
 	}
 
 	private async reloadHistory(): Promise<void> {
@@ -456,6 +534,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			await this.historyService.initialize();
 			this.historyReady = true;
 			this.refreshRailRows();
+			if (!this.activeThreadId) {
+				// Default to composer mode when opening VSClone with no active thread.
+				this.railVisible = false;
+				this.applyRailLayout();
+			}
 			this.refreshConversation();
 		} catch {
 			this.historyReady = false;
@@ -486,7 +569,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		} else {
 			this.rail.setSelectedThread(this.activeThreadId);
 		}
-		this.updateThreadHeader();
 	}
 
 	private refreshConversation(): void {
@@ -509,6 +591,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		this.updateComposerState();
+		this.modelSwitcher?.refresh();
 		this.scheduleScrollToBottom();
 	}
 
@@ -602,26 +685,18 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return latestTurn?.status === 'pending' || latestTurn?.status === 'streaming';
 	}
 
-	private updateThreadHeader(): void {
-		if (!this.titleElement) {
-			return;
-		}
-
-		const thread = this.activeThreadId ? this.threadsById.get(this.activeThreadId) : undefined;
-		this.titleElement.textContent = thread?.title || localize('vsclone.header.defaultTitle', 'New Chat');
-		this.backButton?.classList.toggle('visible', !this.railVisible);
-	}
-
 	private applyRailLayout(): void {
 		if (!this.rootContainer || !this.railContainer || !this.railResizeHandle) {
 			return;
 		}
 
 		this.rootContainer.classList.toggle('rail-hidden', !this.railVisible);
-		this.rootContainer.classList.toggle('showing-rail', this.isCompactLayout && this.railVisible);
-		this.railContainer.style.width = this.railVisible ? `${this.getEffectiveRailWidth()}px` : '0px';
-		this.railResizeHandle.style.display = this.railVisible && !this.isCompactLayout ? '' : 'none';
-		this.updateThreadHeader();
+		this.rootContainer.classList.toggle('history-screen', this.railVisible);
+		this.railContainer.style.width = this.railVisible ? '100%' : '0px';
+		this.railResizeHandle.style.display = 'none';
+		if (this.conversationContainer) {
+			this.conversationContainer.style.display = this.railVisible ? 'none' : '';
+		}
 	}
 
 	private installRailResizer(handle: HTMLElement): void {
@@ -673,15 +748,33 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return this.historyService.getThreads({ includeArchived: true }).find(thread => thread.threadId === threadId);
 	}
 
+	private getModelSwitcherContext(): { threadId: string; location: IVSCloneChatLocation } {
+		return {
+			threadId: this.activeThreadId ?? '',
+			location: 'chat',
+		};
+	}
+
 	private async deleteThread(threadId: string): Promise<void> {
 		this.sessionService.cancelThread(threadId);
 		await this.historyService.deleteThread(threadId);
 
 		if (this.activeThreadId === threadId) {
-			this.activeThreadId = undefined;
+			this.showComposerForNewChat();
 		}
 
 		this.refreshRailRows();
+		this.modelSwitcher?.refresh();
 		this.refreshConversation();
+	}
+
+	private showComposerForNewChat(): void {
+		this.activeThreadId = undefined;
+		this.rail.setSelectedThread(undefined);
+		this.modelSwitcher?.refresh();
+		this.refreshConversation();
+		this.railVisible = false;
+		this.applyRailLayout();
+		this.focusInput();
 	}
 }

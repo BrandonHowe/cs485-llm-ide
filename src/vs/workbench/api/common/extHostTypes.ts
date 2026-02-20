@@ -32,7 +32,6 @@ import { SnippetString } from './extHostTypes/snippetString.js';
 import { SymbolKind, SymbolTag } from './extHostTypes/symbolInformation.js';
 import { TextEdit } from './extHostTypes/textEdit.js';
 import { WorkspaceEdit } from './extHostTypes/workspaceEdit.js';
-import { HookTypeValue } from '../../contrib/chat/common/promptSyntax/hookSchema.js';
 
 export { CodeActionKind } from './extHostTypes/codeActionKind.js';
 export {
@@ -3245,12 +3244,23 @@ export class ChatResponseThinkingProgressPart {
 	}
 }
 
+export enum ChatResponseHookType {
+	SessionStart = 1,
+	UserPromptSubmit = 2,
+	PreToolUse = 3,
+	PostToolUse = 4,
+	PreCompact = 5,
+	SubagentStart = 6,
+	SubagentStop = 7,
+	Stop = 8,
+}
+
 export class ChatResponseHookPart {
-	hookType: HookTypeValue;
+	hookType: ChatResponseHookType;
 	stopReason?: string;
 	systemMessage?: string;
 	metadata?: { readonly [key: string]: unknown };
-	constructor(hookType: HookTypeValue, stopReason?: string, systemMessage?: string, metadata?: { readonly [key: string]: unknown }) {
+	constructor(hookType: ChatResponseHookType, stopReason?: string, systemMessage?: string, metadata?: { readonly [key: string]: unknown }) {
 		this.hookType = hookType;
 		this.stopReason = stopReason;
 		this.systemMessage = systemMessage;

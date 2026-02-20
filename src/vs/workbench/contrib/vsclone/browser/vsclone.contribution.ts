@@ -14,13 +14,18 @@ import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContaine
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { registerVSCloneChatHistoryActions } from './vscloneChatHistoryActions.js';
+import { registerVSCloneModelSwitcherActions } from './vscloneModelSwitcherActions.js';
 import { VSCloneChatRuntimeService } from './vscloneChatRuntimeService.js';
 import { IVSCloneChatSessionService, VSCloneChatSessionService } from './vscloneChatSessionService.js';
+import { IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
 import { VSCloneUnifiedChatViewPane } from './vscloneUnifiedChatViewPane.js';
 import { VSCloneViewContainerId, VSCloneViewId } from './vsclone.js';
 import { IVSCloneChatHistoryMigrationService, VSCloneChatHistoryMigrationService } from '../common/vscloneChatHistoryMigrationService.js';
 import { IVSCloneChatHistoryService, VSCloneChatHistoryEnabledSetting, VSCloneChatHistoryMaxThreadsSetting, VSCloneChatHistoryMaxTurnsPerThreadSetting, VSCloneChatHistoryPersistScopeSetting, VSCloneChatHistoryRailWidthSetting, VSCloneChatHistoryRedactSecretsSetting, VSCloneChatHistoryRetentionDaysSetting, VSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
-import { IVSCloneThreadModelSelectionService, VSCloneNoopThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
+import { IVSCloneMockProviderService, VSCloneMockProviderService } from '../common/vscloneMockProviderService.js';
+import { IVSCloneModelCatalogService, VSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
+import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
+import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
 
 const vscloneContributionRegistrationKey = '__vscloneContributionRegistered__';
 type VSCloneContributionGlobalScope = typeof globalThis & {
@@ -54,10 +59,14 @@ function registerVSCloneContribution(): void {
 
 	registerSingleton(IVSCloneChatHistoryMigrationService, VSCloneChatHistoryMigrationService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatHistoryService, VSCloneChatHistoryService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneThreadModelSelectionService, VSCloneNoopThreadModelSelectionService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneMockProviderService, VSCloneMockProviderService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneModelCatalogService, VSCloneModelCatalogService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatSessionService, VSCloneChatSessionService, InstantiationType.Delayed);
 
 	registerVSCloneChatHistoryActions();
+	registerVSCloneModelSwitcherActions();
 	registerWorkbenchContribution2(VSCloneChatRuntimeService.ID, VSCloneChatRuntimeService, WorkbenchPhase.BlockRestore);
 
 	Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
@@ -115,6 +124,18 @@ function registerVSCloneContribution(): void {
 				type: 'boolean',
 				default: true,
 				description: localize('vsclone.configuration.chatHistory.redactSecrets', 'Redact simple secret-like text patterns before persisting VSClone chat history.'),
+				scope: ConfigurationScope.WINDOW,
+			},
+			[VSCloneUseVSCodeChatBackendSetting]: {
+				type: 'boolean',
+				default: false,
+				description: localize('vsclone.configuration.chat.useVSCodeChatBackend', 'Route VSClone sends through VS Code chat providers. Disabled keeps VSClone decoupled from Copilot/login-dependent chat backends.'),
+				scope: ConfigurationScope.WINDOW,
+			},
+			['vsclone.modelSwitcher.enabled']: {
+				type: 'boolean',
+				default: true,
+				description: localize('vsclone.configuration.modelSwitcher.enabled', 'Enable the VSClone model selector in the unified chat composer.'),
 				scope: ConfigurationScope.WINDOW,
 			},
 		},

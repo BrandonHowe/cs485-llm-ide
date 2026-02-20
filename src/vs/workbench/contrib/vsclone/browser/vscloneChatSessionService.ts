@@ -5,6 +5,7 @@
 
 import { localize } from '../../../../nls.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { hash } from '../../../../base/common/hash.js';
@@ -13,6 +14,8 @@ import { ChatSendResult, IChatService } from '../../chat/common/chatService/chat
 import { ChatAgentLocation } from '../../chat/common/constants.js';
 import { deriveThreadId } from '../common/vscloneChatHistoryModel.js';
 import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
+import { IVSCloneModelSelection } from '../common/vscloneThreadModelSelectionService.js';
 
 export const IVSCloneChatSessionService = createDecorator<IVSCloneChatSessionService>('vscloneChatSessionService');
 
@@ -22,6 +25,8 @@ interface IVSCloneMockResponseState {
 	sequence: number;
 	sessionResource: string;
 	promptText: string;
+	modelIdentifier?: string;
+	providerId?: string;
 	chunks: readonly string[];
 	nextChunkIndex: number;
 	timerHandle: ReturnType<typeof setTimeout> | undefined;
@@ -30,6 +35,7 @@ interface IVSCloneMockResponseState {
 export interface IVSCloneChatSubmitOptions {
 	threadId?: string;
 	sessionResource?: string;
+	modelSelection?: IVSCloneModelSelection;
 }
 
 export interface IVSCloneChatSubmitResult {
@@ -109,15 +115,24 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	constructor(
 		@IChatService private readonly chatService: IChatService,
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
 	) {
 		super();
+	}
+
+	private get useVSCodeChatBackend(): boolean {
+		return this.configurationService.getValue<boolean>(VSCloneUseVSCodeChatBackendSetting) ?? false;
 	}
 
 	async submitPrompt(promptText: string, options: IVSCloneChatSubmitOptions = {}): Promise<IVSCloneChatSubmitResult | undefined> {
 		const trimmedPrompt = promptText.trim();
 		if (!trimmedPrompt) {
 			return undefined;
+		}
+
+		if (!this.useVSCodeChatBackend) {
+			return this.submitMockPrompt(trimmedPrompt, options);
 		}
 
 		if (!this.chatService.isEnabled(ChatAgentLocation.Chat)) {
@@ -153,6 +168,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 					sessionResource,
 					promptText: trimmedPrompt,
 					reason: sendResult.reason,
+					modelSelection: options.modelSelection,
 				});
 				return {
 					threadId,
@@ -169,6 +185,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 							sessionResource,
 							promptText: trimmedPrompt,
 							reason: result.reason,
+							modelSelection: options.modelSelection,
 						});
 					}
 				});
@@ -186,10 +203,12 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	}
 
 	cancelThread(threadId: string): void {
-		const thread = this.historyService.getThreads({ includeArchived: true }).find(candidate => candidate.threadId === threadId);
-		const sessionResource = parseSessionResource(thread?.sessionResource);
-		if (sessionResource) {
-			this.chatService.cancelCurrentRequestForSession(sessionResource);
+		if (this.useVSCodeChatBackend) {
+			const thread = this.historyService.getThreads({ includeArchived: true }).find(candidate => candidate.threadId === threadId);
+			const sessionResource = parseSessionResource(thread?.sessionResource);
+			if (sessionResource) {
+				this.chatService.cancelCurrentRequestForSession(sessionResource);
+			}
 		}
 
 		for (const [turnId, state] of [...this.mockResponses]) {
@@ -230,6 +249,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			phase: 'prompt',
 			occurredAt,
 			promptText,
+			modelIdentifier: options.modelSelection?.modelIdentifier,
+			providerId: options.modelSelection?.vendor,
 		});
 
 		const reply = toAssistantReply(promptText);
@@ -239,6 +260,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			sequence,
 			sessionResource,
 			promptText,
+			modelIdentifier: options.modelSelection?.modelIdentifier,
+			providerId: options.modelSelection?.vendor,
 			chunks: toResponseChunks(reply),
 			nextChunkIndex: 0,
 			timerHandle: undefined,
@@ -280,6 +303,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 				phase: 'complete',
 				occurredAt: Date.now(),
 				promptText: state.promptText,
+				modelIdentifier: state.modelIdentifier,
+				providerId: state.providerId,
 			});
 			this.mockResponses.delete(turnId);
 			return;
@@ -294,6 +319,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			phase: 'stream',
 			occurredAt: Date.now(),
 			promptText: state.promptText,
+			modelIdentifier: state.modelIdentifier,
+			providerId: state.providerId,
 			responsePlainTextDelta: chunk,
 			responseMarkdownDelta: chunk,
 		});
@@ -301,7 +328,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		this.scheduleMockTick(turnId, 55);
 	}
 
-	private injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string }): void {
+	private injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string; modelSelection?: IVSCloneModelSelection }): void {
 		const turns = this.historyService.getTurns(options.threadId);
 		const sequence = turns.length + 1;
 		const turnId = `${options.threadId}:rejected:${Date.now()}`;
@@ -315,6 +342,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			phase: 'prompt',
 			occurredAt,
 			promptText: options.promptText,
+			modelIdentifier: options.modelSelection?.modelIdentifier,
+			providerId: options.modelSelection?.vendor,
 		});
 
 		this.historyService.applyTurnUpdate({
@@ -326,6 +355,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			occurredAt: Date.now(),
 			promptText: options.promptText,
 			errorCode: 'request_rejected',
+			modelIdentifier: options.modelSelection?.modelIdentifier,
+			providerId: options.modelSelection?.vendor,
 			responsePlainTextReplace: options.reason,
 			responseMarkdownReplace: options.reason,
 		});
