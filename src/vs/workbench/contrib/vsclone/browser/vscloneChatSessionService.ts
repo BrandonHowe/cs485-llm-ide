@@ -1,0 +1,333 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { localize } from '../../../../nls.js';
+import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { ILogService } from '../../../../platform/log/common/log.js';
+import { Disposable } from '../../../../base/common/lifecycle.js';
+import { hash } from '../../../../base/common/hash.js';
+import { URI } from '../../../../base/common/uri.js';
+import { ChatSendResult, IChatService } from '../../chat/common/chatService/chatService.js';
+import { ChatAgentLocation } from '../../chat/common/constants.js';
+import { deriveThreadId } from '../common/vscloneChatHistoryModel.js';
+import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+
+export const IVSCloneChatSessionService = createDecorator<IVSCloneChatSessionService>('vscloneChatSessionService');
+
+interface IVSCloneMockResponseState {
+	threadId: string;
+	turnId: string;
+	sequence: number;
+	sessionResource: string;
+	promptText: string;
+	chunks: readonly string[];
+	nextChunkIndex: number;
+	timerHandle: ReturnType<typeof setTimeout> | undefined;
+}
+
+export interface IVSCloneChatSubmitOptions {
+	threadId?: string;
+	sessionResource?: string;
+}
+
+export interface IVSCloneChatSubmitResult {
+	threadId: string;
+	sessionResource: string;
+	mocked: boolean;
+}
+
+export interface IVSCloneChatSessionService {
+	readonly _serviceBrand: undefined;
+	submitPrompt(promptText: string, options?: IVSCloneChatSubmitOptions): Promise<IVSCloneChatSubmitResult | undefined>;
+	cancelThread(threadId: string): void;
+}
+
+function createMockSessionResource(seed: string): string {
+	return `vsclone://mock/${encodeURIComponent(seed)}`;
+}
+
+function createMockSeed(promptText: string): string {
+	const salt = Date.now().toString(36);
+	return `vsclone-mock-${salt}-${Math.abs(hash(`${promptText}:${salt}`)).toString(36).slice(0, 5)}`;
+}
+
+function toAssistantReply(promptText: string): string {
+	const trimmedPrompt = promptText.trim();
+	if (!trimmedPrompt) {
+		return localize('vsclone.syntheticReply.empty', 'I need a prompt before I can help.');
+	}
+
+	if (/\b(error|fail)\b/i.test(trimmedPrompt)) {
+		return localize('vsclone.syntheticReply.errorHint', 'I can walk through that failure case. Share the exact error and the file path.');
+	}
+
+	return localize(
+		'vsclone.syntheticReply.default',
+		'Local VSClone response for: "{0}"\n\nThis custom pane is decoupled from the built-in VS Code chat widget and stores turns in VSClone history.',
+		trimmedPrompt,
+	);
+}
+
+function toResponseChunks(response: string): readonly string[] {
+	const words = response.split(/(\s+)/).filter(chunk => chunk.length > 0);
+	const chunks: string[] = [];
+	let currentChunk = '';
+	for (const word of words) {
+		const projectedLength = currentChunk.length + word.length;
+		if (projectedLength > 32 && currentChunk.length > 0) {
+			chunks.push(currentChunk);
+			currentChunk = word;
+			continue;
+		}
+		currentChunk += word;
+	}
+	if (currentChunk.length > 0) {
+		chunks.push(currentChunk);
+	}
+	return chunks.length > 0 ? chunks : [response];
+}
+
+function parseSessionResource(value: string | undefined): URI | undefined {
+	if (!value) {
+		return undefined;
+	}
+
+	try {
+		return URI.parse(value);
+	} catch {
+		return undefined;
+	}
+}
+
+export class VSCloneChatSessionService extends Disposable implements IVSCloneChatSessionService {
+	declare readonly _serviceBrand: undefined;
+
+	private readonly mockResponses = new Map<string, IVSCloneMockResponseState>();
+
+	constructor(
+		@IChatService private readonly chatService: IChatService,
+		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
+		@ILogService private readonly logService: ILogService,
+	) {
+		super();
+	}
+
+	async submitPrompt(promptText: string, options: IVSCloneChatSubmitOptions = {}): Promise<IVSCloneChatSubmitResult | undefined> {
+		const trimmedPrompt = promptText.trim();
+		if (!trimmedPrompt) {
+			return undefined;
+		}
+
+		if (!this.chatService.isEnabled(ChatAgentLocation.Chat)) {
+			return this.submitMockPrompt(trimmedPrompt, options);
+		}
+
+		const preferredResource = parseSessionResource(options.sessionResource);
+		let activeResource: URI | undefined;
+
+		try {
+			if (preferredResource) {
+				const restored = await this.chatService.getOrRestoreSession(preferredResource);
+				if (restored) {
+					activeResource = restored.object.sessionResource;
+					restored.dispose();
+				}
+			}
+
+			if (!activeResource) {
+				const started = this.chatService.startSession(ChatAgentLocation.Chat);
+				activeResource = started.object.sessionResource;
+				started.dispose();
+			}
+
+			const sessionResource = activeResource.toString();
+			const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
+			const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
+			const sendResult = await this.chatService.sendRequest(activeResource, trimmedPrompt, { location: ChatAgentLocation.Chat });
+
+			if (ChatSendResult.isRejected(sendResult)) {
+				this.injectRejectedTurn({
+					threadId,
+					sessionResource,
+					promptText: trimmedPrompt,
+					reason: sendResult.reason,
+				});
+				return {
+					threadId,
+					sessionResource,
+					mocked: false,
+				};
+			}
+
+			if (ChatSendResult.isQueued(sendResult)) {
+				void sendResult.deferred.then(result => {
+					if (ChatSendResult.isRejected(result)) {
+						this.injectRejectedTurn({
+							threadId,
+							sessionResource,
+							promptText: trimmedPrompt,
+							reason: result.reason,
+						});
+					}
+				});
+			}
+
+			return {
+				threadId,
+				sessionResource,
+				mocked: false,
+			};
+		} catch (error) {
+			this.logService.warn('VSClone chat send failed, falling back to mock responder', error);
+			return this.submitMockPrompt(trimmedPrompt, options);
+		}
+	}
+
+	cancelThread(threadId: string): void {
+		const thread = this.historyService.getThreads({ includeArchived: true }).find(candidate => candidate.threadId === threadId);
+		const sessionResource = parseSessionResource(thread?.sessionResource);
+		if (sessionResource) {
+			this.chatService.cancelCurrentRequestForSession(sessionResource);
+		}
+
+		for (const [turnId, state] of [...this.mockResponses]) {
+			if (state.threadId !== threadId) {
+				continue;
+			}
+			if (state.timerHandle !== undefined) {
+				clearTimeout(state.timerHandle);
+			}
+			this.mockResponses.delete(turnId);
+		}
+	}
+
+	override dispose(): void {
+		for (const state of this.mockResponses.values()) {
+			if (state.timerHandle !== undefined) {
+				clearTimeout(state.timerHandle);
+			}
+		}
+		this.mockResponses.clear();
+		super.dispose();
+	}
+
+	private submitMockPrompt(promptText: string, options: IVSCloneChatSubmitOptions): IVSCloneChatSubmitResult {
+		const mockSeed = createMockSeed(promptText);
+		const sessionResource = options.sessionResource ?? createMockSessionResource(mockSeed);
+		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
+		const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
+		const turnId = `${threadId}:mock:${Date.now()}`;
+		const sequence = this.historyService.getTurns(threadId).length + 1;
+		const occurredAt = Date.now();
+
+		this.historyService.applyTurnUpdate({
+			threadId,
+			turnId,
+			sequence,
+			sessionResource,
+			phase: 'prompt',
+			occurredAt,
+			promptText,
+		});
+
+		const reply = toAssistantReply(promptText);
+		this.mockResponses.set(turnId, {
+			threadId,
+			turnId,
+			sequence,
+			sessionResource,
+			promptText,
+			chunks: toResponseChunks(reply),
+			nextChunkIndex: 0,
+			timerHandle: undefined,
+		});
+		this.scheduleMockTick(turnId, 130);
+
+		return {
+			threadId,
+			sessionResource,
+			mocked: true,
+		};
+	}
+
+	private scheduleMockTick(turnId: string, delayMs: number): void {
+		const state = this.mockResponses.get(turnId);
+		if (!state) {
+			return;
+		}
+
+		if (state.timerHandle !== undefined) {
+			clearTimeout(state.timerHandle);
+		}
+
+		state.timerHandle = setTimeout(() => this.runMockTick(turnId), delayMs);
+	}
+
+	private runMockTick(turnId: string): void {
+		const state = this.mockResponses.get(turnId);
+		if (!state) {
+			return;
+		}
+
+		if (state.nextChunkIndex >= state.chunks.length) {
+			this.historyService.applyTurnUpdate({
+				threadId: state.threadId,
+				turnId: state.turnId,
+				sequence: state.sequence,
+				sessionResource: state.sessionResource,
+				phase: 'complete',
+				occurredAt: Date.now(),
+				promptText: state.promptText,
+			});
+			this.mockResponses.delete(turnId);
+			return;
+		}
+
+		const chunk = state.chunks[state.nextChunkIndex++];
+		this.historyService.applyTurnUpdate({
+			threadId: state.threadId,
+			turnId: state.turnId,
+			sequence: state.sequence,
+			sessionResource: state.sessionResource,
+			phase: 'stream',
+			occurredAt: Date.now(),
+			promptText: state.promptText,
+			responsePlainTextDelta: chunk,
+			responseMarkdownDelta: chunk,
+		});
+
+		this.scheduleMockTick(turnId, 55);
+	}
+
+	private injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string }): void {
+		const turns = this.historyService.getTurns(options.threadId);
+		const sequence = turns.length + 1;
+		const turnId = `${options.threadId}:rejected:${Date.now()}`;
+		const occurredAt = Date.now();
+
+		this.historyService.applyTurnUpdate({
+			threadId: options.threadId,
+			turnId,
+			sequence,
+			sessionResource: options.sessionResource,
+			phase: 'prompt',
+			occurredAt,
+			promptText: options.promptText,
+		});
+
+		this.historyService.applyTurnUpdate({
+			threadId: options.threadId,
+			turnId,
+			sequence,
+			sessionResource: options.sessionResource,
+			phase: 'error',
+			occurredAt: Date.now(),
+			promptText: options.promptText,
+			errorCode: 'request_rejected',
+			responsePlainTextReplace: options.reason,
+			responseMarkdownReplace: options.reason,
+		});
+	}
+}

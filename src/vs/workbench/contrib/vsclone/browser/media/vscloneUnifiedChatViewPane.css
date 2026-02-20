@@ -1,0 +1,578 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.vsclone-unified-chat-view-pane {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	width: 100%;
+	overflow: hidden;
+	background: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	position: relative;
+}
+
+.vsclone-chat-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 40px;
+	padding: 0 10px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+	background: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--vscode-widget-shadow) 15%);
+}
+
+.vsclone-chat-header-back,
+.vsclone-chat-header-overflow {
+	height: 24px;
+	border: none;
+	background: transparent;
+	color: var(--vscode-foreground);
+	border-radius: 4px;
+	cursor: pointer;
+	opacity: 0.9;
+}
+
+.vsclone-chat-header-back:hover,
+.vsclone-chat-header-overflow:hover {
+	background: var(--vscode-toolbar-hoverBackground);
+}
+
+.vsclone-chat-header-back {
+	display: none;
+	font-size: 12px;
+	padding: 0 8px;
+}
+
+.vsclone-chat-header-back.visible {
+	display: inline-flex;
+	align-items: center;
+}
+
+.vsclone-chat-header-title {
+	flex: 1;
+	min-width: 0;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vsclone-chat-header-overflow {
+	width: 24px;
+	padding: 0;
+	font-size: 14px;
+}
+
+.vsclone-chat-content {
+	flex: 1;
+	display: flex;
+	min-height: 0;
+	overflow: hidden;
+	position: relative;
+}
+
+.vsclone-chat-left-rail {
+	flex: none;
+	height: 100%;
+	min-width: 0;
+	border-right: 1px solid var(--vscode-panel-border);
+	overflow: hidden;
+	background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-sideBar-background) 8%);
+	transition: width 120ms ease;
+}
+
+.vsclone-chat-rail-resize-handle {
+	width: 4px;
+	cursor: col-resize;
+	background: transparent;
+}
+
+.vsclone-chat-rail-resize-handle:hover {
+	background: var(--vscode-focusBorder);
+	opacity: 0.5;
+}
+
+.vsclone-chat-conversation {
+	flex: 1;
+	min-width: 0;
+	height: 100%;
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+	background: color-mix(in srgb, var(--vscode-editor-background) 96%, black 4%);
+}
+
+.vsclone-unified-chat-view-pane.rail-hidden .vsclone-chat-left-rail {
+	border-right: none;
+}
+
+.vsclone-thread-messages {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.vsclone-thread-empty-state {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 28px;
+	text-align: center;
+	color: var(--vscode-descriptionForeground);
+	line-height: 1.45;
+}
+
+.vsclone-thread-empty-state.hidden {
+	display: none;
+}
+
+.vsclone-thread-message {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	max-width: min(780px, 96%);
+	padding: 9px 11px;
+	border-radius: 8px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 80%, transparent 20%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorWidget-background) 10%);
+}
+
+.vsclone-thread-message.user {
+	align-self: flex-end;
+	background: color-mix(in srgb, var(--vscode-button-background) 22%, transparent 78%);
+	border-color: color-mix(in srgb, var(--vscode-button-background) 35%, transparent 65%);
+}
+
+.vsclone-thread-message.assistant {
+	align-self: flex-start;
+}
+
+.vsclone-thread-message.assistant.streaming {
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 50%, transparent 50%);
+}
+
+.vsclone-thread-message.assistant.error {
+	border-color: color-mix(in srgb, var(--vscode-errorForeground) 45%, transparent 55%);
+	background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent 88%);
+}
+
+.vsclone-thread-message-meta {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	opacity: 0.72;
+	font-weight: 600;
+}
+
+.vsclone-thread-message-body {
+	white-space: pre-wrap;
+	line-height: 1.45;
+	word-break: break-word;
+}
+
+.vsclone-thread-composer {
+	border-top: 1px solid var(--vscode-panel-border);
+	padding: 12px;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas:
+		'input send'
+		'hint hint';
+	gap: 8px 10px;
+	background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorWidget-background) 10%);
+}
+
+.vsclone-thread-composer-input {
+	grid-area: input;
+	width: 100%;
+	resize: none;
+	min-height: 40px;
+	max-height: 132px;
+	padding: 10px 11px;
+	border-radius: 6px;
+	outline: none;
+	border: 1px solid var(--vscode-panel-border);
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	font: inherit;
+	line-height: 1.4;
+	overflow: auto;
+}
+
+.vsclone-thread-composer-input:focus {
+	border-color: var(--vscode-focusBorder);
+}
+
+.vsclone-thread-composer-input::placeholder {
+	color: var(--vscode-input-placeholderForeground);
+}
+
+.vsclone-thread-composer-send {
+	grid-area: send;
+	height: 40px;
+	padding: 0 16px;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-weight: 600;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+}
+
+.vsclone-thread-composer-send:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.vsclone-thread-composer-send:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+
+.vsclone-thread-composer-hint {
+	grid-area: hint;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.vsclone-unified-chat-view-pane.compact-layout .vsclone-chat-left-rail {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	z-index: 25;
+	box-shadow: 8px 0 24px color-mix(in srgb, black 45%, transparent 55%);
+	max-width: min(92%, 420px);
+}
+
+.vsclone-unified-chat-view-pane.compact-layout.rail-hidden .vsclone-chat-left-rail {
+	width: 0 !important;
+	box-shadow: none;
+}
+
+.vsclone-unified-chat-view-pane.compact-layout .vsclone-chat-rail-resize-handle {
+	display: none;
+}
+
+.vsclone-unified-chat-view-pane.compact-layout .vsclone-chat-conversation {
+	width: 100%;
+}
+
+.vsclone-unified-chat-view-pane.compact-layout.showing-rail .vsclone-chat-conversation {
+	display: none;
+}
+
+@media (max-width: 620px) {
+	.vsclone-chat-header-title {
+		font-size: 12px;
+	}
+
+	.vsclone-thread-composer {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-areas:
+			'input'
+			'send'
+			'hint';
+	}
+
+	.vsclone-thread-composer-send {
+		width: 100%;
+	}
+
+	.vsclone-thread-message {
+		max-width: 100%;
+	}
+}
+
+.vsclone-chat-history-rail {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	position: relative;
+}
+
+.vsclone-chat-history-rail-header {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.vsclone-chat-history-rail-title {
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	opacity: 0.85;
+}
+
+.vsclone-chat-history-search {
+	height: 30px;
+	border: none;
+	outline: none;
+	padding: 0 10px;
+	border-radius: 5px;
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+}
+
+.vsclone-chat-history-search::placeholder {
+	color: var(--vscode-input-placeholderForeground);
+}
+
+.vsclone-chat-history-tabs {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 4px;
+}
+
+.vsclone-chat-history-tab {
+	height: 28px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.vsclone-chat-history-tab:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.vsclone-chat-history-tab.active {
+	border-color: color-mix(in srgb, var(--vscode-button-background) 65%, white 35%);
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+}
+
+.vsclone-chat-history-rail-body {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+}
+
+.vsclone-chat-history-list,
+.vsclone-chat-history-state {
+	height: 100%;
+	overflow: auto;
+}
+
+.vsclone-chat-history-list.hidden,
+.vsclone-chat-history-state.hidden {
+	display: none;
+}
+
+.vsclone-chat-history-row {
+	padding: 10px 12px;
+	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 75%, transparent 25%);
+	cursor: pointer;
+}
+
+.vsclone-chat-history-row:hover {
+	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 50%, transparent 50%);
+}
+
+.vsclone-chat-history-row.selected {
+	background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 75%, transparent 25%);
+	color: var(--vscode-list-activeSelectionForeground);
+}
+
+.vsclone-chat-history-row-top {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+
+.vsclone-chat-history-row-title {
+	flex: 1;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vsclone-chat-history-row-timestamp {
+	font-size: 11px;
+	opacity: 0.8;
+}
+
+.vsclone-chat-history-row-preview {
+	margin-top: 3px;
+	font-size: 12px;
+	opacity: 0.88;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vsclone-chat-history-row-metadata {
+	margin-top: 5px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	opacity: 0.8;
+}
+
+.vsclone-chat-history-row-archived {
+	padding: 1px 5px;
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--vscode-badge-background) 65%, transparent 35%);
+	color: var(--vscode-badge-foreground);
+}
+
+.vsclone-chat-history-state {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 24px;
+	text-align: center;
+}
+
+.vsclone-chat-history-state-icon {
+	height: 68px;
+	width: 68px;
+	border-radius: 50%;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 24px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 70%, transparent 30%);
+}
+
+.vsclone-chat-history-state-icon.error {
+	color: var(--vscode-errorForeground);
+	background: color-mix(in srgb, var(--vscode-errorForeground) 22%, transparent 78%);
+}
+
+.vsclone-chat-history-state-title {
+	font-size: 28px;
+	max-width: 280px;
+	font-weight: 600;
+}
+
+.vsclone-chat-history-state-description {
+	max-width: 280px;
+	opacity: 0.85;
+}
+
+.vsclone-chat-history-retry {
+	height: 32px;
+	padding: 0 16px;
+	border: none;
+	border-radius: 5px;
+	cursor: pointer;
+	font-weight: 600;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+}
+
+.vsclone-chat-history-retry:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.vsclone-chat-history-skeleton {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	width: 100%;
+	padding: 12px;
+}
+
+.vsclone-chat-history-skeleton-row {
+	padding: 10px 0;
+	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 75%, transparent 25%);
+}
+
+.vsclone-chat-history-skeleton-line {
+	height: 8px;
+	border-radius: 5px;
+	margin-bottom: 7px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-border) 55%, transparent 45%);
+}
+
+.vsclone-chat-history-skeleton-line:nth-child(1) {
+	width: 65%;
+}
+
+.vsclone-chat-history-skeleton-line:nth-child(2) {
+	width: 92%;
+}
+
+.vsclone-chat-history-skeleton-line:nth-child(3) {
+	width: 48%;
+}
+
+.vsclone-chat-history-delete-overlay {
+	position: absolute;
+	inset: 0;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	padding: 20px;
+	background: color-mix(in srgb, black 65%, transparent 35%);
+	z-index: 40;
+}
+
+.vsclone-chat-history-delete-overlay.visible {
+	display: flex;
+}
+
+.vsclone-chat-history-delete-modal {
+	width: min(360px, 100%);
+	border-radius: 8px;
+	padding: 16px;
+	border: 1px solid var(--vscode-panel-border);
+	background: var(--vscode-editorWidget-background);
+	box-shadow: 0 8px 28px color-mix(in srgb, black 50%, transparent 50%);
+}
+
+.vsclone-chat-history-delete-title {
+	font-weight: 700;
+	font-size: 20px;
+}
+
+.vsclone-chat-history-delete-description {
+	margin-top: 10px;
+	line-height: 1.4;
+	opacity: 0.9;
+}
+
+.vsclone-chat-history-delete-actions {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+	margin-top: 14px;
+}
+
+.vsclone-chat-history-delete-cancel,
+.vsclone-chat-history-delete-confirm {
+	height: 34px;
+	border: none;
+	border-radius: 5px;
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.vsclone-chat-history-delete-cancel {
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+.vsclone-chat-history-delete-confirm {
+	background: color-mix(in srgb, var(--vscode-errorForeground) 35%, transparent 65%);
+	color: var(--vscode-errorForeground);
+	border: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 50%, transparent 50%);
+}

@@ -22,6 +22,9 @@ Rationale: The most important goal is to acquire accurate usage data from OpenAI
   - `src/vs/workbench/contrib/vsclone/browser`
   - `src/vs/workbench/contrib/vsclone/electron-main` (not required for MVP)
 - **Required integration touchpoints:**
+  - `src/vs/workbench/workbench.common.main.ts` with exactly one VSClone import: `./contrib/vsclone/browser/vsclone.contribution.js`
+  - single VSClone registration entrypoint: `src/vs/workbench/contrib/vsclone/browser/vsclone.contribution.ts`
+  - startup-scoped usage capture ownership in `src/vs/workbench/contrib/vsclone/browser/vscloneUsageSessionBridge.ts` (ingestion must not depend on usage view visibility)
   - `IChatService` / `IChatModel` for request lifecycle and provider correlation metadata.
   - Provider usage and quota APIs (OpenAI, Anthropic, and other configured providers).
   - Provider auth/session services (assumed already implemented).
@@ -34,7 +37,7 @@ Rationale: I kept the architecture close to existing VSCode patterns. Request li
 ![Architecture Diagram](diagrams/userstory2/architecture-diagram-1.svg)
 
 - **Where components run:**
-  - **Client (renderer):** bridge, usage service, aggregation, budget policy, side-panel UI.
+  - **Client (renderer):** startup-scoped capture bridge, usage service, aggregation, budget policy, side-panel UI.
   - **Server process (extension host/chat runtime):** emits request lifecycle and provider correlation metadata.
   - **Cloud:** provider inference endpoints, provider usage endpoints, provider quota/billing endpoints.
   - **Local:** workspace/profile storage for usage ledger.
@@ -54,8 +57,8 @@ Rationale: The class diagram is based on the class list and split by clear respo
 
 Rationale: Each class has one clear job so usage issues are easier to reason about and debug. I also included migration, serialization, and action classes up front so those concerns are not bolted on later. Each class is designed to do one thing which helps make code simpler and reduce coupling between unrelated components.
 
-- `VSCloneUsageContribution` (`browser/vscloneUsage.contribution.ts`): registers view container/view, singleton services, startup hooks.
-- `VSCloneUsageSessionBridge` (`browser/vscloneUsageSessionBridge.ts`): listens to chat model lifecycle and emits normalized request references with provider correlation fields.
+- `VSCloneContribution` (`browser/vsclone.contribution.ts`): shared single entrypoint that registers usage-log integration, services, actions, and startup hooks.
+- `VSCloneUsageSessionBridge` (`browser/vscloneUsageSessionBridge.ts`): startup-scoped capture adapter that listens to chat model lifecycle and emits normalized request references with provider correlation fields independent of view visibility.
 - `VSCloneUsageService` (`common/vscloneUsageService.ts`): orchestrates request reference ingestion, provider sync, querying, persistence, export, and alerts.
 - `VSCloneUsageModel` (`common/vscloneUsageModel.ts`): in-memory usage ledger and summary state for provider-synced rows.
 - `VSCloneUsageAggregationService` (`common/vscloneUsageAggregationService.ts`): computes per-session/day/workspace rollups from provider-reported values.
@@ -71,7 +74,7 @@ Rationale: Each class has one clear job so usage issues are easier to reason abo
 
 # State Diagrams
 
-Rationale: Usage APIs can go through many different states so pending, synced, failed, and unsupported states need to be explicit. This makes it clear whether data is delayed, unavailable, or actually broken. It also gives retry logic and UI behavior a shared contract instead of hidden assumptions.
+Rationale: Usage APIs can go through many different states so pending, synced, failed, and unsupported states need to be explicit. This makes it clear whether data is delayed, unavailable, or actually broken. It also gives retry logic and UI behavior a shared contract instead of hidden assumptions. State transitions should be deterministic and validated by focused unit tests.
 
 ![State Diagram 1](diagrams/userstory2/state-diagrams-1.svg)
 
@@ -89,6 +92,7 @@ Rationale: Most risk here comes from outside dependencies, especially provider l
 
 | Risk | Failure Mode | Mitigation |
 |---|---|---|
+| Usage capture tied to view lifecycle | Missing request rows when usage view is closed | Startup-scoped capture bridge/service owns ingestion independent of view visibility |
 | Provider usage API latency or eventual consistency | Recent requests stay unresolved for a short window | Mark entries `pending_sync`; retry on interval; show `lastSyncedAt` and manual refresh |
 | Provider usage API rate limits | Sync gaps or delayed updates | Per-provider backoff/jitter and bounded concurrency |
 | Missing provider correlation identifier | Authoritative usage cannot be retrieved | Mark `sync_failed` with reason; do not estimate values |
@@ -106,7 +110,7 @@ Rationale: This is being built in a VSCode fork, so I reused existing workbench 
 - **UI:** `ViewPane`/tree components in `browser/`, context menus/actions, optional details panel.
 - **State/events:** `Emitter`, `Event`, observable patterns used by workbench services.
 - **Data source integration:**
-  - `IChatService`/`IChatModel` for request lifecycle and provider correlation metadata.
+  - `IChatService`/`IChatModel` for startup-scoped request lifecycle capture and provider correlation metadata.
   - Provider-specific usage endpoints (OpenAI, Anthropic, and other enabled vendors).
   - Provider-specific quota/billing endpoints.
   - `IChatEntitlementService` for Copilot quota surfaces where applicable.
@@ -120,6 +124,7 @@ Rationale: The API surface stays narrow on purpose: listen to chat lifecycle eve
 
 - **Existing APIs consumed:**
   - `IChatService.onDidCreateModel`
+  - `IChatService.onDidDisposeSession`
   - `IChatModel.onDidChange`
   - Provider correlation metadata emitted by chat/provider adapters (for example provider request IDs)
   - Provider usage APIs (for example OpenAI usage/cost endpoints, Anthropic usage/billing endpoints)

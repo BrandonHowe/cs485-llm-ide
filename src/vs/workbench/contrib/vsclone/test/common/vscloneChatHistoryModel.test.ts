@@ -1,0 +1,112 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import assert from 'assert';
+import { VSCloneChatHistoryModel } from '../../common/vscloneChatHistoryModel.js';
+import { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../../common/vscloneChatHistoryService.js';
+
+suite('VSCloneChatHistoryModel', () => {
+	function thread(id: string, updatedAt: number, overrides: Partial<IVSCloneChatHistoryThread> = {}): IVSCloneChatHistoryThread {
+		return {
+			threadId: id,
+			sessionResource: `vscode-chat://session/${id}`,
+			title: id,
+			createdAt: updatedAt - 10,
+			updatedAt,
+			status: 'active',
+			archived: false,
+			turnCount: 1,
+			lastTurnPreview: 'preview',
+			...overrides,
+		};
+	}
+
+	function turn(threadId: string, sequence: number, text: string): IVSCloneChatHistoryTurn {
+		return {
+			turnId: `${threadId}-${sequence}`,
+			threadId,
+			sequence,
+			promptText: text,
+			responseMarkdown: text,
+			responsePlainText: text,
+			startedAt: sequence,
+			status: 'completed',
+		};
+	}
+
+	test('orders threads by updatedAt desc', () => {
+		const model = new VSCloneChatHistoryModel();
+		model.initialize({
+			updatedAt: 1,
+			threads: [thread('a', 10), thread('b', 30), thread('c', 20)],
+			turnsByThreadId: {},
+		});
+
+		const ids = model.getThreads({ includeArchived: true }).map(t => t.threadId);
+		assert.deepStrictEqual(ids, ['b', 'c', 'a']);
+	});
+
+	test('filters by tabs All/Active/Archived', () => {
+		const model = new VSCloneChatHistoryModel();
+		model.initialize({
+			updatedAt: 1,
+			threads: [
+				thread('active', 30, { status: 'active', archived: false }),
+				thread('completed', 20, { status: 'completed', archived: false }),
+				thread('archived', 10, { status: 'archived', archived: true }),
+			],
+			turnsByThreadId: {},
+		});
+
+		assert.deepStrictEqual(model.getThreads({ tab: 'all' }).map(t => t.threadId), ['active', 'completed', 'archived']);
+		assert.deepStrictEqual(model.getThreads({ tab: 'active' }).map(t => t.threadId), ['active']);
+		assert.deepStrictEqual(model.getThreads({ tab: 'archived' }).map(t => t.threadId), ['archived']);
+	});
+
+	test('supports text query against title and turn text', () => {
+		const model = new VSCloneChatHistoryModel();
+		model.initialize({
+			updatedAt: 1,
+			threads: [thread('first', 20, { title: 'Database schema' }), thread('second', 10, { title: 'React optimization' })],
+			turnsByThreadId: {
+				first: [turn('first', 1, 'normalize tables')],
+				second: [turn('second', 1, 'memo and useCallback')],
+			},
+		});
+
+		assert.deepStrictEqual(model.getThreads({ text: 'database' }).map(t => t.threadId), ['first']);
+		assert.deepStrictEqual(model.getThreads({ text: 'usecallback' }).map(t => t.threadId), ['second']);
+	});
+
+	test('prunes old and extra threads with retention', () => {
+		const model = new VSCloneChatHistoryModel();
+		const now = Date.now();
+		model.initialize({
+			updatedAt: now,
+			threads: [
+				thread('newest', now - 1_000),
+				thread('middle', now - 2_000),
+				thread('old', now - (40 * 24 * 60 * 60 * 1000)),
+			],
+			turnsByThreadId: {
+				newest: [turn('newest', 1, 'a')],
+				middle: [turn('middle', 1, 'b')],
+				old: [turn('old', 1, 'c')],
+			},
+		});
+
+		const result = model.applyRetention(1, 30, now);
+		assert.ok(result.deletedThreadIds.includes('old'));
+		assert.ok(result.deletedThreadIds.includes('middle'));
+		assert.deepStrictEqual(model.getThreads({ includeArchived: true }).map(t => t.threadId), ['newest']);
+	});
+
+	test('respects max turns per thread through state set', () => {
+		const model = new VSCloneChatHistoryModel();
+		const baseThread = thread('t', 10);
+		model.setThreadState(baseThread, [turn('t', 1, 'a'), turn('t', 2, 'b'), turn('t', 3, 'c')]);
+		assert.strictEqual(model.getTurns('t').length, 3);
+	});
+});

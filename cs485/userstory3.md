@@ -22,12 +22,15 @@ Rationale: Given that the user is logged into multiple models, they should be ab
   - `src/vs/workbench/contrib/vsclone/browser`
   - `src/vs/workbench/contrib/vsclone/electron-main` (reserved for future desktop-only needs)
 - **Integration touchpoints in existing code:**
+  - `src/vs/workbench/workbench.common.main.ts` with exactly one VSClone import: `./contrib/vsclone/browser/vsclone.contribution.js`
+  - single VSClone registration entrypoint: `src/vs/workbench/contrib/vsclone/browser/vsclone.contribution.ts`
   - unified chat host surface in `src/vs/workbench/contrib/vsclone/browser/vscloneUnifiedChatViewPane.ts`
   - chat input toolbar/model picker surface in `src/vs/workbench/contrib/chat/browser/widget/input/chatInputPart.ts`
   - model picker action shape in `src/vs/workbench/contrib/chat/browser/widget/input/modelPickerActionItem.ts`
   - request routing via `IChatSendRequestOptions.userSelectedModelId`
   - model catalog and provider groups via `ILanguageModelsService` and `ILanguageModelsConfigurationService`
-  - active-thread context from VSClone history rail service (`IVSCloneChatHistoryService`)
+  - active-thread context from startup-scoped VSClone history runtime (`IVSCloneChatHistoryService`)
+  - unified chat rendering compatibility from Story 1 (preserve markdown/streaming/tool-rich conversation rendering behavior)
 
 # Architecture Diagram
 
@@ -36,7 +39,7 @@ Rationale: I kept this architecture aligned with existing VSCode services as muc
 ![Architecture Diagram](diagrams/userstory3/architecture-diagram-1.svg)
 
 - **Where components run:**
-  - **Client:** unified chat pane UI (history rail + conversation + composer), dropdown UI, catalog/filter logic, thread-scoped model selection state, commands.
+  - **Client:** unified chat pane UI (history rail + conversation + composer), dropdown UI, catalog/filter logic, startup-scoped thread context + model selection state, commands.
   - **Server/workbench services:** language model provider registration and request routing.
   - **Local storage:** profile-scoped model preferences, provider group config, encrypted secrets.
   - **Cloud:** selected provider/model inference endpoints.
@@ -56,7 +59,7 @@ Rationale: The class diagram is based on the class list and split into catalog, 
 
 Rationale: Each class maps to a concrete behavior users will notice, like switching, fallback, provider setup, or persistence. Dedicated action and migration classes are included early so those parts do not become patchwork later. There's also a UI element for the switcher that is included that works with the classes in user story 1.
 
-- `VSCloneModelSwitcherContribution` (`browser/vscloneModelSwitcher.contribution.ts`): registers picker integration, services, and startup hooks.
+- `VSCloneContribution` (`browser/vsclone.contribution.ts`): shared single entrypoint that registers model-switcher integration, services, actions, and startup hooks.
 - `VSCloneModelCatalogService` (`common/vscloneModelCatalogService.ts`): builds provider/model catalog from `ILanguageModelsService`.
 - `VSCloneModelAvailabilityService` (`common/vscloneModelAvailabilityService.ts`): computes provider/model availability and readiness state.
 - `VSCloneModelCompatibilityService` (`common/vscloneModelCompatibilityService.ts`): filters models by mode/capabilities and active thread context.
@@ -70,7 +73,7 @@ Rationale: Each class maps to a concrete behavior users will notice, like switch
 
 # State Diagrams
 
-Rationale: Model selection can fail for several runtime reasons, like provider changes, auth issues, or capability mismatches, so those transitions are explicit here. This helps prevent broken routing when users actually send a request. I wanted failure behavior to be predictable so fallback handling does not feel random.
+Rationale: Model selection can fail for several runtime reasons, like provider changes, auth issues, or capability mismatches, so those transitions are explicit here. This helps prevent broken routing when users actually send a request. I wanted failure behavior to be predictable so fallback handling does not feel random. Selection/fallback/reset transitions should be deterministic and validated by focused service/reducer tests.
 
 ![State Diagram 1](diagrams/userstory3/state-diagrams-1.svg)
 
@@ -88,6 +91,7 @@ Rationale: Most of the risk here is integration risk, especially issues with imp
 
 | Risk | Failure Mode | Mitigation |
 |---|---|---|
+| Selection context tied to view lifecycle | Wrong/empty model when chat view is closed or not yet opened | Source active thread/model context from startup-scoped runtime/history services |
 | Provider/model catalog churn | Dropdown options stale or flicker | Debounced catalog refresh + stable sorting + diffed updates |
 | Incompatible model selected for mode | Request failure after send | Pre-send compatibility checks in selection service and picker UI badges |
 | Provider deconfigured mid-session | Selected model becomes invalid | Runtime availability checks + fallback/default model policy |
@@ -95,7 +99,7 @@ Rationale: Most of the risk here is integration risk, especially issues with imp
 | Duplicate identifiers across vendors | Wrong model routed | Always persist internal model identifier; include vendor in display and telemetry context |
 | Secret/config errors | Provider appears selectable but unusable | Validate provider-group config before apply; actionable error in picker |
 | Accessibility regressions | Keyboard and screen-reader users blocked | ARIA labels, keyboard navigation parity, announced state changes |
-| Extensibility conflicts with existing chat picker | UI duplication or command collisions | Integrate via one action path and feature flag (`vsclone.modelSwitcher.enabled`) |
+| Extensibility conflicts with existing chat picker | UI duplication or command collisions | Integrate via one action path, shared VSClone entrypoint, and feature flag (`vsclone.modelSwitcher.enabled`) |
 
 # Technology Stack
 
@@ -108,7 +112,7 @@ Rationale: Since this is a VSCode fork, I reused the existing chat toolbar, mode
   - `IChatService` request routing via `userSelectedModelId`.
   - `ILanguageModelsConfigurationService` for provider group config.
   - `IStorageService` for selection persistence and recents.
-  - `IVSCloneChatHistoryService` for active thread context in unified chat.
+  - `IVSCloneChatHistoryService` for startup-scoped active thread context in unified chat.
 - **Security dependencies:** `ISecretStorageService` through language model configuration flow.
 - **Testing:** browser/common unit tests under `src/vs/workbench/contrib/vsclone/test`.
 

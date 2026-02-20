@@ -449,7 +449,7 @@ declare module 'vscode' {
 	 */
 	export class ChatResponseHookPart {
 		/** The type of hook that was executed */
-		hookType: ChatHookType;
+		hookType: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'PreCompact' | 'SubagentStart' | 'SubagentStop' | 'Stop';
 		/** If set, the hook blocked processing. This message is shown to the user. */
 		stopReason?: string;
 		/** Warning/system message from the hook, shown to the user */
@@ -464,7 +464,7 @@ declare module 'vscode' {
 		 * @param systemMessage Warning/system message from the hook
 		 * @param metadata Optional metadata
 		 */
-		constructor(hookType: ChatHookType, stopReason?: string, systemMessage?: string, metadata?: { readonly [key: string]: unknown });
+		constructor(hookType: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'PreCompact' | 'SubagentStart' | 'SubagentStop' | 'Stop', stopReason?: string, systemMessage?: string, metadata?: { readonly [key: string]: unknown });
 	}
 
 	export class ChatResponseReferencePart2 {
@@ -574,7 +574,7 @@ declare module 'vscode' {
 		 * @param stopReason If set, the hook blocked processing. This message is shown to the user.
 		 * @param systemMessage Warning/system message from the hook
 		 */
-		hookProgress(hookType: ChatHookType, stopReason?: string, systemMessage?: string): void;
+		hookProgress(hookType: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'PreCompact' | 'SubagentStart' | 'SubagentStop' | 'Stop', stopReason?: string, systemMessage?: string): void;
 
 		textEdit(target: Uri, edits: TextEdit | TextEdit[]): void;
 

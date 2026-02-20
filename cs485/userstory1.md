@@ -13,10 +13,12 @@ Rationale: Because this is a fork of VSCode and not a standalone project, it's v
   - `src/vs/workbench/contrib/vsclone/browser`
   - `src/vs/workbench/contrib/vsclone/electron-main` (reserved for future desktop-only enhancements; not required for MVP)
 - **Required integration touchpoints:**
-  - `src/vs/workbench/workbench.common.main.ts` (register contribution import)
+  - `src/vs/workbench/workbench.common.main.ts` with exactly one VSClone import: `./contrib/vsclone/browser/vsclone.contribution.js`
+  - single VSClone registration entrypoint: `src/vs/workbench/contrib/vsclone/browser/vsclone.contribution.ts`
+  - startup-scoped runtime owner: `src/vs/workbench/contrib/vsclone/browser/vscloneChatRuntimeService.ts` (history ingestion must not depend on unified view visibility)
   - unified chat host surface in `src/vs/workbench/contrib/vsclone/browser/vscloneUnifiedChatViewPane.ts`
   - external dependency from Story 3: `IVSCloneThreadModelSelectionService` (`src/vs/workbench/contrib/vsclone/common/vscloneThreadModelSelectionService.ts`)
-  - Existing chat services/events from `src/vs/workbench/contrib/chat/common/*` and `src/vs/workbench/contrib/chat/browser/*`
+  - Existing chat services/events and rendering surfaces from `src/vs/workbench/contrib/chat/common/*` and `src/vs/workbench/contrib/chat/browser/*`
 
 # Architecture Diagram
 
@@ -25,7 +27,7 @@ Rationale: The architecture is designed to reflect the existing choices that VSC
 ![Architecture Diagram](diagrams/userstory1/architecture-diagram-1.svg)
 
 - **Runtime placement:**
-  - **Client:** unified chat pane UI (history rail + conversation + composer), bridge, in-memory model, persistence orchestration.
+  - **Client:** unified chat pane UI (history rail + conversation + composer), startup-scoped runtime capture service, bridge, in-memory model, persistence orchestration.
   - **Server process:** existing chat session execution and model event source.
   - **Cloud:** existing LLM backend (no new endpoint introduced).
   - **Local:** workspace/profile-scoped history files.
@@ -40,13 +42,15 @@ Rationale: The class diagram is based on the list of classes. The classes are de
 
 Rationale: Each class is designed to do a single thing. Migration and serialization classes are implemented up front to prepare for those cases rather than trying to handle those issues when they arise. There are a number of chat UI elements such as the view pane and history rail that make it easy to add more UI elements in the future. Aside from that each class is correlated to one aspect of the application.
 
-- `VSCloneChatHistoryContribution` (`browser/vscloneChatHistory.contribution.ts`): registers unified chat integration, singleton services, and startup lifecycle hooks.
-- `VSCloneChatSessionBridge` (`browser/vscloneChatSessionBridge.ts`): subscribes to `IChatService`/`IChatModel` events and converts them into normalized turn updates.
+- `VSCloneContribution` (`browser/vsclone.contribution.ts`): single entrypoint that registers unified chat integration, services, actions, and startup lifecycle hooks.
+- `VSCloneChatRuntimeService` (`browser/vscloneChatRuntimeService.ts`): startup-scoped runtime owner that attaches to existing/new chat models and routes lifecycle events to history updates independent of view visibility.
+- `VSCloneChatSessionBridge` (`browser/vscloneChatSessionBridge.ts`): model-event adapter that converts `IChatModel` changes into normalized turn updates.
 - `VSCloneUnifiedChatViewPane` (`browser/vscloneUnifiedChatViewPane.ts`): hosts one-pane chat layout regions (history rail, conversation surface, composer hooks).
 - `VSCloneChatHistoryRail` (`browser/vscloneChatHistoryRail.ts`): renders the history rail and manages selection/search interactions.
 - `VSCloneChatHistoryTreeDataSource` (`browser/vscloneChatHistoryRailTree.ts`): adapts history model into rail nodes (thread groups, threads, turns).
 - `VSCloneChatHistoryCommandRegistrar` (`browser/vscloneChatHistoryActions.ts`): registers command handlers, context menu actions, and keybindings.
-- `VSCloneChatHistoryService` (`common/vscloneChatHistoryService.ts`): central orchestration service for loading, querying, mutating, and persistence scheduling.
+- `VSCloneChatHistoryService` (`common/vscloneChatHistoryService.ts`): central orchestration service for loading, querying, transition application, and persistence scheduling.
+- `VSCloneChatHistoryStateMachine` (`common/vscloneChatHistoryStateMachine.ts`): pure transition reducer for thread/turn state with deterministic and idempotent semantics.
 - `VSCloneChatHistoryModel` (`common/vscloneChatHistoryModel.ts`): in-memory store and query engine for thread/turn state.
 - `VSCloneChatHistoryStore` (`common/vscloneChatHistoryStore.ts`): file-backed persistence, retention pruning, and recovery.
 - `VSCloneChatHistorySerializer` (`common/vscloneChatHistorySerializer.ts`): JSON serialization/deserialization with deterministic ordering.
@@ -54,7 +58,7 @@ Rationale: Each class is designed to do a single thing. Migration and serializat
 
 # State Diagrams
 
-Rationale: A lot of things can go wrong with LLM code generation: streaming issues, wifi drops, cancelations, completions, interrupts, etc. As many of these cases are handled as possible in the state diagram. Making those transitions explicit now should reduce edge-case bugs where turns get stuck in a bad state.
+Rationale: A lot of things can go wrong with LLM code generation: streaming issues, wifi drops, cancelations, completions, interrupts, etc. As many of these cases are handled as possible in the state diagram. Making those transitions explicit now should reduce edge-case bugs where turns get stuck in a bad state. These transitions should be backed by code-level reducer tests.
 
 ![State Diagram 1](diagrams/userstory1/state-diagrams-1.svg)
 
@@ -72,6 +76,7 @@ Rationale: The risk table concentrates on the highest-probability integration fa
 
 | Risk | Failure Mode | Mitigation |
 |---|---|---|
+| Ingestion tied to view lifecycle | Missing history updates when view is closed | Startup-scoped runtime service owns model attachment independent of view visibility |
 | Event ordering drift from chat internals | Turns attached to wrong thread or wrong status | Normalize by `sessionResource + requestId`; ignore stale sequence numbers |
 | Unified pane density issues | History rail or conversation area becomes cramped | Provide resizable rail width and collapse/expand rail action |
 | Streaming write pressure | UI jank and excessive disk writes | Keep streaming in memory; persist on terminal states + debounced checkpoints |
@@ -86,7 +91,7 @@ Rationale: The risk table concentrates on the highest-probability integration fa
 Rationale: A lot of the technology stack is already specified because this is building off of the VSCode repository. I tried not to include anything new framework wise to make sure the project is as maintainable as possible. Reusing existing services and UI patterns should also make development easier for LLMs as they can utilize existing docs.
 
 - Language/runtime: TypeScript in VS Code workbench architecture.
-- UI: unified chat view composition (`ViewPane` + embedded rail/list + conversation surface), existing markdown rendering infra.
+- UI: unified chat view composition (`ViewPane` + embedded rail/list + conversation surface), existing chat markdown/rendering infra for streaming/code/tool-rich content.
 - State/events: `Emitter`, `Event`, and existing observable patterns.
 - Persistence: `IFileService`, `IStorageService`, workspace/profile storage paths.
 - Integration: existing `IChatService`, `IChatModel`, `IChatWidgetService`, `IClipboardService`.
@@ -99,7 +104,10 @@ Rationale: I kept API usage tied to existing chat events and service surfaces as
 
 - Existing consumed APIs:
   - `IChatService.onDidCreateModel`
-  - `IChatService.getSession(...)`
+  - `IChatService.onDidDisposeSession`
+  - `IChatService.getOrRestoreSession(...)`
+  - `IChatService.startSession(...)`
+  - `IChatService.sendRequest(...)`
   - `IChatModel.onDidChange` (`addRequest`, `changedRequest`, `completedRequest`, `removeRequest`)
   - `IChatWidgetService.revealWidget(...)`, `IChatWidget.setInput(...)`
 - New commands:
