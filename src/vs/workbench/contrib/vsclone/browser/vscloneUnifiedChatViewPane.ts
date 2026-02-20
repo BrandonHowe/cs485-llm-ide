@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/vscloneUnifiedChatViewPane.css';
-import { addDisposableListener, EventType } from '../../../../base/browser/dom.js';
+import { addDisposableListener, EventType, getWindow } from '../../../../base/browser/dom.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Action } from '../../../../base/common/actions.js';
 import { fromNow } from '../../../../base/common/date.js';
@@ -260,7 +260,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const overflow = document.createElement('button');
 		overflow.type = 'button';
 		overflow.className = 'vsclone-chat-header-overflow';
-		overflow.textContent = '⋮';
+		overflow.textContent = '...';
 		overflow.title = localize('vsclone.header.more', 'More actions');
 		header.appendChild(overflow);
 
@@ -635,9 +635,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 			const startWidth = this.railWidth;
 			const startX = startEvent.clientX;
-			const document = handle.ownerDocument;
+			const targetWindow = getWindow(handle);
 
-			const moveDisposable = addDisposableListener(document, EventType.MOUSE_MOVE, (moveEvent: MouseEvent) => {
+			const moveDisposable = addDisposableListener(targetWindow.document, EventType.MOUSE_MOVE, (moveEvent: MouseEvent) => {
 				const delta = moveEvent.clientX - startX;
 				const width = Math.min(railMaxWidth, Math.max(railMinWidth, startWidth + delta));
 				if (width === this.railWidth) {
@@ -647,7 +647,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				this.applyRailLayout();
 			});
 
-			const upDisposable = addDisposableListener(document, EventType.MOUSE_UP, () => {
+			const upDisposable = addDisposableListener(targetWindow.document, EventType.MOUSE_UP, () => {
 				moveDisposable.dispose();
 				upDisposable.dispose();
 				void this.configurationService.updateValue(railWidthSetting, this.railWidth);

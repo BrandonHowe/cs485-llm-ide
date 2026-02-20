@@ -4,10 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { VSCloneChatHistoryModel } from '../../common/vscloneChatHistoryModel.js';
 import { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../../common/vscloneChatHistoryService.js';
 
 suite('VSCloneChatHistoryModel', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
 	function thread(id: string, updatedAt: number, overrides: Partial<IVSCloneChatHistoryThread> = {}): IVSCloneChatHistoryThread {
 		return {
 			threadId: id,

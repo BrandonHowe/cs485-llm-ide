@@ -4,10 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { reduceThreadTurns } from '../../common/vscloneChatHistoryStateMachine.js';
 import { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatTurnUpdate } from '../../common/vscloneChatHistoryService.js';
 
 suite('VSCloneChatHistoryStateMachine', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
 	const sessionResource = 'vscode-chat://session/test';
 
 	function update(overrides: Partial<IVSCloneChatTurnUpdate>): IVSCloneChatTurnUpdate {

@@ -4,11 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { VSCloneChatHistoryMigrationService, VSCloneUnsupportedHistoryVersionError } from '../../common/vscloneChatHistoryMigrationService.js';
 import { VSCloneChatHistorySerializer } from '../../common/vscloneChatHistorySerializer.js';
 import { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../../common/vscloneChatHistoryService.js';
 
 suite('VSCloneChatHistorySerializer', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
 	const serializer = new VSCloneChatHistorySerializer();
 
 	const threadA: IVSCloneChatHistoryThread = {

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { addDisposableListener, EventType } from '../../../../base/browser/dom.js';
+import * as DOM from '../../../../base/browser/dom.js';
 import { Action } from '../../../../base/common/actions.js';
 import { Delayer } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
@@ -99,11 +99,11 @@ export class VSCloneChatHistoryRail extends Disposable {
 			button.dataset.tab = tab;
 			this.tabButtons.set(tab, button);
 			tabsContainer.appendChild(button);
-			this._register(addDisposableListener(button, EventType.CLICK, () => this.updateTab(tab)));
+			this._register(DOM.addDisposableListener(button, DOM.EventType.CLICK, () => this.updateTab(tab)));
 		}
 		header.appendChild(tabsContainer);
 
-		this._register(addDisposableListener(search, EventType.INPUT, () => {
+		this._register(DOM.addDisposableListener(search, DOM.EventType.INPUT, () => {
 			const query = search.value.trim();
 			if (query === this.filterState.query) {
 				return;
@@ -121,8 +121,8 @@ export class VSCloneChatHistoryRail extends Disposable {
 		const listContainer = document.createElement('div');
 		listContainer.className = 'vsclone-chat-history-list';
 		this.listContainer = listContainer;
-		this._register(addDisposableListener(listContainer, EventType.CLICK, (event: MouseEvent) => this.onListClick(event)));
-		this._register(addDisposableListener(listContainer, EventType.CONTEXT_MENU, (event: MouseEvent) => this.onListContextMenu(event)));
+		this._register(DOM.addDisposableListener(listContainer, DOM.EventType.CLICK, (event: MouseEvent) => this.onListClick(event)));
+		this._register(DOM.addDisposableListener(listContainer, DOM.EventType.CONTEXT_MENU, (event: MouseEvent) => this.onListContextMenu(event)));
 		body.appendChild(listContainer);
 
 		const stateContainer = document.createElement('div');
@@ -312,9 +312,12 @@ export class VSCloneChatHistoryRail extends Disposable {
 			return;
 		}
 
-		for (const rowElement of this.listContainer.querySelectorAll<HTMLElement>('.vsclone-chat-history-row')) {
-			if (rowElement.dataset.threadId === threadId) {
-				rowElement.classList.toggle('selected', selected);
+		for (const child of this.listContainer.children) {
+			if (!DOM.isHTMLElement(child) || !child.classList.contains('vsclone-chat-history-row')) {
+				continue;
+			}
+			if (child.dataset.threadId === threadId) {
+				child.classList.toggle('selected', selected);
 				return;
 			}
 		}
@@ -358,7 +361,7 @@ export class VSCloneChatHistoryRail extends Disposable {
 
 	private getRowFromEvent(event: MouseEvent): IVSCloneChatHistoryRailRow | undefined {
 		const target = event.target;
-		if (!(target instanceof HTMLElement) || !this.listContainer) {
+		if (!DOM.isHTMLElement(target) || !this.listContainer) {
 			return undefined;
 		}
 
@@ -382,7 +385,7 @@ export class VSCloneChatHistoryRail extends Disposable {
 		this.stateContainer.replaceChildren();
 		const icon = document.createElement('div');
 		icon.className = 'vsclone-chat-history-state-icon';
-		icon.textContent = '◻';
+		icon.textContent = '[]';
 		const heading = document.createElement('div');
 		heading.className = 'vsclone-chat-history-state-title';
 		heading.textContent = localize('vsclone.rail.empty.title', 'No conversations yet');
@@ -412,7 +415,7 @@ export class VSCloneChatHistoryRail extends Disposable {
 		retryButton.type = 'button';
 		retryButton.className = 'vsclone-chat-history-retry';
 		retryButton.textContent = localize('vsclone.rail.error.retry', 'Try again');
-		this.renderDisposables.add(addDisposableListener(retryButton, EventType.CLICK, () => this._onDidRequestRetry.fire()));
+		this.renderDisposables.add(DOM.addDisposableListener(retryButton, DOM.EventType.CLICK, () => this._onDidRequestRetry.fire()));
 
 		this.stateContainer.appendChild(icon);
 		this.stateContainer.appendChild(heading);
@@ -462,7 +465,7 @@ export class VSCloneChatHistoryRail extends Disposable {
 		cancel.type = 'button';
 		cancel.className = 'vsclone-chat-history-delete-cancel';
 		cancel.textContent = localize('vsclone.rail.delete.cancel', 'Cancel');
-		this._register(addDisposableListener(cancel, EventType.CLICK, () => {
+		this._register(DOM.addDisposableListener(cancel, DOM.EventType.CLICK, () => {
 			this.pendingDelete = undefined;
 			overlay.classList.remove('visible');
 		}));
@@ -471,7 +474,7 @@ export class VSCloneChatHistoryRail extends Disposable {
 		confirm.type = 'button';
 		confirm.className = 'vsclone-chat-history-delete-confirm';
 		confirm.textContent = localize('vsclone.rail.delete.confirm', 'Delete');
-		this._register(addDisposableListener(confirm, EventType.CLICK, () => {
+		this._register(DOM.addDisposableListener(confirm, DOM.EventType.CLICK, () => {
 			if (!this.pendingDelete) {
 				return;
 			}
@@ -488,7 +491,7 @@ export class VSCloneChatHistoryRail extends Disposable {
 		modal.appendChild(actions);
 		overlay.appendChild(modal);
 
-		this._register(addDisposableListener(overlay, EventType.CLICK, (event: MouseEvent) => {
+		this._register(DOM.addDisposableListener(overlay, DOM.EventType.CLICK, (event: MouseEvent) => {
 			if (event.target === overlay) {
 				overlay.classList.remove('visible');
 				this.pendingDelete = undefined;

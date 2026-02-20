@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { hasKey } from '../../../../base/common/types.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import type { IVSCloneChatHistoryIndexFile, IVSCloneChatHistoryThreadFile } from './vscloneChatHistorySerializer.js';
 
@@ -24,11 +25,11 @@ export interface IVSCloneChatHistoryMigrationService {
 }
 
 function getSchemaVersion(raw: unknown): number {
-	if (!raw || typeof raw !== 'object' || !('schemaVersion' in raw)) {
+	if (!raw || typeof raw !== 'object' || !hasKey(raw, { schemaVersion: true })) {
 		return 1;
 	}
 
-	const version = (raw as { schemaVersion?: unknown }).schemaVersion;
+	const version = raw.schemaVersion;
 	return typeof version === 'number' ? version : 1;
 }
 

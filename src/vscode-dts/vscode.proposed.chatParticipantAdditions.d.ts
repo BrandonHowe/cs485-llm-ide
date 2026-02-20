@@ -447,9 +447,20 @@ declare module 'vscode' {
 	 * Hooks are user-configured scripts that run at specific points during chat processing.
 	 * If {@link stopReason} is set, the hook blocked/denied the operation.
 	 */
+	export enum ChatResponseHookType {
+		SessionStart = 1,
+		UserPromptSubmit = 2,
+		PreToolUse = 3,
+		PostToolUse = 4,
+		PreCompact = 5,
+		SubagentStart = 6,
+		SubagentStop = 7,
+		Stop = 8,
+	}
+
 	export class ChatResponseHookPart {
 		/** The type of hook that was executed */
-		hookType: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'PreCompact' | 'SubagentStart' | 'SubagentStop' | 'Stop';
+		hookType: ChatResponseHookType;
 		/** If set, the hook blocked processing. This message is shown to the user. */
 		stopReason?: string;
 		/** Warning/system message from the hook, shown to the user */
@@ -464,7 +475,7 @@ declare module 'vscode' {
 		 * @param systemMessage Warning/system message from the hook
 		 * @param metadata Optional metadata
 		 */
-		constructor(hookType: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'PreCompact' | 'SubagentStart' | 'SubagentStop' | 'Stop', stopReason?: string, systemMessage?: string, metadata?: { readonly [key: string]: unknown });
+		constructor(hookType: ChatResponseHookType, stopReason?: string, systemMessage?: string, metadata?: { readonly [key: string]: unknown });
 	}
 
 	export class ChatResponseReferencePart2 {
@@ -574,7 +585,7 @@ declare module 'vscode' {
 		 * @param stopReason If set, the hook blocked processing. This message is shown to the user.
 		 * @param systemMessage Warning/system message from the hook
 		 */
-		hookProgress(hookType: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'PreCompact' | 'SubagentStart' | 'SubagentStop' | 'Stop', stopReason?: string, systemMessage?: string): void;
+		hookProgress(hookType: ChatResponseHookType, stopReason?: string, systemMessage?: string): void;
 
 		textEdit(target: Uri, edits: TextEdit | TextEdit[]): void;
 

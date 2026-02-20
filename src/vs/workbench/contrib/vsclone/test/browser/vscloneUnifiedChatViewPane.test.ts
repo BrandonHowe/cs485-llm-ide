@@ -9,13 +9,36 @@ import { IContextMenuService } from '../../../../../platform/contextview/browser
 import { VSCloneChatHistoryRail } from '../../browser/vscloneChatHistoryRail.js';
 import { VSCloneUnifiedChatViewPane, toVSCloneHistoryQuery } from '../../browser/vscloneUnifiedChatViewPane.js';
 
+interface ITestPaneTarget {
+	railVisible: boolean;
+	railWidth: number;
+	isCompactLayout: boolean;
+	bodyWidth: number;
+	rootContainer: HTMLElement;
+	railContainer: HTMLElement;
+	railResizeHandle: HTMLElement;
+	titleElement: HTMLElement;
+	backButton: HTMLButtonElement;
+	threadsById: Map<string, unknown>;
+	rail: {
+		focusSearch?: () => void;
+		getSelectedThread: () => string | undefined;
+		setSelectedThread: (threadId: string | undefined) => void;
+	};
+	activeThreadId?: string;
+	refreshConversation: () => void;
+	updateThreadHeader: () => void;
+	focusInput: () => void;
+	applyRailLayout: () => void;
+}
+
 suite('VSCloneUnifiedChatViewPane', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('rail toggle and focus methods update layout state', () => {
 		let focusRailCalled = false;
 		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
-		const target = pane as any;
+		const target = pane as unknown as ITestPaneTarget;
 		target.railVisible = true;
 		target.railWidth = 320;
 		target.isCompactLayout = false;
@@ -29,12 +52,12 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		target.rail = {
 			focusSearch: () => { focusRailCalled = true; },
 			getSelectedThread: () => undefined,
-			setSelectedThread: () => { },
+			setSelectedThread: (_threadId: string | undefined) => { },
 		};
 
 		pane.toggleRail();
 		assert.strictEqual(target.railVisible, false);
-		assert.strictEqual((target.railContainer as HTMLElement).style.width, '0px');
+		assert.strictEqual(target.railContainer.style.width, '0px');
 
 		pane.focusRail();
 		assert.strictEqual(focusRailCalled, true);
@@ -45,7 +68,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		let focusInputCalled = false;
 
 		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
-		const target = pane as any;
+		const target = pane as unknown as ITestPaneTarget;
 		target.railVisible = true;
 		target.isCompactLayout = false;
 		target.rootContainer = document.createElement('div');
@@ -84,7 +107,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 	test('compact layout collapses rail when opening a thread', async () => {
 		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
-		const target = pane as any;
+		const target = pane as unknown as ITestPaneTarget;
 		target.railVisible = true;
 		target.isCompactLayout = true;
 		target.rootContainer = document.createElement('div');
@@ -107,7 +130,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		]);
 		target.rail = {
 			getSelectedThread: () => 'thread-1',
-			setSelectedThread: () => { },
+			setSelectedThread: (_threadId: string | undefined) => { },
 		};
 		target.refreshConversation = () => { };
 		target.updateThreadHeader = () => { };
