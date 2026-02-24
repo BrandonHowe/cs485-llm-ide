@@ -15,7 +15,10 @@ import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
 import { registerVSCloneChatHistoryActions } from './vscloneChatHistoryActions.js';
 import { registerVSCloneModelSwitcherActions } from './vscloneModelSwitcherActions.js';
+import { registerVSCloneOAuthActions } from './vscloneOAuthActions.js';
+import { VSCloneOAuthService } from './vscloneOAuthService.js';
 import { VSCloneChatRuntimeService } from './vscloneChatRuntimeService.js';
+import { IVSCloneChatApiService, VSCloneChatApiService } from './vscloneChatApiService.js';
 import { IVSCloneChatSessionService, VSCloneChatSessionService } from './vscloneChatSessionService.js';
 import { IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
 import { VSCloneUnifiedChatViewPane } from './vscloneUnifiedChatViewPane.js';
@@ -23,6 +26,7 @@ import { VSCloneViewContainerId, VSCloneViewId } from './vsclone.js';
 import { IVSCloneChatHistoryMigrationService, VSCloneChatHistoryMigrationService } from '../common/vscloneChatHistoryMigrationService.js';
 import { IVSCloneChatHistoryService, VSCloneChatHistoryEnabledSetting, VSCloneChatHistoryMaxThreadsSetting, VSCloneChatHistoryMaxTurnsPerThreadSetting, VSCloneChatHistoryPersistScopeSetting, VSCloneChatHistoryRailWidthSetting, VSCloneChatHistoryRedactSecretsSetting, VSCloneChatHistoryRetentionDaysSetting, VSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
 import { IVSCloneMockProviderService, VSCloneMockProviderService } from '../common/vscloneMockProviderService.js';
+import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneModelCatalogService, VSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
 import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
@@ -63,10 +67,13 @@ function registerVSCloneContribution(): void {
 	registerSingleton(IVSCloneModelCatalogService, VSCloneModelCatalogService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge, InstantiationType.Delayed);
+	registerSingleton(IVSCloneChatApiService, VSCloneChatApiService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatSessionService, VSCloneChatSessionService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneOAuthService, VSCloneOAuthService, InstantiationType.Delayed);
 
 	registerVSCloneChatHistoryActions();
 	registerVSCloneModelSwitcherActions();
+	registerVSCloneOAuthActions();
 	registerWorkbenchContribution2(VSCloneChatRuntimeService.ID, VSCloneChatRuntimeService, WorkbenchPhase.BlockRestore);
 
 	Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({

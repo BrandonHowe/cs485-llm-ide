@@ -131,6 +131,10 @@ import { McpGatewayChannel } from '../../platform/mcp/node/mcpGatewayChannel.js'
 import { IWebContentExtractorService } from '../../platform/webContentExtractor/common/webContentExtractor.js';
 import { NativeWebContentExtractorService } from '../../platform/webContentExtractor/electron-main/webContentExtractorService.js';
 import ErrorTelemetry from '../../platform/telemetry/electron-main/errorTelemetry.js';
+// eslint-disable-next-line local/code-import-patterns -- Main process must own this network channel registration; the implementation currently lives with the VSClone feature.
+import { VSCloneChatApiChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneChatApiChannel.js';
+// eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main and is defined next to the VSClone IPC contract.
+import { VSCLONE_CHAT_API_CHANNEL_NAME } from '../../workbench/contrib/vsclone/common/vscloneChatApiIpc.js';
 
 /**
  * The main VS Code application. There will only ever be one instance,
@@ -1264,6 +1268,10 @@ export class CodeApplication extends Disposable {
 		const loggerChannel = new LoggerChannel(accessor.get(ILoggerMainService),);
 		mainProcessElectronServer.registerChannel('logger', loggerChannel);
 		sharedProcessClient.then(client => client.registerChannel('logger', loggerChannel));
+
+		// VSClone chat API (main-process fetch path to avoid renderer CORS constraints)
+		const vscloneChatApiChannel = disposables.add(new VSCloneChatApiChannel(this.logService));
+		mainProcessElectronServer.registerChannel(VSCLONE_CHAT_API_CHANNEL_NAME, vscloneChatApiChannel);
 
 		// Extension Host Debug Broadcasting
 		const electronExtensionHostDebugBroadcastChannel = new ElectronExtensionHostDebugBroadcastChannel(accessor.get(IWindowsMainService));

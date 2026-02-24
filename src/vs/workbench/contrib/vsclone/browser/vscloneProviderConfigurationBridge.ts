@@ -7,6 +7,8 @@ import { localize } from '../../../../nls.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
 import { IVSCloneMockProviderService, VSCloneModelVendor } from '../common/vscloneMockProviderService.js';
+import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
+import { displayInfoOfOAuthProvider } from '../common/vscloneOAuthTypes.js';
 
 export interface IVSCloneProviderConfigurationBridge {
 	readonly _serviceBrand: undefined;
@@ -32,13 +34,41 @@ export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfi
 	constructor(
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
 		@IVSCloneMockProviderService private readonly mockProviderService: IVSCloneMockProviderService,
+		@IVSCloneOAuthService private readonly oAuthService: IVSCloneOAuthService,
 	) {
 	}
 
 	async openManageProvidersPicker(): Promise<void> {
 		await this.mockProviderService.initialize();
+		await this.oAuthService.initialize();
+
 		const providers = this.mockProviderService.getProviders();
 		const picks: IProviderActionPick[] = [];
+
+		// OAuth sign-in/sign-out picks per provider
+		const allVendors: readonly VSCloneModelVendor[] = ['openai', 'anthropic', 'google'];
+		for (const vendor of allVendors) {
+			const oAuthState = this.oAuthService.state.providers[vendor];
+			const displayInfo = displayInfoOfOAuthProvider(vendor);
+
+			if (oAuthState.isReady) {
+				picks.push({
+					label: localize('vsclone.providers.signOut', 'Sign Out of {0}', displayInfo.title),
+					description: oAuthState.userDisplayName
+						? localize('vsclone.providers.signedInAs', 'Signed in as {0}', oAuthState.userDisplayName)
+						: localize('vsclone.providers.signedIn', 'Currently signed in'),
+					actionId: 'oauthSignOut',
+					vendor,
+				});
+			} else {
+				picks.push({
+					label: displayInfo.signInLabel,
+					description: displayInfo.description,
+					actionId: 'oauthSignIn',
+					vendor,
+				});
+			}
+		}
 
 		for (const provider of providers) {
 			const providerName = providerNames[provider.vendor];
@@ -73,11 +103,21 @@ export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfi
 
 		const selected = await this.quickInputService.pick(picks, {
 			canPickMany: false,
-			placeHolder: localize('vsclone.providers.manage.placeholder', 'Manage VSClone mock providers'),
+			placeHolder: localize('vsclone.providers.manage.placeholder', 'Manage VSClone providers'),
 			title: localize('vsclone.providers.manage.title', 'Manage Providers'),
 		});
 
 		if (!selected) {
+			return;
+		}
+
+		if (selected.actionId === 'oauthSignIn' && selected.vendor) {
+			await this.oAuthService.signIn(selected.vendor);
+			return;
+		}
+
+		if (selected.actionId === 'oauthSignOut' && selected.vendor) {
+			await this.oAuthService.signOut(selected.vendor);
 			return;
 		}
 

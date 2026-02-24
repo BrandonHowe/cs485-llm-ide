@@ -14,8 +14,11 @@ import { ChatSendResult, IChatService } from '../../chat/common/chatService/chat
 import { ChatAgentLocation } from '../../chat/common/constants.js';
 import { deriveThreadId } from '../common/vscloneChatHistoryModel.js';
 import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { VSCloneModelVendor } from '../common/vscloneMockProviderService.js';
+import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneModelSelection } from '../common/vscloneThreadModelSelectionService.js';
+import { IVSCloneApiRequestHandle, IVSCloneChatApiService } from './vscloneChatApiService.js';
 
 export const IVSCloneChatSessionService = createDecorator<IVSCloneChatSessionService>('vscloneChatSessionService');
 
@@ -111,12 +114,15 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	declare readonly _serviceBrand: undefined;
 
 	private readonly mockResponses = new Map<string, IVSCloneMockResponseState>();
+	private readonly apiRequestHandles = new Map<string, IVSCloneApiRequestHandle>();
 
 	constructor(
 		@IChatService private readonly chatService: IChatService,
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
+		@IVSCloneOAuthService private readonly oauthService: IVSCloneOAuthService,
+		@IVSCloneChatApiService private readonly apiService: IVSCloneChatApiService,
 	) {
 		super();
 	}
@@ -131,7 +137,16 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			return undefined;
 		}
 
+		// 1. Try real API if vendor is signed in via OAuth
 		if (!this.useVSCodeChatBackend) {
+			const vendor = options.modelSelection?.vendor as VSCloneModelVendor | undefined;
+			if (vendor) {
+				// Ensure OAuth state is restored from secret storage before checking
+				await this.oauthService.initialize();
+				if (this.oauthService.isSignedIn(vendor)) {
+					return this.submitApiPrompt(trimmedPrompt, options, vendor);
+				}
+			}
 			return this.submitMockPrompt(trimmedPrompt, options);
 		}
 
@@ -211,6 +226,14 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			}
 		}
 
+		// Cancel active API request handles for this thread
+		for (const [turnId, handle] of [...this.apiRequestHandles]) {
+			if (turnId.startsWith(threadId)) {
+				handle.cancel();
+				this.apiRequestHandles.delete(turnId);
+			}
+		}
+
 		for (const [turnId, state] of [...this.mockResponses]) {
 			if (state.threadId !== threadId) {
 				continue;
@@ -223,6 +246,11 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	}
 
 	override dispose(): void {
+		for (const handle of this.apiRequestHandles.values()) {
+			handle.cancel();
+		}
+		this.apiRequestHandles.clear();
+
 		for (const state of this.mockResponses.values()) {
 			if (state.timerHandle !== undefined) {
 				clearTimeout(state.timerHandle);
@@ -230,6 +258,57 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		}
 		this.mockResponses.clear();
 		super.dispose();
+	}
+
+	private submitApiPrompt(promptText: string, options: IVSCloneChatSubmitOptions, vendor: VSCloneModelVendor): IVSCloneChatSubmitResult {
+		const mockSeed = createMockSeed(promptText);
+		const sessionResource = options.sessionResource ?? createMockSessionResource(mockSeed);
+		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
+		const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
+		const turnId = `${threadId}:api:${Date.now()}`;
+		const sequence = this.historyService.getTurns(threadId).length + 1;
+
+		// Gather previous turns for multi-turn conversation context
+		const existingTurns = this.historyService.getTurns(threadId);
+		const previousTurns: { role: 'user' | 'assistant'; content: string }[] = [];
+		for (const turn of existingTurns) {
+			if (turn.status === 'completed' || turn.status === 'streaming') {
+				previousTurns.push({ role: 'user', content: turn.promptText });
+				if (turn.responsePlainText) {
+					previousTurns.push({ role: 'assistant', content: turn.responsePlainText });
+				}
+			}
+		}
+
+		const modelId = options.modelSelection?.modelId ?? '';
+		const modelIdentifier = options.modelSelection?.modelIdentifier ?? '';
+
+		const handle = this.apiService.submitApiPrompt({
+			threadId,
+			turnId,
+			sequence,
+			sessionResource,
+			promptText,
+			vendor,
+			modelId,
+			modelIdentifier,
+			previousTurns,
+		});
+
+		this.apiRequestHandles.set(turnId, handle);
+
+		// Clean up handle when done
+		void handle.done.finally(() => {
+			this.apiRequestHandles.delete(turnId);
+		});
+
+		this.logService.info(`[VSCloneChatSession] Routed prompt to ${vendor} API (thread: ${threadId})`);
+
+		return {
+			threadId,
+			sessionResource,
+			mocked: false,
+		};
 	}
 
 	private submitMockPrompt(promptText: string, options: IVSCloneChatSubmitOptions): IVSCloneChatSubmitResult {

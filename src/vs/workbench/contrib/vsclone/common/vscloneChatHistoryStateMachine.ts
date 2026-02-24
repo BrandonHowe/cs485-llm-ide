@@ -108,7 +108,9 @@ export function reduceThreadTurns(
 
 	const existingTurn = existingTurns[existingTurnIndex];
 	const lastEventAt = existingTurn.lastEventAt ?? existingTurn.startedAt;
-	if (update.occurredAt <= lastEventAt && update.phase !== 'prompt') {
+	// Stream chunks can legitimately arrive in the same millisecond.
+	// Only reject strictly older events so equal-timestamp deltas are preserved.
+	if (update.occurredAt < lastEventAt && update.phase !== 'prompt') {
 		return {
 			thread: thread ?? {
 				threadId: update.threadId,
