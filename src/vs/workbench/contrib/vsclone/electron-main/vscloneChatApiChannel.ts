@@ -40,31 +40,31 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 		super();
 	}
 
-	// IServerChannel event payload type is selected by remote callers, so this boundary stays unknown.
-	listen(_: unknown, event: string): Event<unknown> {
+	// IServerChannel payload type is chosen by the caller; channel-side events are cast at the boundary.
+	listen<T>(_: string, event: string): Event<T> {
 		switch (event) {
 			case VSCLONE_CHAT_API_EVENT_DELTA:
-				return this.onDeltaEmitter.event;
+				return this.onDeltaEmitter.event as Event<T>;
 			case VSCLONE_CHAT_API_EVENT_COMPLETE:
-				return this.onCompleteEmitter.event;
+				return this.onCompleteEmitter.event as Event<T>;
 			case VSCLONE_CHAT_API_EVENT_ERROR:
-				return this.onErrorEmitter.event;
+				return this.onErrorEmitter.event as Event<T>;
 			case VSCLONE_CHAT_API_EVENT_ABORTED:
-				return this.onAbortedEmitter.event;
+				return this.onAbortedEmitter.event as Event<T>;
 			default:
 				throw new Error(`Event not found: ${event}`);
 		}
 	}
 
-	// IServerChannel call result is caller-defined generic output; this channel only returns completion acks.
-	async call(_: unknown, command: string, arg?: unknown, _cancellationToken: CancellationToken = CancellationToken.None): Promise<unknown> {
+	// This channel only returns completion acknowledgements, so generic return values resolve to `undefined`.
+	async call<T>(_: string, command: string, arg?: unknown, _cancellationToken: CancellationToken = CancellationToken.None): Promise<T> {
 		switch (command) {
 			case VSCLONE_CHAT_API_COMMAND_SUBMIT:
 				this.submitRequest(arg as IVSCloneChatApiSubmitRequest);
-				return;
+				return undefined as T;
 			case VSCLONE_CHAT_API_COMMAND_ABORT:
 				this.abortRequest(arg as IVSCloneChatApiAbortRequest);
-				return;
+				return undefined as T;
 			default:
 				throw new Error(`Call not found: ${command}`);
 		}

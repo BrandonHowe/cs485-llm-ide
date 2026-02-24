@@ -18,6 +18,7 @@ import { IContextMenuService } from '../../../../platform/contextview/browser/co
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
@@ -30,6 +31,7 @@ import { IVSCloneChatSessionService } from './vscloneChatSessionService.js';
 import { VSCloneModelSwitcherWidget } from './vscloneModelSwitcherWidget.js';
 import { IVSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
 import { toVSCloneRailRows } from './vscloneChatHistoryRailTree.js';
+import { IVSCloneEditApplicationService } from './vscloneEditApplicationService.js';
 
 const railWidthSetting = 'vsclone.chatHistory.railWidth';
 const modelSwitcherEnabledSetting = 'vsclone.modelSwitcher.enabled';
@@ -94,6 +96,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IVSCloneModelCatalogService private readonly modelCatalogService: IVSCloneModelCatalogService,
 		@IVSCloneProviderConfigurationBridge private readonly providerConfigurationBridge: IVSCloneProviderConfigurationBridge,
 		@IClipboardService private readonly clipboardService: IClipboardService,
+		@IVSCloneEditApplicationService private readonly editApplicationService: IVSCloneEditApplicationService,
+		@INotificationService private readonly notificationService: INotificationService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 
@@ -656,7 +660,55 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			body.textContent = localize('vsclone.thread.assistant.failed', 'Something went wrong while generating the response.');
 		}
 		item.appendChild(body);
+
+		if (turn.status === 'completed' && text.trim().length > 0 && this.editApplicationService.hasSearchReplaceBlocks(text)) {
+			const applyButton = document.createElement('button');
+			applyButton.type = 'button';
+			applyButton.className = 'vsclone-thread-message-apply';
+			applyButton.textContent = localize('vsclone.thread.assistant.apply', 'Apply Changes');
+			applyButton.addEventListener(EventType.CLICK, () => {
+				void this.applyAssistantEdits(turn, applyButton);
+			});
+			item.appendChild(applyButton);
+		}
+
 		return item;
+	}
+
+	private async applyAssistantEdits(turn: IVSCloneChatHistoryTurn, button: HTMLButtonElement): Promise<void> {
+		const responseText = turn.responsePlainText || turn.responseMarkdown;
+		if (!responseText) {
+			return;
+		}
+
+		const defaultButtonLabel = localize('vsclone.thread.assistant.apply', 'Apply Changes');
+		button.disabled = true;
+		button.textContent = localize('vsclone.thread.assistant.apply.pending', 'Applying...');
+
+		try {
+			const applyResult = await this.editApplicationService.applySearchReplaceBlocks(responseText);
+			if (applyResult.appliedEdits > 0) {
+				this.notificationService.info(localize(
+					'vsclone.thread.assistant.apply.success',
+					'Applied {0} edit(s) across {1} file(s).',
+					applyResult.appliedEdits,
+					applyResult.modifiedFiles.length,
+				));
+			} else {
+				const failureDetails = applyResult.failures[0] ?? localize('vsclone.thread.assistant.apply.noChanges.reason', 'No matching SEARCH block was found.');
+				this.notificationService.warn(localize(
+					'vsclone.thread.assistant.apply.noChanges',
+					'No changes were applied. {0}',
+					failureDetails,
+				));
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.notificationService.error(localize('vsclone.thread.assistant.apply.error', 'Failed to apply suggested changes: {0}', message));
+		} finally {
+			button.disabled = false;
+			button.textContent = defaultButtonLabel;
+		}
 	}
 
 	private updateComposerMetrics(): void {

@@ -20,6 +20,8 @@ import { VSCloneOAuthService } from './vscloneOAuthService.js';
 import { VSCloneChatRuntimeService } from './vscloneChatRuntimeService.js';
 import { IVSCloneChatApiService, VSCloneChatApiService } from './vscloneChatApiService.js';
 import { IVSCloneChatSessionService, VSCloneChatSessionService } from './vscloneChatSessionService.js';
+import { IVSCloneContextGatheringService, VSCloneContextGatheringService } from './vscloneContextGatheringService.js';
+import { IVSCloneEditApplicationService, VSCloneEditApplicationService } from './vscloneEditApplicationService.js';
 import { IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
 import { VSCloneUnifiedChatViewPane } from './vscloneUnifiedChatViewPane.js';
 import { VSCloneViewContainerId, VSCloneViewId } from './vsclone.js';
@@ -28,6 +30,7 @@ import { IVSCloneChatHistoryService, VSCloneChatHistoryEnabledSetting, VSCloneCh
 import { IVSCloneMockProviderService, VSCloneMockProviderService } from '../common/vscloneMockProviderService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneModelCatalogService, VSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
+import { IVSClonePromptAssemblyService, VSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
 import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
 
@@ -66,6 +69,9 @@ function registerVSCloneContribution(): void {
 	registerSingleton(IVSCloneMockProviderService, VSCloneMockProviderService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneModelCatalogService, VSCloneModelCatalogService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneContextGatheringService, VSCloneContextGatheringService, InstantiationType.Delayed);
+	registerSingleton(IVSClonePromptAssemblyService, VSClonePromptAssemblyService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneEditApplicationService, VSCloneEditApplicationService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatApiService, VSCloneChatApiService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatSessionService, VSCloneChatSessionService, InstantiationType.Delayed);

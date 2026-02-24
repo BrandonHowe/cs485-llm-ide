@@ -20,6 +20,7 @@ export interface IVSCloneApiSubmitOptions {
 	readonly modelIdentifier: string;
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
 	readonly previousTurns?: readonly { role: 'user' | 'assistant'; content: string }[];
+	readonly systemMessage?: string;
 }
 
 export interface IVSCloneVendorAdapterParsedLine {
@@ -66,13 +67,15 @@ function buildMessages(options: IVSCloneApiSubmitOptions): { role: string; conte
 	return messages;
 }
 
+const defaultSystemMessage = 'You are VSClone, a helpful coding assistant. Answer clearly and concisely.';
+
 const openaiAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveApiModelId('openai', options.modelId);
 		const input = buildMessages(options).map(m => ({ role: m.role, content: m.content }));
 		// The Codex backend rejects requests without a non-empty instructions field.
-		// Keep this default stable so chats work even when the user only provides a prompt.
-		const instructions = 'You are VSClone, a helpful coding assistant. Answer clearly and concisely.';
+		// We always provide one so routing stays vendor-agnostic for callers.
+		const instructions = options.systemMessage?.trim() || defaultSystemMessage;
 		const body: Record<string, unknown> = {
 			model: apiModelId,
 			instructions,
@@ -125,11 +128,7 @@ const openaiAdapter: IVSCloneVendorAdapter = {
 const anthropicAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveApiModelId('anthropic', options.modelId);
-		const allMessages = buildMessages(options);
-
-		// Anthropic uses a separate system field (not in messages array)
-		const systemMessages = allMessages.filter(m => m.role === 'system');
-		const nonSystemMessages = allMessages.filter(m => m.role !== 'system');
+		const nonSystemMessages = buildMessages(options);
 
 		const body: Record<string, unknown> = {
 			model: apiModelId,
@@ -138,9 +137,7 @@ const anthropicAdapter: IVSCloneVendorAdapter = {
 			stream: true,
 		};
 
-		if (systemMessages.length > 0) {
-			body.system = systemMessages.map(m => m.content).join('\n\n');
-		}
+		body.system = options.systemMessage?.trim() || defaultSystemMessage;
 
 		return {
 			url: defaultOAuthProviderConfig.anthropic.apiEndpoint,
@@ -199,6 +196,9 @@ const googleAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveApiModelId('google', options.modelId);
 		const messages = buildMessages(options);
+		const systemPrompt = options.systemMessage?.trim() || defaultSystemMessage;
+		// Gemini v1 endpoint has no dedicated system field, so we inject a leading user turn.
+		messages.unshift({ role: 'user', content: `[System]\\n${systemPrompt}` });
 		const contents = messages.map(m => ({
 			role: m.role === 'assistant' ? 'model' : 'user',
 			parts: [{ text: m.content }],

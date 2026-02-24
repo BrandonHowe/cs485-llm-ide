@@ -18,7 +18,9 @@ import { VSCloneModelVendor } from '../common/vscloneMockProviderService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneModelSelection } from '../common/vscloneThreadModelSelectionService.js';
+import { IVSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
 import { IVSCloneApiRequestHandle, IVSCloneChatApiService } from './vscloneChatApiService.js';
+import { IVSCloneContextGatheringService } from './vscloneContextGatheringService.js';
 
 export const IVSCloneChatSessionService = createDecorator<IVSCloneChatSessionService>('vscloneChatSessionService');
 
@@ -123,6 +125,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		@ILogService private readonly logService: ILogService,
 		@IVSCloneOAuthService private readonly oauthService: IVSCloneOAuthService,
 		@IVSCloneChatApiService private readonly apiService: IVSCloneChatApiService,
+		@IVSCloneContextGatheringService private readonly contextGatheringService: IVSCloneContextGatheringService,
+		@IVSClonePromptAssemblyService private readonly promptAssemblyService: IVSClonePromptAssemblyService,
 	) {
 		super();
 	}
@@ -260,7 +264,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		super.dispose();
 	}
 
-	private submitApiPrompt(promptText: string, options: IVSCloneChatSubmitOptions, vendor: VSCloneModelVendor): IVSCloneChatSubmitResult {
+	private async submitApiPrompt(promptText: string, options: IVSCloneChatSubmitOptions, vendor: VSCloneModelVendor): Promise<IVSCloneChatSubmitResult> {
 		const mockSeed = createMockSeed(promptText);
 		const sessionResource = options.sessionResource ?? createMockSessionResource(mockSeed);
 		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
@@ -282,6 +286,15 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 
 		const modelId = options.modelSelection?.modelId ?? '';
 		const modelIdentifier = options.modelSelection?.modelIdentifier ?? '';
+		let systemMessage: string | undefined;
+
+		try {
+			const context = await this.contextGatheringService.gatherContext();
+			systemMessage = this.promptAssemblyService.assembleSystemMessage(context, vendor);
+		} catch (error) {
+			// Prompt submission should not fail when context collection fails, so we degrade gracefully.
+			this.logService.warn('[VSCloneChatSession] Failed to gather prompt context; continuing without enriched system prompt', error);
+		}
 
 		const handle = this.apiService.submitApiPrompt({
 			threadId,
@@ -294,6 +307,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			modelIdentifier,
 			reasoningEffort: options.modelSelection?.reasoningEffort,
 			previousTurns,
+			systemMessage,
 		});
 
 		this.apiRequestHandles.set(turnId, handle);

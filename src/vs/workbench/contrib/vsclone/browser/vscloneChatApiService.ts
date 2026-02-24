@@ -13,6 +13,7 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneApiSubmitOptions } from '../common/vscloneChatApiAdapters.js';
+import { IVSCloneEditApplicationService } from './vscloneEditApplicationService.js';
 import {
 	IVSCloneChatApiAbortedEvent,
 	IVSCloneChatApiCompleteEvent,
@@ -57,6 +58,7 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
 		@IMainProcessService mainProcessService: IMainProcessService,
 		@ILogService private readonly logService: ILogService,
+		@IVSCloneEditApplicationService private readonly editApplicationService: IVSCloneEditApplicationService,
 	) {
 		super();
 		this.channel = mainProcessService.getChannel(VSCLONE_CHAT_API_CHANNEL_NAME);
@@ -203,6 +205,15 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 			modelIdentifier: pending.options.modelIdentifier,
 			providerId: pending.options.vendor,
 		});
+
+		// We pre-parse edits here so completion logging can capture when the assistant produced
+		// apply-ready changes, while the UI remains the authority for actually applying edits.
+		const completedTurn = this.historyService.getTurns(pending.options.threadId).find(turn => turn.turnId === pending.options.turnId);
+		const responseText = completedTurn ? (completedTurn.responsePlainText || completedTurn.responseMarkdown) : '';
+		if (responseText && this.editApplicationService.hasSearchReplaceBlocks(responseText)) {
+			this.logService.info(`[VSCloneChatApi] Detected SEARCH/REPLACE edits in turn ${pending.options.turnId}`);
+		}
+
 		this.finishRequest(event.requestId);
 	}
 
