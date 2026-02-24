@@ -40,8 +40,8 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 		super();
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- IServerChannel event payload type is selected by remote callers, so the implementation boundary stays any.
-	listen(_: unknown, event: string): Event<any> {
+	// IServerChannel event payload type is selected by remote callers, so this boundary stays unknown.
+	listen(_: unknown, event: string): Event<unknown> {
 		switch (event) {
 			case VSCLONE_CHAT_API_EVENT_DELTA:
 				return this.onDeltaEmitter.event;
@@ -56,8 +56,8 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 		}
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- IServerChannel call result is caller-defined generic output; this channel only returns completion acks.
-	async call(_: unknown, command: string, arg?: unknown, _cancellationToken: CancellationToken = CancellationToken.None): Promise<any> {
+	// IServerChannel call result is caller-defined generic output; this channel only returns completion acks.
+	async call(_: unknown, command: string, arg?: unknown, _cancellationToken: CancellationToken = CancellationToken.None): Promise<unknown> {
 		switch (command) {
 			case VSCLONE_CHAT_API_COMMAND_SUBMIT:
 				this.submitRequest(arg as IVSCloneChatApiSubmitRequest);

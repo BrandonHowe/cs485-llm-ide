@@ -292,6 +292,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			vendor,
 			modelId,
 			modelIdentifier,
+			reasoningEffort: options.modelSelection?.reasoningEffort,
 			previousTurns,
 		});
 

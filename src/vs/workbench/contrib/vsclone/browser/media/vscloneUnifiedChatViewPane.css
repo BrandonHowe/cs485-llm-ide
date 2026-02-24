@@ -255,6 +255,38 @@
 	min-width: 0;
 }
 
+.vsclone-thread-reasoning-level {
+	flex: 0 0 auto;
+	min-width: 106px;
+}
+
+.vsclone-thread-reasoning-level.hidden {
+	display: none;
+}
+
+.vsclone-thread-reasoning-level-select {
+	height: 28px;
+	width: 100%;
+	border-radius: 5px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 90%, white 10%);
+	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 72%, var(--vscode-editor-background) 28%);
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 94%, white 6%);
+	font-size: 11px;
+	font-weight: 600;
+	padding: 0 22px 0 8px;
+	box-sizing: border-box;
+	outline: none;
+}
+
+.vsclone-thread-reasoning-level-select:focus-visible {
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 88%, white 12%);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 30%, transparent 70%);
+}
+
+.vsclone-thread-reasoning-level-select:disabled {
+	opacity: 0.7;
+}
+
 .vsclone-model-switcher-root {
 	position: relative;
 	width: fit-content;
@@ -634,9 +666,14 @@
 
 	.vsclone-thread-model-switcher {
 		flex: 1 1 auto;
-		width: 100%;
+		width: auto;
 		min-width: 0;
 		max-width: none;
+	}
+
+	.vsclone-thread-reasoning-level {
+		flex: 0 0 auto;
+		min-width: 104px;
 	}
 
 	.vsclone-thread-composer-send {

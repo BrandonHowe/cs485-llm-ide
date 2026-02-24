@@ -14,6 +14,15 @@ import { TestStorageService } from '../../../../test/common/workbenchTestService
 suite('VSCloneThreadModelSelectionService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
+	async function waitForCatalogToSettle(catalogService: VSCloneModelCatalogService): Promise<void> {
+		for (let attempt = 0; attempt < 50; attempt++) {
+			if (catalogService.getState().status !== 'loading') {
+				return;
+			}
+			await new Promise<void>(resolve => setTimeout(resolve, 10));
+		}
+	}
+
 	async function createHarness() {
 		const testDisposables = store.add(new DisposableStore());
 		const storageService = testDisposables.add(new TestStorageService());
@@ -28,7 +37,7 @@ suite('VSCloneThreadModelSelectionService', () => {
 		return { providerService, catalogService, selectionService };
 	}
 
-	function toSelection(modelIdentifier: string, vendor: string, modelId: string, modelName: string): IVSCloneModelSelection {
+	function toSelection(modelIdentifier: string, vendor: string, modelId: string, modelName: string, reasoningEffort?: 'low' | 'medium' | 'high'): IVSCloneModelSelection {
 		return {
 			threadId: 'thread-1',
 			location: 'chat',
@@ -36,6 +45,7 @@ suite('VSCloneThreadModelSelectionService', () => {
 			vendor,
 			modelId,
 			modelName,
+			reasoningEffort,
 			selectedAt: Date.now(),
 		};
 	}
@@ -81,6 +91,7 @@ suite('VSCloneThreadModelSelectionService', () => {
 		await providerService.setProviderEnabled('google', true);
 		await providerService.setProviderConfigured('google', true);
 		await catalogService.refreshCatalog();
+		await waitForCatalogToSettle(catalogService);
 
 		const googleModel = catalogService.getModels('google')[0];
 		assert.ok(googleModel);
@@ -89,6 +100,7 @@ suite('VSCloneThreadModelSelectionService', () => {
 
 		await providerService.setProviderConfigured('google', false);
 		await catalogService.refreshCatalog();
+		await waitForCatalogToSettle(catalogService);
 
 		const next = selectionService.getCurrentSelectionForThread('thread-1', 'chat');
 		assert.ok(next);
@@ -106,5 +118,20 @@ suite('VSCloneThreadModelSelectionService', () => {
 		await selectionService.resetSelectionForThread('thread-1');
 		assert.strictEqual(selectionService.hasSelectionForThread('thread-1'), false);
 		assert.ok(selectionService.getCurrentSelectionForThread('thread-1', 'chat'));
+	});
+
+	test('normalizes reasoning effort for reasoning-capable models', async () => {
+		const { catalogService, selectionService } = await createHarness();
+		const model = catalogService.getSelectableModels().find(candidate => candidate.vendor === 'openai');
+		assert.ok(model);
+
+		await selectionService.setSelectionForThread('thread-1', toSelection(model.identifier, model.vendor, model.modelId, model.modelName, 'high'));
+		assert.strictEqual(selectionService.getCurrentSelectionForThread('thread-1', 'chat')?.reasoningEffort, 'high');
+
+		await selectionService.setSelectionForThread('thread-1', {
+			...toSelection(model.identifier, model.vendor, model.modelId, model.modelName),
+			reasoningEffort: undefined,
+		});
+		assert.strictEqual(selectionService.getCurrentSelectionForThread('thread-1', 'chat')?.reasoningEffort, 'medium');
 	});
 });

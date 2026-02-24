@@ -179,7 +179,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.deepStrictEqual(toVSCloneHistoryQuery('abc', 'archived'), { text: 'abc', tab: 'archived', includeArchived: false });
 	});
 
-	test('composer surface includes model switcher host when enabled', () => {
+	test('composer surface includes model and reasoning controls when enabled', () => {
 		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
 		const target = pane as unknown as IRenderConversationSurfaceTarget;
 		target._register = (value: unknown) => value;
@@ -218,6 +218,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		const parent = document.createElement('div');
 		target.renderConversationSurface(parent);
 		assert.ok(parent.querySelector('.vsclone-thread-model-switcher'));
+		assert.ok(parent.querySelector('.vsclone-thread-reasoning-level-select'));
 	});
 
 	test('submitPrompt passes selected model metadata to session service', async () => {
@@ -230,6 +231,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			vendor: 'openai',
 			modelId: 'gpt-5.3-codex',
 			modelName: 'GPT-5.3-Codex',
+			reasoningEffort: 'high' as const,
 			selectedAt: Date.now(),
 		};
 
@@ -250,6 +252,17 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		target.refreshConversation = () => undefined;
 		target.applyRailLayout = () => undefined;
 		target.modelSwitcher = { refresh: () => undefined };
+		target.modelCatalogService = {
+			getModel: () => ({
+				identifier: 'openai/gpt-5.3-codex',
+				vendor: 'openai',
+				modelId: 'gpt-5.3-codex',
+				modelName: 'GPT-5.3-Codex',
+				reasoningEffortLevels: ['low', 'medium', 'high'],
+				defaultReasoningEffort: 'medium',
+				isSelectable: true,
+			}),
+		};
 		target.modelSelectionService = {
 			getCurrentSelectionForThread: () => selectedModel,
 			setSelectionForThread: async (threadId: string) => { boundThreadId = threadId; },
@@ -264,6 +277,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		await target.submitPrompt();
 
 		assert.strictEqual(capturedOptions?.modelSelection?.modelIdentifier, 'openai/gpt-5.3-codex');
+		assert.strictEqual(capturedOptions?.modelSelection?.reasoningEffort, 'high');
 		assert.strictEqual(boundThreadId, 'thread-new');
 	});
 

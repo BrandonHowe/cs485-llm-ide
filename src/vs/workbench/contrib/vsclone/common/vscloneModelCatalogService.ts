@@ -25,6 +25,12 @@ export interface IVSCloneModelCatalogModelDescriptor {
 	readonly vendor: VSCloneModelVendor;
 	readonly modelId: string;
 	readonly modelName: string;
+	/**
+	 * Optional per-model reasoning controls.
+	 * Kept in catalog metadata so UI and request adapters share one source of truth.
+	 */
+	readonly reasoningEffortLevels?: readonly VSCloneReasoningEffortLevel[];
+	readonly defaultReasoningEffort?: VSCloneReasoningEffortLevel;
 	readonly isSelectable: boolean;
 	readonly unavailableReason?: VSCloneModelUnavailableReason;
 }
@@ -54,15 +60,25 @@ interface IModelDefinition {
 	readonly vendor: VSCloneModelVendor;
 	readonly modelId: string;
 	readonly modelName: string;
+	readonly reasoningEffortLevels?: readonly VSCloneReasoningEffortLevel[];
+	readonly defaultReasoningEffort?: VSCloneReasoningEffortLevel;
 }
+
+export type VSCloneReasoningEffortLevel = 'low' | 'medium' | 'high';
+
+export function isVSCloneReasoningEffortLevel(value: string): value is VSCloneReasoningEffortLevel {
+	return value === 'low' || value === 'medium' || value === 'high';
+}
+
+const openAIReasoningEffortLevels: readonly VSCloneReasoningEffortLevel[] = ['low', 'medium', 'high'];
 
 const modelDefinitionsByProvider: Record<VSCloneModelVendor, readonly IModelDefinition[]> = {
 	openai: [
-		{ vendor: 'openai', modelId: 'gpt-5.3-codex', modelName: 'GPT-5.3-Codex' },
-		{ vendor: 'openai', modelId: 'gpt-5.2-codex', modelName: 'GPT-5.2-Codex' },
-		{ vendor: 'openai', modelId: 'gpt-5.1-codex-max', modelName: 'GPT-5.1-Codex-Max' },
-		{ vendor: 'openai', modelId: 'gpt-5.2', modelName: 'GPT-5.2' },
-		{ vendor: 'openai', modelId: 'gpt-5.1-codex-mini', modelName: 'GPT-5.1-Codex-Mini' },
+		{ vendor: 'openai', modelId: 'gpt-5.3-codex', modelName: 'GPT-5.3-Codex', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5.2-codex', modelName: 'GPT-5.2-Codex', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5.1-codex-max', modelName: 'GPT-5.1-Codex-Max', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5.2', modelName: 'GPT-5.2', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5.1-codex-mini', modelName: 'GPT-5.1-Codex-Mini', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
 	],
 	anthropic: [
 		{ vendor: 'anthropic', modelId: 'claude-3.5-sonnet', modelName: 'Claude 3.5 Sonnet' },
@@ -218,6 +234,8 @@ export class VSCloneModelCatalogService extends Disposable implements IVSCloneMo
 					vendor,
 					modelId: model.modelId,
 					modelName: model.modelName,
+					reasoningEffortLevels: model.reasoningEffortLevels,
+					defaultReasoningEffort: model.defaultReasoningEffort,
 					isSelectable: providerState.configured,
 					unavailableReason: providerState.configured ? undefined : 'provider_requires_configuration',
 				});

@@ -335,6 +335,9 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 			}
 
 			const context = this.getContext();
+			const preservedReasoningEffort = selected?.modelIdentifier === model.identifier && selected.reasoningEffort
+				? selected.reasoningEffort
+				: undefined;
 			const nextSelection: IVSCloneModelSelection = {
 				threadId: context.threadId || undefined,
 				location: context.location,
@@ -342,6 +345,8 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 				vendor: model.vendor,
 				modelId: model.modelId,
 				modelName: model.modelName,
+				// Preserve the user's current level when re-selecting the same reasoning model.
+				reasoningEffort: preservedReasoningEffort,
 				selectedAt: Date.now(),
 			};
 			void this.selectionService.setSelectionForThread(context.threadId, nextSelection);

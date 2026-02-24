@@ -5,6 +5,7 @@
 
 import { VSCloneModelVendor } from './vscloneMockProviderService.js';
 import { defaultOAuthProviderConfig } from './vscloneOAuthTypes.js';
+import type { VSCloneReasoningEffortLevel } from './vscloneModelCatalogService.js';
 
 // -- Public types --
 
@@ -17,6 +18,7 @@ export interface IVSCloneApiSubmitOptions {
 	readonly vendor: VSCloneModelVendor;
 	readonly modelId: string;
 	readonly modelIdentifier: string;
+	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
 	readonly previousTurns?: readonly { role: 'user' | 'assistant'; content: string }[];
 }
 
@@ -71,16 +73,23 @@ const openaiAdapter: IVSCloneVendorAdapter = {
 		// The Codex backend rejects requests without a non-empty instructions field.
 		// Keep this default stable so chats work even when the user only provides a prompt.
 		const instructions = 'You are VSClone, a helpful coding assistant. Answer clearly and concisely.';
+		const body: Record<string, unknown> = {
+			model: apiModelId,
+			instructions,
+			// Codex backend for this endpoint explicitly requires opting out of storage.
+			store: false,
+			input,
+			stream: true,
+		};
+
+		// Reasoning controls are opt-in and model-gated in the catalog, so we only forward a validated value.
+		if (options.reasoningEffort) {
+			body.reasoning = { effort: options.reasoningEffort };
+		}
+
 		return {
 			url: defaultOAuthProviderConfig.openai.apiEndpoint,
-			body: {
-				model: apiModelId,
-				instructions,
-				// Codex backend for this endpoint explicitly requires opting out of storage.
-				store: false,
-				input,
-				stream: true,
-			},
+			body,
 		};
 	},
 

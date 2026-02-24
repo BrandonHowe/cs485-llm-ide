@@ -23,8 +23,8 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IVSCloneChatHistoryQuery, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
-import { IVSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
-import { IVSCloneChatLocation, IVSCloneThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
+import { IVSCloneModelCatalogService, type VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
+import { IVSCloneChatLocation, IVSCloneThreadModelSelectionService, type IVSCloneModelSelection } from '../common/vscloneThreadModelSelectionService.js';
 import { VSCloneChatHistoryRail, VSCloneRailTab } from './vscloneChatHistoryRail.js';
 import { IVSCloneChatSessionService } from './vscloneChatSessionService.js';
 import { VSCloneModelSwitcherWidget } from './vscloneModelSwitcherWidget.js';
@@ -57,6 +57,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private composerInput: HTMLTextAreaElement | undefined;
 	private composerSendButton: HTMLButtonElement | undefined;
 	private modelSwitcher: VSCloneModelSwitcherWidget | undefined;
+	private reasoningEffortContainer: HTMLElement | undefined;
+	private reasoningEffortSelect: HTMLSelectElement | undefined;
 
 	private readonly rail = this._register(this.instantiationService.createInstance(VSCloneChatHistoryRail));
 	private readonly threadsById = new Map<string, IVSCloneChatHistoryThread>();
@@ -158,10 +160,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}));
 
 		this._register(this.modelSelectionService.onDidChangeSelection(() => {
-			this.modelSwitcher?.refresh();
+			this.refreshModelControls();
 		}));
 		this._register(this.modelCatalogService.onDidChangeCatalog(() => {
-			this.modelSwitcher?.refresh();
+			this.refreshModelControls();
 		}));
 
 		void this.modelSelectionService.initialize();
@@ -209,13 +211,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	async refreshModelCatalog(): Promise<void> {
 		await this.modelCatalogService.refreshCatalog();
-		this.modelSwitcher?.refresh();
+		this.refreshModelControls();
 	}
 
 	async manageProviders(): Promise<void> {
 		await this.providerConfigurationBridge.openManageProvidersPicker();
 		await this.modelCatalogService.refreshCatalog();
-		this.modelSwitcher?.refresh();
+		this.refreshModelControls();
 	}
 
 	async resetModelSelection(): Promise<void> {
@@ -223,13 +225,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 		await this.modelSelectionService.resetSelectionForThread(this.activeThreadId);
-		this.modelSwitcher?.refresh();
+		this.refreshModelControls();
 	}
 
 	async switchToNextModel(): Promise<void> {
 		const context = this.getModelSwitcherContext();
 		await this.modelSelectionService.switchToNextModel(context.threadId, context.location);
-		this.modelSwitcher?.refresh();
+		this.refreshModelControls();
 	}
 
 	async openSession(threadId?: string): Promise<void> {
@@ -246,7 +248,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.activeThreadId = targetThreadId;
 		this.rail.setSelectedThread(targetThreadId);
 		this.railVisible = false;
-		this.modelSwitcher?.refresh();
+		this.refreshModelControls();
 		this.refreshConversation();
 		this.applyRailLayout();
 		this.focusInput();
@@ -374,6 +376,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const controls = document.createElement('div');
 		controls.className = 'vsclone-thread-composer-controls';
+		this.reasoningEffortContainer = undefined;
+		this.reasoningEffortSelect = undefined;
 
 		const modelSwitcherEnabled = this.configurationService.getValue<boolean>(modelSwitcherEnabledSetting) ?? true;
 		if (modelSwitcherEnabled) {
@@ -393,6 +397,16 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				modelSwitcherHost.remove();
 				this.modelSwitcher = undefined;
 			}
+
+			const reasoningEffortHost = document.createElement('div');
+			reasoningEffortHost.className = 'vsclone-thread-reasoning-level hidden';
+			const reasoningEffortSelect = document.createElement('select');
+			reasoningEffortSelect.className = 'vsclone-thread-reasoning-level-select';
+			reasoningEffortSelect.setAttribute('aria-label', localize('vsclone.composer.reasoningEffort', 'Reasoning level'));
+			reasoningEffortHost.appendChild(reasoningEffortSelect);
+			controls.appendChild(reasoningEffortHost);
+			this.reasoningEffortContainer = reasoningEffortHost;
+			this.reasoningEffortSelect = reasoningEffortSelect;
 		}
 		const hint = document.createElement('div');
 		hint.className = 'vsclone-thread-composer-hint';
@@ -443,12 +457,18 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this._register(addDisposableListener(send, EventType.CLICK, () => {
 			void this.submitPrompt();
 		}));
+		if (this.reasoningEffortSelect) {
+			this._register(addDisposableListener(this.reasoningEffortSelect, EventType.CHANGE, () => {
+				void this.updateReasoningEffortSelection();
+			}));
+		}
 
 		this.composerFocusDisposable.value = toDisposable(() => {
 			input.blur();
 		});
 		this.updateComposerMetrics();
 		this.updateComposerState();
+		this.refreshReasoningEffortControl();
 		if (this.modelSwitcher) {
 			void this.modelCatalogService.refreshCatalog();
 		}
@@ -480,7 +500,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
-		const selectedModel = this.modelSelectionService.getCurrentSelectionForThread(activeThreadId ?? '', 'chat');
+		const selectedModel = this.getCurrentComposerModelSelection(activeThreadId);
 		const existingThread = activeThreadId ? this.resolveThreadById(activeThreadId) : undefined;
 		this.submittingPrompt = true;
 		this.updateComposerState();
@@ -509,7 +529,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.railVisible = false;
 			this.composerInput.value = '';
 			this.updateComposerMetrics();
-			this.modelSwitcher?.refresh();
+			this.refreshModelControls();
 			this.refreshConversation();
 			this.applyRailLayout();
 		} finally {
@@ -591,7 +611,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		this.updateComposerState();
-		this.modelSwitcher?.refresh();
+		this.refreshModelControls();
 		this.scheduleScrollToBottom();
 	}
 
@@ -661,6 +681,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const disabled = !hasText || composerBusy;
 		this.composerSendButton.disabled = disabled;
 		this.composerInput.disabled = composerBusy;
+		if (this.reasoningEffortSelect) {
+			const reasoningControlHidden = this.reasoningEffortContainer?.classList.contains('hidden') ?? true;
+			this.reasoningEffortSelect.disabled = composerBusy || reasoningControlHidden;
+		}
 		if (this.composerInput.disabled) {
 			this.composerInput.placeholder = localize('vsclone.composer.waiting', 'Waiting for response...');
 		} else {
@@ -730,6 +754,105 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}));
 	}
 
+	private refreshModelControls(): void {
+		this.modelSwitcher?.refresh();
+		this.refreshReasoningEffortControl();
+	}
+
+	private getCurrentComposerModelSelection(threadId: string | undefined): IVSCloneModelSelection | undefined {
+		const selectedModel = this.modelSelectionService.getCurrentSelectionForThread(threadId ?? '', 'chat');
+		if (!selectedModel) {
+			return undefined;
+		}
+
+		const selectedModelDescriptor = this.modelCatalogService.getModel(selectedModel.modelIdentifier);
+		const supportedReasoningLevels = selectedModelDescriptor?.reasoningEffortLevels;
+		if (!supportedReasoningLevels || supportedReasoningLevels.length === 0) {
+			return { ...selectedModel, threadId: threadId ?? undefined, reasoningEffort: undefined };
+		}
+
+		// Read directly from the visible select so a quick Send click right after changing the dropdown
+		// uses the new value even before storage/event propagation catches up.
+		const selectedFromControl = this.reasoningEffortSelect?.value as VSCloneReasoningEffortLevel | undefined;
+		const resolvedReasoningEffort = selectedFromControl && supportedReasoningLevels.includes(selectedFromControl)
+			? selectedFromControl
+			: selectedModel.reasoningEffort && supportedReasoningLevels.includes(selectedModel.reasoningEffort)
+				? selectedModel.reasoningEffort
+				: selectedModelDescriptor.defaultReasoningEffort ?? supportedReasoningLevels[0];
+
+		return {
+			...selectedModel,
+			threadId: threadId ?? undefined,
+			reasoningEffort: resolvedReasoningEffort,
+		};
+	}
+
+	private refreshReasoningEffortControl(): void {
+		if (!this.reasoningEffortContainer || !this.reasoningEffortSelect) {
+			return;
+		}
+
+		const selectedModel = this.modelSelectionService.getCurrentSelectionForThread(this.activeThreadId ?? '', 'chat');
+		const selectedModelDescriptor = selectedModel ? this.modelCatalogService.getModel(selectedModel.modelIdentifier) : undefined;
+		const supportedReasoningLevels = selectedModelDescriptor?.reasoningEffortLevels;
+		if (!selectedModel || !supportedReasoningLevels || supportedReasoningLevels.length === 0) {
+			this.reasoningEffortContainer.classList.add('hidden');
+			this.reasoningEffortSelect.replaceChildren();
+			this.updateComposerState();
+			return;
+		}
+
+		const selectedReasoningEffort = selectedModel.reasoningEffort && supportedReasoningLevels.includes(selectedModel.reasoningEffort)
+			? selectedModel.reasoningEffort
+			: selectedModelDescriptor.defaultReasoningEffort ?? supportedReasoningLevels[0];
+
+		this.reasoningEffortSelect.replaceChildren(
+			...supportedReasoningLevels.map(level => {
+				const option = document.createElement('option');
+				option.value = level;
+				option.textContent = this.toReasoningEffortLabel(level);
+				return option;
+			}),
+		);
+		this.reasoningEffortSelect.value = selectedReasoningEffort;
+		this.reasoningEffortContainer.classList.remove('hidden');
+		this.updateComposerState();
+	}
+
+	private async updateReasoningEffortSelection(): Promise<void> {
+		if (!this.reasoningEffortSelect) {
+			return;
+		}
+
+		const selectedModel = this.modelSelectionService.getCurrentSelectionForThread(this.activeThreadId ?? '', 'chat');
+		const selectedModelDescriptor = selectedModel ? this.modelCatalogService.getModel(selectedModel.modelIdentifier) : undefined;
+		const supportedReasoningLevels = selectedModelDescriptor?.reasoningEffortLevels;
+		if (!selectedModel || !supportedReasoningLevels || supportedReasoningLevels.length === 0) {
+			return;
+		}
+
+		const nextReasoningEffort = this.reasoningEffortSelect.value as VSCloneReasoningEffortLevel;
+		if (!supportedReasoningLevels.includes(nextReasoningEffort) || selectedModel.reasoningEffort === nextReasoningEffort) {
+			return;
+		}
+
+		await this.modelSelectionService.setSelectionForThread(this.activeThreadId ?? '', {
+			...selectedModel,
+			threadId: this.activeThreadId,
+			location: 'chat',
+			reasoningEffort: nextReasoningEffort,
+			selectedAt: Date.now(),
+		});
+	}
+
+	private toReasoningEffortLabel(level: VSCloneReasoningEffortLevel): string {
+		switch (level) {
+			case 'low': return localize('vsclone.composer.reasoningEffort.low', 'Low');
+			case 'high': return localize('vsclone.composer.reasoningEffort.high', 'High');
+			default: return localize('vsclone.composer.reasoningEffort.medium', 'Medium');
+		}
+	}
+
 	private getLatestTurn(threadId?: string): IVSCloneChatHistoryTurn | undefined {
 		const candidateThreadId = threadId ?? this.activeThreadId ?? this.rail.getSelectedThread();
 		if (!candidateThreadId) {
@@ -764,14 +887,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		this.refreshRailRows();
-		this.modelSwitcher?.refresh();
+		this.refreshModelControls();
 		this.refreshConversation();
 	}
 
 	private showComposerForNewChat(): void {
 		this.activeThreadId = undefined;
 		this.rail.setSelectedThread(undefined);
-		this.modelSwitcher?.refresh();
+		this.refreshModelControls();
 		this.refreshConversation();
 		this.railVisible = false;
 		this.applyRailLayout();

@@ -12,6 +12,15 @@ import { TestStorageService } from '../../../../test/common/workbenchTestService
 suite('VSCloneModelCatalogService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
+	async function waitForCatalogToSettle(catalogService: VSCloneModelCatalogService): Promise<void> {
+		for (let attempt = 0; attempt < 50; attempt++) {
+			if (catalogService.getState().status !== 'loading') {
+				return;
+			}
+			await new Promise<void>(resolve => setTimeout(resolve, 10));
+		}
+	}
+
 	test('refresh success returns configured provider sections', async () => {
 		const storageService = store.add(new TestStorageService());
 		const providerService = store.add(new VSCloneMockProviderService(storageService));
@@ -23,7 +32,10 @@ suite('VSCloneModelCatalogService', () => {
 		const state = catalogService.getState();
 		assert.strictEqual(state.status, 'ready');
 		assert.deepStrictEqual(state.providers.map(provider => provider.vendor), ['openai', 'anthropic']);
-		assert.ok(state.models.some(model => model.identifier === 'openai/gpt-5.3-codex'));
+		const openAIModel = state.models.find(model => model.identifier === 'openai/gpt-5.3-codex');
+		assert.ok(openAIModel);
+		assert.deepStrictEqual(openAIModel?.reasoningEffortLevels, ['low', 'medium', 'high']);
+		assert.strictEqual(openAIModel?.defaultReasoningEffort, 'medium');
 		assert.ok(state.models.some(model => model.identifier === 'anthropic/claude-3.5-sonnet'));
 	});
 
@@ -36,6 +48,7 @@ suite('VSCloneModelCatalogService', () => {
 		await providerService.setProviderEnabled('google', true);
 		await providerService.setProviderConfigured('google', false);
 		await catalogService.refreshCatalog();
+		await waitForCatalogToSettle(catalogService);
 
 		const state = catalogService.getState();
 		const googleProvider = state.providers.find(provider => provider.vendor === 'google');

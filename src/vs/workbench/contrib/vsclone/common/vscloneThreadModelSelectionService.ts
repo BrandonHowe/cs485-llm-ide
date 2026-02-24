@@ -7,7 +7,7 @@ import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
-import { IVSCloneModelCatalogService } from './vscloneModelCatalogService.js';
+import { IVSCloneModelCatalogService, isVSCloneReasoningEffortLevel, type IVSCloneModelCatalogModelDescriptor, type VSCloneReasoningEffortLevel } from './vscloneModelCatalogService.js';
 
 export const IVSCloneThreadModelSelectionService = createDecorator<IVSCloneThreadModelSelectionService>('vsCloneThreadModelSelectionService');
 
@@ -20,6 +20,7 @@ export interface IVSCloneModelSelection {
 	vendor: string;
 	modelId: string;
 	modelName: string;
+	reasoningEffort?: VSCloneReasoningEffortLevel;
 	selectedAt: number;
 }
 
@@ -161,18 +162,24 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 		const normalizedThreadId = normalizeThreadId(threadId);
 		const threadSelection = normalizedThreadId ? this.selectedByThread.get(normalizedThreadId) : undefined;
 		if (threadSelection && this.isSelectableModelIdentifier(threadSelection.modelIdentifier)) {
-			return {
-				...threadSelection,
-				threadId: normalizedThreadId,
-			};
+			return this.toSelection(
+				threadSelection.location,
+				threadSelection.modelIdentifier,
+				threadSelection.selectedAt,
+				normalizedThreadId,
+				threadSelection.reasoningEffort,
+			);
 		}
 
 		const locationSelection = this.selectedByLocation.get(location);
 		if (locationSelection && this.isSelectableModelIdentifier(locationSelection.modelIdentifier)) {
-			return {
-				...locationSelection,
-				threadId: normalizedThreadId,
-			};
+			return this.toSelection(
+				locationSelection.location,
+				locationSelection.modelIdentifier,
+				locationSelection.selectedAt,
+				normalizedThreadId,
+				locationSelection.reasoningEffort,
+			);
 		}
 
 		const fallback = this.getFallbackSelection(location, normalizedThreadId);
@@ -186,7 +193,7 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 		await this.initialize();
 
 		const normalizedThreadId = normalizeThreadId(threadId);
-		const normalizedSelection = this.toSelection(selection.location, selection.modelIdentifier, Date.now(), normalizedThreadId);
+		const normalizedSelection = this.toSelection(selection.location, selection.modelIdentifier, Date.now(), normalizedThreadId, selection.reasoningEffort);
 		if (!normalizedSelection) {
 			return;
 		}
@@ -282,6 +289,10 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 		}
 
 		const [derivedVendor = '', derivedModelId = ''] = value.modelIdentifier.split('/');
+		const parsedReasoningEffort = typeof value.reasoningEffort === 'string' && isVSCloneReasoningEffortLevel(value.reasoningEffort)
+			? value.reasoningEffort
+			: undefined;
+		const model = this.catalogService.getModel(value.modelIdentifier);
 		return {
 			threadId: undefined,
 			location: value.location,
@@ -289,11 +300,18 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 			vendor: typeof value.vendor === 'string' && value.vendor.length > 0 ? value.vendor : derivedVendor,
 			modelId: typeof value.modelId === 'string' && value.modelId.length > 0 ? value.modelId : derivedModelId,
 			modelName: typeof value.modelName === 'string' && value.modelName.length > 0 ? value.modelName : derivedModelId,
+			reasoningEffort: model ? this.normalizeReasoningEffort(model, parsedReasoningEffort) : parsedReasoningEffort,
 			selectedAt: typeof value.selectedAt === 'number' ? value.selectedAt : Date.now(),
 		};
 	}
 
-	private toSelection(location: IVSCloneChatLocation, modelIdentifier: string, selectedAt: number, threadId?: string): IVSCloneModelSelection | undefined {
+	private toSelection(
+		location: IVSCloneChatLocation,
+		modelIdentifier: string,
+		selectedAt: number,
+		threadId?: string,
+		reasoningEffort?: VSCloneReasoningEffortLevel,
+	): IVSCloneModelSelection | undefined {
 		const model = this.catalogService.getModel(modelIdentifier);
 		if (!model || !model.isSelectable) {
 			return undefined;
@@ -306,8 +324,22 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 			vendor: model.vendor,
 			modelId: model.modelId,
 			modelName: model.modelName,
+			reasoningEffort: this.normalizeReasoningEffort(model, reasoningEffort),
 			selectedAt,
 		};
+	}
+
+	private normalizeReasoningEffort(model: IVSCloneModelCatalogModelDescriptor, requested: VSCloneReasoningEffortLevel | undefined): VSCloneReasoningEffortLevel | undefined {
+		if (!model.reasoningEffortLevels || model.reasoningEffortLevels.length === 0) {
+			return undefined;
+		}
+
+		// Keep user intent when it matches the model contract, otherwise fall back to the model default.
+		if (requested && model.reasoningEffortLevels.includes(requested)) {
+			return requested;
+		}
+
+		return model.defaultReasoningEffort ?? model.reasoningEffortLevels[0];
 	}
 
 	private isSelectableModelIdentifier(identifier: string): boolean {
@@ -328,6 +360,7 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 			vendor: fallback.vendor,
 			modelId: fallback.modelId,
 			modelName: fallback.modelName,
+			reasoningEffort: fallback.defaultReasoningEffort ?? fallback.reasoningEffortLevels?.[0],
 			selectedAt: Date.now(),
 		};
 	}
