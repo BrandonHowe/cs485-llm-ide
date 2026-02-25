@@ -64,29 +64,34 @@ interface IModelDefinition {
 	readonly defaultReasoningEffort?: VSCloneReasoningEffortLevel;
 }
 
-export type VSCloneReasoningEffortLevel = 'low' | 'medium' | 'high';
+export type VSCloneReasoningEffortLevel = 'xhigh' | 'max' | 'high' | 'medium' | 'standard' | 'low' | 'minimal' | 'lite' | 'none';
+
+const allReasoningEffortLevels: readonly VSCloneReasoningEffortLevel[] = ['xhigh', 'max', 'high', 'medium', 'standard', 'low', 'minimal', 'lite', 'none'];
 
 export function isVSCloneReasoningEffortLevel(value: string): value is VSCloneReasoningEffortLevel {
-	return value === 'low' || value === 'medium' || value === 'high';
+	return (allReasoningEffortLevels as readonly string[]).includes(value);
 }
-
-const openAIReasoningEffortLevels: readonly VSCloneReasoningEffortLevel[] = ['low', 'medium', 'high'];
 
 const modelDefinitionsByProvider: Record<VSCloneModelVendor, readonly IModelDefinition[]> = {
 	openai: [
-		{ vendor: 'openai', modelId: 'gpt-5.3-codex', modelName: 'GPT-5.3-Codex', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
-		{ vendor: 'openai', modelId: 'gpt-5.2-codex', modelName: 'GPT-5.2-Codex', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
-		{ vendor: 'openai', modelId: 'gpt-5.1-codex-max', modelName: 'GPT-5.1-Codex-Max', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
-		{ vendor: 'openai', modelId: 'gpt-5.2', modelName: 'GPT-5.2', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
-		{ vendor: 'openai', modelId: 'gpt-5.1-codex-mini', modelName: 'GPT-5.1-Codex-Mini', reasoningEffortLevels: openAIReasoningEffortLevels, defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5.3-codex', modelName: 'GPT-5.3-Codex', reasoningEffortLevels: ['xhigh', 'high', 'medium', 'low'], defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5.3-codex-spark', modelName: 'GPT-5.3-Codex-Spark', reasoningEffortLevels: ['standard', 'lite'], defaultReasoningEffort: 'standard' },
+		{ vendor: 'openai', modelId: 'gpt-5.2-codex', modelName: 'GPT-5.2-Codex', reasoningEffortLevels: ['high', 'medium'], defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5.1-codex', modelName: 'GPT-5.1-Codex', reasoningEffortLevels: ['high', 'medium'], defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5-pro', modelName: 'GPT-5 Pro', reasoningEffortLevels: ['xhigh', 'high', 'medium', 'low', 'minimal', 'none'], defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5', modelName: 'GPT-5', reasoningEffortLevels: ['high', 'medium', 'low'], defaultReasoningEffort: 'medium' },
+		{ vendor: 'openai', modelId: 'gpt-5-nano', modelName: 'GPT-5 Nano', reasoningEffortLevels: ['high', 'low'], defaultReasoningEffort: 'high' },
 	],
 	anthropic: [
-		{ vendor: 'anthropic', modelId: 'claude-3.5-sonnet', modelName: 'Claude 3.5 Sonnet' },
-		{ vendor: 'anthropic', modelId: 'claude-3-opus', modelName: 'Claude 3 Opus' },
-		{ vendor: 'anthropic', modelId: 'claude-3-haiku', modelName: 'Claude 3 Haiku' },
+		{ vendor: 'anthropic', modelId: 'claude-opus-4.5', modelName: 'Claude Opus 4.5', reasoningEffortLevels: ['max', 'high', 'standard'], defaultReasoningEffort: 'high' },
+		{ vendor: 'anthropic', modelId: 'claude-sonnet-4.5', modelName: 'Claude Sonnet 4.5', reasoningEffortLevels: ['max', 'high', 'medium'], defaultReasoningEffort: 'high' },
+		{ vendor: 'anthropic', modelId: 'claude-sonnet-4.0', modelName: 'Claude Sonnet 4.0', reasoningEffortLevels: ['high', 'low'], defaultReasoningEffort: 'high' },
 	],
 	google: [
-		{ vendor: 'google', modelId: 'gemini-pro-2.0', modelName: 'Gemini Pro 2.0' },
+		{ vendor: 'google', modelId: 'gemini-3-pro', modelName: 'Gemini 3 Pro', reasoningEffortLevels: ['high', 'standard'], defaultReasoningEffort: 'standard' },
+		{ vendor: 'google', modelId: 'gemini-2.5-pro', modelName: 'Gemini 2.5 Pro', reasoningEffortLevels: ['high', 'low'], defaultReasoningEffort: 'high' },
+		{ vendor: 'google', modelId: 'gemini-2.5-flash', modelName: 'Gemini 2.5 Flash', reasoningEffortLevels: ['high', 'low'], defaultReasoningEffort: 'low' },
+		{ vendor: 'google', modelId: 'gemini-2.5-flash-lite', modelName: 'Gemini 2.5 Flash Lite', reasoningEffortLevels: ['high', 'low'], defaultReasoningEffort: 'low' },
 	],
 };
 

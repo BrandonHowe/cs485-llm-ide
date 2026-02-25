@@ -5,9 +5,11 @@
 
 import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IVSClonePromptContext, VSClonePromptAssemblyService } from '../../common/vsclonePromptAssemblyService.js';
 
 suite('VSClonePromptAssemblyService', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const service = new VSClonePromptAssemblyService();
 
 	function createBaseContext(overrides: Partial<IVSClonePromptContext> = {}): IVSClonePromptContext {
@@ -40,6 +42,8 @@ suite('VSClonePromptAssemblyService', () => {
 		assert.ok(message.includes('File: file:///workspace/src/app.ts (typescript)'));
 		assert.ok(message.includes('Selected Code:'));
 		assert.ok(message.includes('Lines 2-2:'));
+		assert.ok(message.includes('## Available Tools'));
+		assert.ok(message.includes('Never ask the user to open, share, or paste files'));
 		assert.ok(message.includes('## Diagnostics'));
 		assert.ok(message.includes('Unexpected any'));
 		assert.ok(message.includes('<<<<<<< SEARCH'));
@@ -68,6 +72,7 @@ suite('VSClonePromptAssemblyService', () => {
 		const message = service.assembleSystemMessage(createBaseContext({ directoryTree: hugeTree }), 'google');
 		assert.ok(message.length <= 80000);
 		assert.ok(message.includes('[system context truncated to stay within budget]'));
+		assert.ok(message.includes('## Available Tools'));
 		assert.ok(message.includes('- Vendor: google'));
 	});
 });

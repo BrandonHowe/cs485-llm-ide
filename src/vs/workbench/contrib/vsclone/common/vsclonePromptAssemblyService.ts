@@ -7,6 +7,7 @@ import { PlatformToString, platform } from '../../../../base/common/platform.js'
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { VSCloneModelVendor } from './vscloneMockProviderService.js';
+import { formatToolDefinitionsForPrompt } from './vscloneToolDefinitions.js';
 
 const maxActiveFileChars = 8000;
 const maxSystemMessageChars = 80000;
@@ -50,11 +51,16 @@ export class VSClonePromptAssemblyService implements IVSClonePromptAssemblyServi
 		const activeFileSection = this.formatActiveFileSection(context.activeFile);
 		const message = [
 			'You are VSClone, an AI coding assistant integrated into a code editor.',
+			'You have direct tool access to read/search/list/edit/create files inside the workspace.',
+			'Never ask the user to open, share, or paste files when a tool can fetch that information.',
 			'',
 			'## System Information',
 			`- Vendor: ${vendor}`,
 			`- OS: ${PlatformToString(platform)}`,
 			`- Workspace: ${workspaceNames}`,
+			'',
+			// Tool instructions are intentionally near the top so they survive context truncation.
+			formatToolDefinitionsForPrompt(),
 			'',
 			'## Active File',
 			activeFileSection,
@@ -131,7 +137,7 @@ export class VSClonePromptAssemblyService implements IVSClonePromptAssemblyServi
 		const center = Math.floor((anchorStart + anchorEnd) / 2);
 		const halfWindow = Math.floor(maxActiveFileChars / 2);
 		let start = Math.max(0, center - halfWindow);
-		let end = Math.min(content.length, start + maxActiveFileChars);
+		const end = Math.min(content.length, start + maxActiveFileChars);
 
 		if (end - start < maxActiveFileChars) {
 			start = Math.max(0, end - maxActiveFileChars);

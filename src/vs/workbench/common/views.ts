@@ -111,6 +111,11 @@ export interface IViewContainerDescriptor {
 	readonly hideIfEmpty?: boolean;
 
 	/**
+	 * Minimum width in pixels to enforce when this container is the active sidebar container.
+	 */
+	readonly minimumWidth?: number;
+
+	/**
 	 * Id of the extension that contributed the view container
 	 */
 	readonly extensionId?: ExtensionIdentifier;

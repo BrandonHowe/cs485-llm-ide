@@ -8,6 +8,9 @@ import { Emitter } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { getClaimsFromJWT, IAuthorizationTokenResponse, isAuthorizationErrorResponse, isAuthorizationTokenResponse } from '../../../../base/common/oauth.js';
 import { URI } from '../../../../base/common/uri.js';
+import { generateUuid } from '../../../../base/common/uuid.js';
+import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
+import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
 import { localize } from '../../../../nls.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
@@ -16,6 +19,14 @@ import { IQuickInputService } from '../../../../platform/quickinput/common/quick
 import { ISecretStorageService } from '../../../../platform/secrets/common/secrets.js';
 import { IVSCloneMockProviderService, VSCloneModelVendor } from '../common/vscloneMockProviderService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
+import {
+	IVSCloneOAuthLoopbackStartResponse,
+	IVSCloneOAuthLoopbackWaitResponse,
+	VSCLONE_OAUTH_CHANNEL_NAME,
+	VSCLONE_OAUTH_COMMAND_START_LOOPBACK,
+	VSCLONE_OAUTH_COMMAND_STOP_LOOPBACK,
+	VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK,
+} from '../common/vscloneOAuthIpc.js';
 import {
 	defaultOAuthProviderConfig,
 	displayInfoOfOAuthProvider,
@@ -58,36 +69,45 @@ function generateState(): string {
 
 // -- Code Extraction --
 
-/** Default loopback port used when preferredPort is 0 (dynamic). */
+interface IParsedOAuthInput {
+	readonly code: string;
+	readonly state: string | undefined;
+}
+
 const FALLBACK_LOOPBACK_PORT = 33418;
+const LOOPBACK_WAIT_TIMEOUT_MS = 180_000;
 
 /**
- * Extracts an authorization code from user input.
+ * Extracts authorization values from user input.
  * The user may paste a raw code string, or the full redirect URL
  * (e.g. `http://localhost:1455/auth/callback?code=abc&state=xyz`).
  */
-function parseCodeFromInput(input: string): string {
+function parseOAuthInput(input: string): IParsedOAuthInput {
 	const trimmed = input.trim();
 
-	// Try to parse as a URL with a `code` query parameter
+	// Try to parse as a URL with `code` and optional `state` query parameters.
 	try {
 		const url = new URL(trimmed);
 		const code = url.searchParams.get('code');
 		if (code) {
-			return code;
+			return {
+				code,
+				state: url.searchParams.get('state') || undefined,
+			};
 		}
 	} catch {
 		// Not a URL - treat as raw code
 	}
 
-	return trimmed;
+	return {
+		code: trimmed,
+		state: undefined,
+	};
 }
 
 /**
- * Builds a fixed redirect URI for a loopback provider config.
- * Since we cannot start a local HTTP server in the browser/renderer layer,
- * we use a fixed port so the redirect_uri is deterministic between
- * the authorization request and the token exchange.
+ * Builds a deterministic redirect URI for manual loopback fallback.
+ * This is only used when the automatic loopback listener is unavailable.
  */
 function getLoopbackRedirectUri(config: IVSCloneOAuthProviderConfig): string {
 	const port = config.preferredPort || FALLBACK_LOOPBACK_PORT;
@@ -317,6 +337,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	private readonly _tokenSets = new Map<VSCloneModelVendor, IVSCloneOAuthTokenSet>();
 	private readonly _refreshPromises = new Map<VSCloneModelVendor, DeferredPromise<void>>();
 	private _initialized = false;
+	private loopbackChannel: IChannel | undefined;
 
 	constructor(
 		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
@@ -325,6 +346,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		@INotificationService private readonly notificationService: INotificationService,
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
 		@IVSCloneMockProviderService private readonly mockProviderService: IVSCloneMockProviderService,
+		@IMainProcessService private readonly mainProcessService: IMainProcessService,
 	) {
 		super();
 		this._state = this._buildInitialState();
@@ -406,47 +428,16 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 			const codeVerifier = generateCodeVerifier();
 			const codeChallenge = await generateCodeChallenge(codeVerifier);
 			const state = generateState();
+			const authorization = config.redirectStrategy === 'loopback'
+				? await this._acquireLoopbackAuthorizationCode(vendor, config, state, codeChallenge)
+				: await this._acquireManualAuthorizationCode(vendor, config, state, codeChallenge);
 
-			let redirectUri: string;
-
-			if (config.redirectStrategy === 'loopback') {
-				// No local HTTP server in the sandboxed renderer.
-				// Use a fixed redirect URI so it matches between auth request and token exchange.
-				// The browser will show a connection-refused page, but the URL bar
-				// will contain the authorization code for the user to copy.
-				redirectUri = getLoopbackRedirectUri(config);
-			} else {
-				// Manual paste strategy (e.g. Anthropic) - fixed redirect URI
-				redirectUri = config.redirectUriTemplate;
-			}
-
-			const authUrl = buildAuthUrl(config, state, codeChallenge, redirectUri);
-			await this.openerService.open(URI.parse(authUrl));
-
-			const displayInfo = displayInfoOfOAuthProvider(vendor);
-			const promptMessage = config.redirectStrategy === 'loopback'
-				? localize(
-					'vsclone.oauth.pasteUrl',
-					'After authorizing in your browser, copy the full URL from the address bar and paste it here')
-				: localize(
-					'vsclone.oauth.pasteCode',
-					'Paste the authorization code from {0}',
-					displayInfo.title);
-
-			const pastedValue = await this.quickInputService.input({
-				prompt: promptMessage,
-				placeHolder: config.redirectStrategy === 'loopback'
-					? localize('vsclone.oauth.pasteUrl.placeholder', 'Paste URL or authorization code')
-					: localize('vsclone.oauth.pasteCode.placeholder', 'Authorization code'),
-				ignoreFocusLost: true,
-			});
-
-			if (!pastedValue) {
+			if (!authorization) {
 				this._setProviderStatus(vendor, 'signed_out');
 				return;
 			}
 
-			const code = parseCodeFromInput(pastedValue);
+			const { code, redirectUri } = authorization;
 
 			// Exchange code for tokens
 			const tokenResponse = await exchangeCodeForTokens(config, code, redirectUri, codeVerifier);
@@ -476,6 +467,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 			this._setProviderStatus(vendor, 'signed_in', { userDisplayName });
 			this._recomputeDerivedState();
 
+			const displayInfo = displayInfoOfOAuthProvider(vendor);
 			const signedInMsg = userDisplayName
 				? localize('vsclone.oauth.signedIn.withName', 'Signed in to {0} as {1}', displayInfo.title, userDisplayName)
 				: localize('vsclone.oauth.signedIn', 'Signed in to {0}', displayInfo.title);
@@ -489,6 +481,156 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 				localize('vsclone.oauth.signInFailed', 'Failed to sign in to {0}: {1}', displayInfoOfOAuthProvider(vendor).title, errorMessage)
 			);
 		}
+	}
+
+	private async _acquireManualAuthorizationCode(
+		vendor: VSCloneModelVendor,
+		config: IVSCloneOAuthProviderConfig,
+		expectedState: string,
+		codeChallenge: string
+	): Promise<{ code: string; redirectUri: string } | undefined> {
+		const redirectUri = config.redirectUriTemplate;
+		const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
+		await this.openerService.open(URI.parse(authUrl));
+
+		const code = await this._promptForAuthorizationCode(vendor, config, expectedState);
+		if (!code) {
+			return undefined;
+		}
+
+		return { code, redirectUri };
+	}
+
+	private async _acquireLoopbackAuthorizationCode(
+		vendor: VSCloneModelVendor,
+		config: IVSCloneOAuthProviderConfig,
+		expectedState: string,
+		codeChallenge: string
+	): Promise<{ code: string; redirectUri: string } | undefined> {
+		let redirectUri = getLoopbackRedirectUri(config);
+		let browserOpened = false;
+		let sessionId: string | undefined;
+		const loopbackChannel = this._getLoopbackChannel();
+
+		// Try automatic localhost callback capture first so the user sees a completion page
+		// instead of a browser network error. If this path fails, fall back to manual paste.
+		if (loopbackChannel) {
+			sessionId = generateUuid();
+			try {
+				const startResponse = await loopbackChannel.call<IVSCloneOAuthLoopbackStartResponse>(
+					VSCLONE_OAUTH_COMMAND_START_LOOPBACK,
+					{
+						sessionId,
+						redirectUriTemplate: config.redirectUriTemplate,
+						preferredPort: config.preferredPort,
+					}
+				);
+
+				redirectUri = startResponse.redirectUri;
+				const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
+				await this.openerService.open(URI.parse(authUrl));
+				browserOpened = true;
+
+				const callback = await loopbackChannel.call<IVSCloneOAuthLoopbackWaitResponse>(
+					VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK,
+					{
+						sessionId,
+						timeoutMs: LOOPBACK_WAIT_TIMEOUT_MS,
+					}
+				);
+
+				if (callback.state !== expectedState) {
+					throw new Error('Returned OAuth state did not match the sign-in request.');
+				}
+
+				return { code: callback.code, redirectUri };
+			} catch (err) {
+				this.logService.warn(`[VSCloneOAuth] Loopback callback flow failed for ${vendor}; falling back to manual code entry.`, err);
+			} finally {
+				await this._stopLoopbackSession(sessionId);
+			}
+		}
+
+		// Fallback path preserves the previous manual copy/paste behavior.
+		if (!browserOpened) {
+			const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
+			await this.openerService.open(URI.parse(authUrl));
+		}
+
+		const code = await this._promptForAuthorizationCode(vendor, config, expectedState);
+		if (!code) {
+			return undefined;
+		}
+
+		return { code, redirectUri };
+	}
+
+	private async _promptForAuthorizationCode(
+		vendor: VSCloneModelVendor,
+		config: IVSCloneOAuthProviderConfig,
+		expectedState: string
+	): Promise<string | undefined> {
+		const displayInfo = displayInfoOfOAuthProvider(vendor);
+		const promptMessage = config.redirectStrategy === 'loopback'
+			? localize(
+				'vsclone.oauth.pasteUrl',
+				'After authorizing in your browser, copy the full URL from the address bar and paste it here')
+			: localize(
+				'vsclone.oauth.pasteCode',
+				'Paste the authorization code from {0}',
+				displayInfo.title);
+
+		const pastedValue = await this.quickInputService.input({
+			prompt: promptMessage,
+			placeHolder: config.redirectStrategy === 'loopback'
+				? localize('vsclone.oauth.pasteUrl.placeholder', 'Paste URL or authorization code')
+				: localize('vsclone.oauth.pasteCode.placeholder', 'Authorization code'),
+			ignoreFocusLost: true,
+		});
+
+		if (!pastedValue) {
+			return undefined;
+		}
+
+		const parsed = parseOAuthInput(pastedValue);
+		if (!parsed.code) {
+			throw new Error('Authorization code was empty.');
+		}
+
+		if (parsed.state && parsed.state !== expectedState) {
+			throw new Error('Returned OAuth state did not match the sign-in request.');
+		}
+
+		return parsed.code;
+	}
+
+	private async _stopLoopbackSession(sessionId: string | undefined): Promise<void> {
+		const loopbackChannel = this._getLoopbackChannel();
+		if (!sessionId || !loopbackChannel) {
+			return;
+		}
+
+		try {
+			await loopbackChannel.call<void>(VSCLONE_OAUTH_COMMAND_STOP_LOOPBACK, { sessionId });
+		} catch {
+			// Cleanup is best-effort; the next session startup always replaces stale listeners.
+		}
+	}
+
+	private _getLoopbackChannel(): IChannel | undefined {
+		if (this.loopbackChannel) {
+			return this.loopbackChannel;
+		}
+
+		// This channel only exists in desktop/electron. When unavailable, sign-in falls back
+		// to manual URL/code paste so OAuth still works in less capable environments.
+		try {
+			this.loopbackChannel = this.mainProcessService.getChannel(VSCLONE_OAUTH_CHANNEL_NAME);
+		} catch {
+			this.loopbackChannel = undefined;
+		}
+
+		return this.loopbackChannel;
 	}
 
 	// -- Sign Out --

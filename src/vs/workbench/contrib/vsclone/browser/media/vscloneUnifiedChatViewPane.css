@@ -170,6 +170,92 @@
 	word-break: break-word;
 }
 
+.vsclone-thread-message-text-segment {
+	white-space: pre-wrap;
+	margin-bottom: 6px;
+}
+
+.vsclone-agent-trace-line {
+	font-size: 12px;
+	line-height: 1.35;
+	margin: 4px 0;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 92%, transparent 8%);
+}
+
+.vsclone-agent-trace-line.type-thinking {
+	font-style: italic;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 68%, transparent 32%);
+}
+
+.vsclone-agent-trace-line.type-tool {
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 74%, transparent 26%);
+}
+
+.vsclone-agent-trace-line.type-tool_result.status-success {
+	color: color-mix(in srgb, var(--vscode-testing-iconPassed) 88%, var(--vscode-editor-foreground) 12%);
+}
+
+.vsclone-agent-trace-line.type-tool_result.status-error {
+	color: color-mix(in srgb, var(--vscode-testing-iconFailed) 88%, var(--vscode-editor-foreground) 12%);
+}
+
+.vsclone-tool-diff-card {
+	margin: 8px 0 6px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, transparent 18%);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 82%, var(--vscode-editor-background) 18%);
+	overflow: hidden;
+}
+
+.vsclone-tool-diff-title {
+	padding: 7px 9px 2px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 86%, transparent 14%);
+}
+
+.vsclone-tool-diff-summary {
+	padding: 0 9px 7px;
+	font-size: 11px;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 92%, transparent 8%);
+}
+
+.vsclone-tool-diff-body {
+	max-height: 280px;
+	overflow: auto;
+	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 65%, transparent 35%);
+	background: color-mix(in srgb, var(--vscode-editor-background) 94%, black 6%);
+	font-family: var(--monaco-monospace-font);
+	font-size: 11px;
+	line-height: 1.45;
+}
+
+.vsclone-tool-diff-line {
+	white-space: pre;
+	padding: 0 9px;
+	color: var(--vscode-editor-foreground);
+}
+
+.vsclone-tool-diff-line.added {
+	background: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground, #2ea04340) 80%, transparent 20%);
+	color: color-mix(in srgb, var(--vscode-testing-iconPassed) 82%, var(--vscode-editor-foreground) 18%);
+}
+
+.vsclone-tool-diff-line.removed {
+	background: color-mix(in srgb, var(--vscode-diffEditor-removedLineBackground, #f8514940) 80%, transparent 20%);
+	color: color-mix(in srgb, var(--vscode-testing-iconFailed) 82%, var(--vscode-editor-foreground) 18%);
+}
+
+.vsclone-tool-diff-line.hunk {
+	color: color-mix(in srgb, var(--vscode-symbolIcon-colorForeground, var(--vscode-editor-foreground)) 82%, transparent 18%);
+}
+
+.vsclone-tool-diff-line.file {
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, transparent 12%);
+}
+
 .vsclone-thread-message-apply {
 	align-self: flex-start;
 	margin-top: 4px;
@@ -390,7 +476,7 @@
 	position: absolute;
 	left: 0;
 	bottom: calc(100% + 6px);
-	width: min(380px, calc(100vw - 56px));
+	width: min(320px, calc(100vw - 56px));
 	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, white 18%);
 	border-radius: 8px;
 	background: color-mix(in srgb, var(--vscode-editorWidget-background) 88%, var(--vscode-editor-background) 12%);
@@ -742,7 +828,7 @@
 	}
 
 	.vsclone-model-switcher-menu {
-		width: min(380px, 96vw);
+		width: min(320px, 96vw);
 	}
 
 	.vsclone-thread-message {

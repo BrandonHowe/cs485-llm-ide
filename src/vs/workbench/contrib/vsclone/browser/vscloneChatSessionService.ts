@@ -19,7 +19,7 @@ import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneModelSelection } from '../common/vscloneThreadModelSelectionService.js';
 import { IVSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
-import { IVSCloneApiRequestHandle, IVSCloneChatApiService } from './vscloneChatApiService.js';
+import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopService } from './vscloneAgentLoopService.js';
 import { IVSCloneContextGatheringService } from './vscloneContextGatheringService.js';
 
 export const IVSCloneChatSessionService = createDecorator<IVSCloneChatSessionService>('vscloneChatSessionService');
@@ -116,7 +116,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	declare readonly _serviceBrand: undefined;
 
 	private readonly mockResponses = new Map<string, IVSCloneMockResponseState>();
-	private readonly apiRequestHandles = new Map<string, IVSCloneApiRequestHandle>();
+	private readonly apiRequestHandles = new Map<string, IVSCloneAgentLoopHandle>();
 
 	constructor(
 		@IChatService private readonly chatService: IChatService,
@@ -124,7 +124,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
 		@IVSCloneOAuthService private readonly oauthService: IVSCloneOAuthService,
-		@IVSCloneChatApiService private readonly apiService: IVSCloneChatApiService,
+		@IVSCloneAgentLoopService private readonly agentLoopService: IVSCloneAgentLoopService,
 		@IVSCloneContextGatheringService private readonly contextGatheringService: IVSCloneContextGatheringService,
 		@IVSClonePromptAssemblyService private readonly promptAssemblyService: IVSClonePromptAssemblyService,
 	) {
@@ -296,7 +296,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			this.logService.warn('[VSCloneChatSession] Failed to gather prompt context; continuing without enriched system prompt', error);
 		}
 
-		const handle = this.apiService.submitApiPrompt({
+		const handle = this.agentLoopService.runAgentLoop({
 			threadId,
 			turnId,
 			sequence,

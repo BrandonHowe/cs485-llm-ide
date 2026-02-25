@@ -37,13 +37,16 @@ export interface IVSCloneVendorAdapter {
 // -- Catalog-to-API model ID mappings --
 
 const anthropicModelMap: Record<string, string> = {
-	'claude-3.5-sonnet': 'claude-sonnet-4-20250514',
-	'claude-3-opus': 'claude-opus-4-20250514',
-	'claude-3-haiku': 'claude-3-5-haiku-20241022',
+	'claude-opus-4.5': 'claude-opus-4-5-latest',
+	'claude-sonnet-4.5': 'claude-sonnet-4-5-latest',
+	'claude-sonnet-4.0': 'claude-sonnet-4-20250514',
 };
 
 const googleModelMap: Record<string, string> = {
-	'gemini-pro-2.0': 'gemini-2.0-pro',
+	'gemini-3-pro': 'gemini-3.0-pro',
+	'gemini-2.5-pro': 'gemini-2.5-pro',
+	'gemini-2.5-flash': 'gemini-2.5-flash',
+	'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',
 };
 
 function resolveApiModelId(vendor: VSCloneModelVendor, catalogModelId: string): string {
@@ -69,6 +72,26 @@ function buildMessages(options: IVSCloneApiSubmitOptions): { role: string; conte
 
 const defaultSystemMessage = 'You are VSClone, a helpful coding assistant. Answer clearly and concisely.';
 
+/**
+ * The OpenAI API only accepts these reasoning effort values.
+ * UI-level aliases (e.g. 'standard', 'lite') must be mapped before sending.
+ */
+type OpenAIReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+function toOpenAIReasoningEffort(level: VSCloneReasoningEffortLevel): OpenAIReasoningEffort {
+	switch (level) {
+		case 'xhigh': return 'xhigh';
+		case 'max': return 'xhigh';
+		case 'high': return 'high';
+		case 'medium': return 'medium';
+		case 'standard': return 'medium';
+		case 'low': return 'low';
+		case 'minimal': return 'minimal';
+		case 'lite': return 'low';
+		case 'none': return 'none';
+	}
+}
+
 const openaiAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveApiModelId('openai', options.modelId);
@@ -87,7 +110,7 @@ const openaiAdapter: IVSCloneVendorAdapter = {
 
 		// Reasoning controls are opt-in and model-gated in the catalog, so we only forward a validated value.
 		if (options.reasoningEffort) {
-			body.reasoning = { effort: options.reasoningEffort };
+			body.reasoning = { effort: toOpenAIReasoningEffort(options.reasoningEffort) };
 		}
 
 		return {
@@ -125,17 +148,42 @@ const openaiAdapter: IVSCloneVendorAdapter = {
 	},
 };
 
+/**
+ * Anthropic extended thinking is controlled via a token budget rather than a string level.
+ * Returns undefined when thinking should be disabled.
+ */
+function toAnthropicThinkingBudget(level: VSCloneReasoningEffortLevel, maxTokens: number): number | undefined {
+	switch (level) {
+		case 'max': return Math.round(maxTokens * 0.9);
+		case 'high': return Math.round(maxTokens * 0.8);
+		case 'medium': return Math.round(maxTokens * 0.5);
+		case 'standard': return Math.round(maxTokens * 0.5);
+		case 'low': return Math.round(maxTokens * 0.2);
+		default: return undefined;
+	}
+}
+
 const anthropicAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveApiModelId('anthropic', options.modelId);
 		const nonSystemMessages = buildMessages(options);
 
+		const anthropicMaxTokens = 16000;
+		const thinkingBudget = options.reasoningEffort
+			? toAnthropicThinkingBudget(options.reasoningEffort, anthropicMaxTokens)
+			: undefined;
+
 		const body: Record<string, unknown> = {
 			model: apiModelId,
 			messages: nonSystemMessages,
-			max_tokens: 4096,
+			max_tokens: thinkingBudget ? anthropicMaxTokens : 4096,
 			stream: true,
 		};
+
+		if (thinkingBudget) {
+			body.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
+			body.temperature = 1;
+		}
 
 		body.system = options.systemMessage?.trim() || defaultSystemMessage;
 

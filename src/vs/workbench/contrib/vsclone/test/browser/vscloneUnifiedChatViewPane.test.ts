@@ -10,6 +10,7 @@ import { IContextMenuService } from '../../../../../platform/contextview/browser
 import { VSCloneChatHistoryRail } from '../../browser/vscloneChatHistoryRail.js';
 import type { IVSCloneChatSubmitOptions } from '../../browser/vscloneChatSessionService.js';
 import { VSCloneUnifiedChatViewPane, toVSCloneHistoryQuery } from '../../browser/vscloneUnifiedChatViewPane.js';
+import { formatToolResultWithDiff } from '../../common/vscloneToolResultDiff.js';
 
 interface ITestPaneTarget {
 	railVisible: boolean;
@@ -39,6 +40,11 @@ interface IRenderConversationSurfaceTarget {
 interface ISubmitPromptTarget {
 	[key: string]: unknown;
 	submitPrompt: () => Promise<void>;
+}
+
+interface IRenderToolAwareAssistantTarget {
+	[key: string]: unknown;
+	renderToolAwareAssistantText: (container: HTMLElement, text: string, streaming: boolean) => void;
 }
 
 suite('VSCloneUnifiedChatViewPane', () => {
@@ -314,5 +320,33 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		await pane.openSession('thread-1');
 		assert.strictEqual(refreshCount, 1);
+	});
+
+	test('tool-aware renderer shows inline diff card for mutating tool results', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderToolAwareAssistantTarget;
+		const container = document.createElement('div');
+		const formattedOutput = formatToolResultWithDiff(
+			'Applied 1 edit(s) to /workspace/src/app.ts. Current diagnostics on file: 0.',
+			[
+				'--- a/src/app.ts',
+				'+++ b/src/app.ts',
+				'@@ change 1 @@',
+				'-const x = 1;',
+				'+const x = 2;',
+			].join('\n'),
+		);
+		const assistantText = [
+			'<agent_trace type="tool" status="start">Edited src/app.ts</agent_trace>',
+			`<tool_result tool_name="edit_file" success="true">${formattedOutput}</tool_result>`,
+			'<agent_trace type="tool_result" status="success">edit_file succeeded</agent_trace>',
+		].join('\n');
+
+		target.renderToolAwareAssistantText(container, assistantText, false);
+
+		assert.ok(container.querySelector('.vsclone-tool-diff-card'));
+		assert.ok(container.querySelector('.vsclone-tool-diff-line.added'));
+		assert.ok(container.querySelector('.vsclone-tool-diff-line.removed'));
+		assert.ok(container.textContent?.includes('Applied file edits'));
 	});
 });

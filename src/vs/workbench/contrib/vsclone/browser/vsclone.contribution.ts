@@ -19,10 +19,12 @@ import { registerVSCloneOAuthActions } from './vscloneOAuthActions.js';
 import { VSCloneOAuthService } from './vscloneOAuthService.js';
 import { VSCloneChatRuntimeService } from './vscloneChatRuntimeService.js';
 import { IVSCloneChatApiService, VSCloneChatApiService } from './vscloneChatApiService.js';
+import { IVSCloneAgentLoopService, VSCloneAgentLoopService } from './vscloneAgentLoopService.js';
 import { IVSCloneChatSessionService, VSCloneChatSessionService } from './vscloneChatSessionService.js';
 import { IVSCloneContextGatheringService, VSCloneContextGatheringService } from './vscloneContextGatheringService.js';
 import { IVSCloneEditApplicationService, VSCloneEditApplicationService } from './vscloneEditApplicationService.js';
 import { IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
+import { IVSCloneToolExecutionService, VSCloneToolExecutionService } from './vscloneToolExecutionService.js';
 import { VSCloneUnifiedChatViewPane } from './vscloneUnifiedChatViewPane.js';
 import { VSCloneViewContainerId, VSCloneViewId } from './vsclone.js';
 import { IVSCloneChatHistoryMigrationService, VSCloneChatHistoryMigrationService } from '../common/vscloneChatHistoryMigrationService.js';
@@ -38,6 +40,7 @@ const vscloneContributionRegistrationKey = '__vscloneContributionRegistered__';
 type VSCloneContributionGlobalScope = typeof globalThis & {
 	readonly [vscloneContributionRegistrationKey]?: boolean;
 };
+const vscloneSidebarMinimumWidth = 300;
 
 function registerVSCloneContribution(): void {
 	const vscloneViewIcon = registerIcon('vsclone-view-icon', Codicon.chatSparkle, localize('vsclone.viewIcon', 'View icon of the VSClone chat view.'));
@@ -49,6 +52,8 @@ function registerVSCloneContribution(): void {
 		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [VSCloneViewContainerId, { mergeViewWithContainerWhenSingleView: false }]),
 		storageId: VSCloneViewContainerId,
 		hideIfEmpty: false,
+		// Keep the unified chat pane from being resized below a usable width.
+		minimumWidth: vscloneSidebarMinimumWidth,
 	}, ViewContainerLocation.Sidebar, { isDefault: false, doNotRegisterOpenCommand: true });
 
 	const viewDescriptor: IViewDescriptor = {
@@ -74,6 +79,8 @@ function registerVSCloneContribution(): void {
 	registerSingleton(IVSCloneEditApplicationService, VSCloneEditApplicationService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatApiService, VSCloneChatApiService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneToolExecutionService, VSCloneToolExecutionService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneAgentLoopService, VSCloneAgentLoopService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatSessionService, VSCloneChatSessionService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneOAuthService, VSCloneOAuthService, InstantiationType.Delayed);
 

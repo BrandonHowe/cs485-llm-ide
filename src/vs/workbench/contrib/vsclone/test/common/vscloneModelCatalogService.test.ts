@@ -34,9 +34,9 @@ suite('VSCloneModelCatalogService', () => {
 		assert.deepStrictEqual(state.providers.map(provider => provider.vendor), ['openai', 'anthropic']);
 		const openAIModel = state.models.find(model => model.identifier === 'openai/gpt-5.3-codex');
 		assert.ok(openAIModel);
-		assert.deepStrictEqual(openAIModel?.reasoningEffortLevels, ['low', 'medium', 'high']);
+		assert.deepStrictEqual(openAIModel?.reasoningEffortLevels, ['xhigh', 'high', 'medium', 'low']);
 		assert.strictEqual(openAIModel?.defaultReasoningEffort, 'medium');
-		assert.ok(state.models.some(model => model.identifier === 'anthropic/claude-3.5-sonnet'));
+		assert.ok(state.models.some(model => model.identifier === 'anthropic/claude-opus-4.5'));
 	});
 
 	test('provider status projects requires_config when enabled but unconfigured', async () => {

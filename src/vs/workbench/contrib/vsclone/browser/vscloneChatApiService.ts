@@ -35,14 +35,24 @@ export interface IVSCloneApiRequestHandle {
 	cancel(): void;
 }
 
+export interface IVSCloneApiStreamObserver {
+	readonly onDelta?: (text: string) => void;
+	readonly onComplete?: () => void;
+	readonly onError?: (message: string) => void;
+	readonly onAborted?: () => void;
+}
+
 export interface IVSCloneChatApiService {
 	readonly _serviceBrand: undefined;
 	submitApiPrompt(options: IVSCloneApiSubmitOptions): IVSCloneApiRequestHandle;
+	submitApiPromptForAgentLoop(options: IVSCloneApiSubmitOptions, observer: IVSCloneApiStreamObserver): IVSCloneApiRequestHandle;
 }
 
 interface IVSClonePendingApiRequest {
 	readonly requestId: string;
 	readonly options: IVSCloneApiSubmitOptions;
+	readonly mode: 'history' | 'raw';
+	readonly observer?: IVSCloneApiStreamObserver;
 	readonly done: DeferredPromise<void>;
 	cancelled: boolean;
 }
@@ -66,26 +76,42 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 	}
 
 	submitApiPrompt(options: IVSCloneApiSubmitOptions): IVSCloneApiRequestHandle {
+		return this.submitApiPromptInternal(options, 'history');
+	}
+
+	submitApiPromptForAgentLoop(options: IVSCloneApiSubmitOptions, observer: IVSCloneApiStreamObserver): IVSCloneApiRequestHandle {
+		return this.submitApiPromptInternal(options, 'raw', observer);
+	}
+
+	private submitApiPromptInternal(
+		options: IVSCloneApiSubmitOptions,
+		mode: 'history' | 'raw',
+		observer?: IVSCloneApiStreamObserver,
+	): IVSCloneApiRequestHandle {
 		const requestId = generateUuid();
 		const pending: IVSClonePendingApiRequest = {
 			requestId,
 			options,
+			mode,
+			observer,
 			done: new DeferredPromise<void>(),
 			cancelled: false,
 		};
 		this.pendingRequests.set(requestId, pending);
 
-		this.historyService.applyTurnUpdate({
-			threadId: options.threadId,
-			turnId: options.turnId,
-			sequence: options.sequence,
-			sessionResource: options.sessionResource,
-			phase: 'prompt',
-			occurredAt: Date.now(),
-			promptText: options.promptText,
-			modelIdentifier: options.modelIdentifier,
-			providerId: options.vendor,
-		});
+		if (mode === 'history') {
+			this.historyService.applyTurnUpdate({
+				threadId: options.threadId,
+				turnId: options.turnId,
+				sequence: options.sequence,
+				sessionResource: options.sessionResource,
+				phase: 'prompt',
+				occurredAt: Date.now(),
+				promptText: options.promptText,
+				modelIdentifier: options.modelIdentifier,
+				providerId: options.vendor,
+			});
+		}
 
 		void this.submitToMainProcess(pending);
 
@@ -136,7 +162,10 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 
 			const message = error instanceof Error ? error.message : String(error);
 			this.logService.error(`[VSCloneChatApi] Failed to submit ${options.vendor} request:`, error);
-			this.applyErrorUpdate(pending, message);
+			if (pending.mode === 'history') {
+				this.applyErrorUpdate(pending, message);
+			}
+			pending.observer?.onError?.(message);
 			this.finishRequest(requestId);
 		}
 	}
@@ -153,17 +182,21 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 			this.logService.warn('[VSCloneChatApi] Failed to abort request in main process', error);
 		});
 
-		this.historyService.applyTurnUpdate({
-			threadId: pending.options.threadId,
-			turnId: pending.options.turnId,
-			sequence: pending.options.sequence,
-			sessionResource: pending.options.sessionResource,
-			phase: 'cancel',
-			occurredAt: Date.now(),
-			promptText: pending.options.promptText,
-			modelIdentifier: pending.options.modelIdentifier,
-			providerId: pending.options.vendor,
-		});
+		if (pending.mode === 'history') {
+			this.historyService.applyTurnUpdate({
+				threadId: pending.options.threadId,
+				turnId: pending.options.turnId,
+				sequence: pending.options.sequence,
+				sessionResource: pending.options.sessionResource,
+				phase: 'cancel',
+				occurredAt: Date.now(),
+				promptText: pending.options.promptText,
+				modelIdentifier: pending.options.modelIdentifier,
+				providerId: pending.options.vendor,
+			});
+		} else {
+			pending.observer?.onAborted?.();
+		}
 		this.finishRequest(requestId);
 	}
 
@@ -173,19 +206,22 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 			return;
 		}
 
-		this.historyService.applyTurnUpdate({
-			threadId: pending.options.threadId,
-			turnId: pending.options.turnId,
-			sequence: pending.options.sequence,
-			sessionResource: pending.options.sessionResource,
-			phase: 'stream',
-			occurredAt: Date.now(),
-			promptText: pending.options.promptText,
-			modelIdentifier: pending.options.modelIdentifier,
-			providerId: pending.options.vendor,
-			responsePlainTextDelta: event.text,
-			responseMarkdownDelta: event.text,
-		});
+		pending.observer?.onDelta?.(event.text);
+		if (pending.mode === 'history') {
+			this.historyService.applyTurnUpdate({
+				threadId: pending.options.threadId,
+				turnId: pending.options.turnId,
+				sequence: pending.options.sequence,
+				sessionResource: pending.options.sessionResource,
+				phase: 'stream',
+				occurredAt: Date.now(),
+				promptText: pending.options.promptText,
+				modelIdentifier: pending.options.modelIdentifier,
+				providerId: pending.options.vendor,
+				responsePlainTextDelta: event.text,
+				responseMarkdownDelta: event.text,
+			});
+		}
 	}
 
 	private handleCompleteEvent(event: IVSCloneChatApiCompleteEvent): void {
@@ -194,26 +230,28 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 			return;
 		}
 
-		this.historyService.applyTurnUpdate({
-			threadId: pending.options.threadId,
-			turnId: pending.options.turnId,
-			sequence: pending.options.sequence,
-			sessionResource: pending.options.sessionResource,
-			phase: 'complete',
-			occurredAt: Date.now(),
-			promptText: pending.options.promptText,
-			modelIdentifier: pending.options.modelIdentifier,
-			providerId: pending.options.vendor,
-		});
+		if (pending.mode === 'history') {
+			this.historyService.applyTurnUpdate({
+				threadId: pending.options.threadId,
+				turnId: pending.options.turnId,
+				sequence: pending.options.sequence,
+				sessionResource: pending.options.sessionResource,
+				phase: 'complete',
+				occurredAt: Date.now(),
+				promptText: pending.options.promptText,
+				modelIdentifier: pending.options.modelIdentifier,
+				providerId: pending.options.vendor,
+			});
 
-		// We pre-parse edits here so completion logging can capture when the assistant produced
-		// apply-ready changes, while the UI remains the authority for actually applying edits.
-		const completedTurn = this.historyService.getTurns(pending.options.threadId).find(turn => turn.turnId === pending.options.turnId);
-		const responseText = completedTurn ? (completedTurn.responsePlainText || completedTurn.responseMarkdown) : '';
-		if (responseText && this.editApplicationService.hasSearchReplaceBlocks(responseText)) {
-			this.logService.info(`[VSCloneChatApi] Detected SEARCH/REPLACE edits in turn ${pending.options.turnId}`);
+			// We pre-parse edits here so completion logging can capture when the assistant produced
+			// apply-ready changes, while the UI remains the authority for actually applying edits.
+			const completedTurn = this.historyService.getTurns(pending.options.threadId).find(turn => turn.turnId === pending.options.turnId);
+			const responseText = completedTurn ? (completedTurn.responsePlainText || completedTurn.responseMarkdown) : '';
+			if (responseText && this.editApplicationService.hasSearchReplaceBlocks(responseText)) {
+				this.logService.info(`[VSCloneChatApi] Detected SEARCH/REPLACE edits in turn ${pending.options.turnId}`);
+			}
 		}
-
+		pending.observer?.onComplete?.();
 		this.finishRequest(event.requestId);
 	}
 
@@ -223,7 +261,10 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 			return;
 		}
 
-		this.applyErrorUpdate(pending, event.message);
+		if (pending.mode === 'history') {
+			this.applyErrorUpdate(pending, event.message);
+		}
+		pending.observer?.onError?.(event.message);
 		this.finishRequest(event.requestId);
 	}
 
@@ -233,17 +274,20 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 			return;
 		}
 
-		this.historyService.applyTurnUpdate({
-			threadId: pending.options.threadId,
-			turnId: pending.options.turnId,
-			sequence: pending.options.sequence,
-			sessionResource: pending.options.sessionResource,
-			phase: 'cancel',
-			occurredAt: Date.now(),
-			promptText: pending.options.promptText,
-			modelIdentifier: pending.options.modelIdentifier,
-			providerId: pending.options.vendor,
-		});
+		if (pending.mode === 'history') {
+			this.historyService.applyTurnUpdate({
+				threadId: pending.options.threadId,
+				turnId: pending.options.turnId,
+				sequence: pending.options.sequence,
+				sessionResource: pending.options.sessionResource,
+				phase: 'cancel',
+				occurredAt: Date.now(),
+				promptText: pending.options.promptText,
+				modelIdentifier: pending.options.modelIdentifier,
+				providerId: pending.options.vendor,
+			});
+		}
+		pending.observer?.onAborted?.();
 		this.finishRequest(event.requestId);
 	}
 

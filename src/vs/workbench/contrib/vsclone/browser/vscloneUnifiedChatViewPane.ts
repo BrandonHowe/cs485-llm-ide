@@ -26,12 +26,14 @@ import { IViewDescriptorService } from '../../../common/views.js';
 import { IVSCloneChatHistoryQuery, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
 import { IVSCloneModelCatalogService, type VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
 import { IVSCloneChatLocation, IVSCloneThreadModelSelectionService, type IVSCloneModelSelection } from '../common/vscloneThreadModelSelectionService.js';
+import { parseToolCalls } from '../common/vscloneToolCallParser.js';
 import { VSCloneChatHistoryRail, VSCloneRailTab } from './vscloneChatHistoryRail.js';
 import { IVSCloneChatSessionService } from './vscloneChatSessionService.js';
 import { VSCloneModelSwitcherWidget } from './vscloneModelSwitcherWidget.js';
 import { IVSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
 import { toVSCloneRailRows } from './vscloneChatHistoryRailTree.js';
 import { IVSCloneEditApplicationService } from './vscloneEditApplicationService.js';
+import { parseToolResultDiff } from '../common/vscloneToolResultDiff.js';
 
 const railWidthSetting = 'vsclone.chatHistory.railWidth';
 const modelSwitcherEnabledSetting = 'vsclone.modelSwitcher.enabled';
@@ -45,6 +47,67 @@ export function toVSCloneHistoryQuery(query: string, tab: VSCloneRailTab): IVSCl
 		tab,
 		includeArchived: tab === 'all',
 	};
+}
+
+interface IParsedToolResultBlock {
+	readonly toolName: string;
+	readonly success: boolean;
+	readonly output: string;
+	readonly rawXml: string;
+	readonly startOffset: number;
+	readonly endOffset: number;
+}
+
+interface IParsedAgentTraceBlock {
+	readonly type: string;
+	readonly status?: string;
+	readonly message: string;
+	readonly rawXml: string;
+	readonly startOffset: number;
+	readonly endOffset: number;
+}
+
+function parseToolResultBlocks(text: string): readonly IParsedToolResultBlock[] {
+	const blocks: IParsedToolResultBlock[] = [];
+	const pattern = /<tool_result\s+tool_name="([^"]+)"\s+success="(true|false)">([\s\S]*?)<\/tool_result>/g;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(text)) !== null) {
+		blocks.push({
+			toolName: match[1],
+			success: match[2] === 'true',
+			output: match[3].trim(),
+			rawXml: match[0],
+			startOffset: match.index,
+			endOffset: match.index + match[0].length,
+		});
+	}
+	return blocks;
+}
+
+function parseAgentTraceBlocks(text: string): readonly IParsedAgentTraceBlock[] {
+	const blocks: IParsedAgentTraceBlock[] = [];
+	const pattern = /<agent_trace\s+type="([^"]+)"(?:\s+status="([^"]+)")?>([\s\S]*?)<\/agent_trace>/g;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(text)) !== null) {
+		blocks.push({
+			type: match[1],
+			status: match[2],
+			message: decodeXmlText(match[3].trim()),
+			rawXml: match[0],
+			startOffset: match.index,
+			endOffset: match.index + match[0].length,
+		});
+	}
+	return blocks;
+}
+
+function decodeXmlText(value: string): string {
+	return value
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&apos;/g, '\'')
+		.replace(/&amp;/g, '&');
 }
 
 export class VSCloneUnifiedChatViewPane extends ViewPane {
@@ -650,7 +713,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		body.className = 'vsclone-thread-message-body';
 		const text = turn.responsePlainText || turn.responseMarkdown;
 		if (text.trim().length > 0) {
-			body.textContent = text;
+			if (text.includes('<tool_call>') || text.includes('<tool_result') || text.includes('<agent_trace')) {
+				this.renderToolAwareAssistantText(body, text, turn.status === 'streaming');
+			} else {
+				body.textContent = text;
+			}
 		} else if (turn.status === 'pending' || turn.status === 'streaming') {
 			body.textContent = localize('vsclone.thread.assistant.pending', 'Thinking...');
 			item.classList.add('streaming');
@@ -673,6 +740,185 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		return item;
+	}
+
+	private renderToolAwareAssistantText(container: HTMLElement, text: string, streaming: boolean): void {
+		type ParsedBlock = {
+			readonly kind: 'tool_call' | 'tool_result' | 'trace';
+			readonly startOffset: number;
+			readonly endOffset: number;
+			readonly rawXml: string;
+			readonly toolName: string;
+			readonly success?: boolean;
+			readonly output?: string;
+			readonly traceType?: string;
+			readonly traceStatus?: string;
+			readonly traceMessage?: string;
+		};
+
+		const callBlocks = parseToolCalls(text).toolCalls.map<ParsedBlock>(call => ({
+			kind: 'tool_call',
+			startOffset: call.startOffset,
+			endOffset: call.endOffset,
+			rawXml: call.rawXml,
+			toolName: call.name,
+		}));
+		const resultBlocks = parseToolResultBlocks(text).map<ParsedBlock>(result => ({
+			kind: 'tool_result',
+			startOffset: result.startOffset,
+			endOffset: result.endOffset,
+			rawXml: result.rawXml,
+			toolName: result.toolName,
+			success: result.success,
+			output: result.output,
+		}));
+		const traceBlocks = parseAgentTraceBlocks(text).map<ParsedBlock>(trace => ({
+			kind: 'trace',
+			startOffset: trace.startOffset,
+			endOffset: trace.endOffset,
+			rawXml: trace.rawXml,
+			toolName: '',
+			traceType: trace.type,
+			traceStatus: trace.status,
+			traceMessage: trace.message,
+		}));
+		const hasTraceBlocks = traceBlocks.length > 0;
+
+		const blocks = [...callBlocks, ...resultBlocks, ...traceBlocks].sort((left, right) => left.startOffset - right.startOffset);
+		if (blocks.length === 0) {
+			container.textContent = text;
+			return;
+		}
+
+		let cursor = 0;
+		for (const block of blocks) {
+			if (block.startOffset > cursor) {
+				this.appendPlainAssistantTextSegment(container, text.slice(cursor, block.startOffset));
+			}
+
+			if (block.kind === 'tool_call') {
+				// When agent trace markers are available, prefer those concise status lines and suppress
+				// the raw tool XML block to reduce visual noise in the transcript.
+				if (!hasTraceBlocks) {
+					container.appendChild(this.renderToolCallStatusLine(block.toolName, streaming));
+				}
+			} else if (block.kind === 'tool_result') {
+				const diffCard = (block.success && block.output)
+					? this.renderToolResultDiffCard(block.toolName, block.output)
+					: undefined;
+				if (diffCard) {
+					container.appendChild(diffCard);
+				}
+				// Keep a fallback status line for older turns that do not contain <agent_trace> markers.
+				if (!hasTraceBlocks && !diffCard) {
+					container.appendChild(this.renderToolResultStatusLine(block.toolName, !!block.success));
+				}
+			} else {
+				container.appendChild(this.renderAgentTraceBlock(block.traceType ?? '', block.traceMessage ?? '', block.traceStatus));
+			}
+			cursor = block.endOffset;
+		}
+
+		if (cursor < text.length) {
+			this.appendPlainAssistantTextSegment(container, text.slice(cursor));
+		}
+	}
+
+	private appendPlainAssistantTextSegment(container: HTMLElement, text: string): void {
+		if (!text || text.trim().length === 0) {
+			return;
+		}
+		const segment = document.createElement('div');
+		segment.className = 'vsclone-thread-message-text-segment';
+		segment.textContent = text;
+		container.appendChild(segment);
+	}
+
+	private renderToolCallStatusLine(toolName: string, streaming: boolean): HTMLElement {
+		const line = document.createElement('div');
+		line.className = 'vsclone-agent-trace-line';
+		line.classList.add('type-tool', 'status-start');
+		line.textContent = streaming
+			? localize('vsclone.thread.toolCall.running', 'Tool call running: {0}', toolName)
+			: localize('vsclone.thread.toolCall.complete', 'Tool call: {0}', toolName);
+		return line;
+	}
+
+	private renderToolResultStatusLine(toolName: string, success: boolean): HTMLElement {
+		const line = document.createElement('div');
+		line.className = 'vsclone-agent-trace-line';
+		line.classList.add('type-tool_result', success ? 'status-success' : 'status-error');
+		line.textContent = success
+			? localize('vsclone.thread.toolResult.success', 'Tool result: {0} (success)', toolName)
+			: localize('vsclone.thread.toolResult.failure', 'Tool result: {0} (failed)', toolName);
+		return line;
+	}
+
+	private renderAgentTraceBlock(type: string, message: string, status: string | undefined): HTMLElement {
+		const line = document.createElement('div');
+		line.className = 'vsclone-agent-trace-line';
+		line.classList.add(type ? `type-${type}` : 'type-unknown');
+		if (status) {
+			line.classList.add(`status-${status}`);
+		}
+		line.textContent = message || localize('vsclone.thread.trace.empty', '(trace event)');
+		return line;
+	}
+
+	/**
+	 * Diff cards surface mutating tool output inline so users can inspect applied changes
+	 * without interruptive dialogs or opening a separate editor just to verify the patch.
+	 */
+	private renderToolResultDiffCard(toolName: string, output: string): HTMLElement | undefined {
+		const parsedDiff = parseToolResultDiff(output);
+		if (!parsedDiff) {
+			return undefined;
+		}
+
+		const card = document.createElement('div');
+		card.className = 'vsclone-tool-diff-card';
+
+		const title = document.createElement('div');
+		title.className = 'vsclone-tool-diff-title';
+		switch (toolName) {
+			case 'edit_file':
+				title.textContent = localize('vsclone.thread.toolDiff.editedTitle', 'Applied file edits');
+				break;
+			case 'create_file':
+				title.textContent = localize('vsclone.thread.toolDiff.createdTitle', 'Created file');
+				break;
+			default:
+				title.textContent = localize('vsclone.thread.toolDiff.genericTitle', 'Applied workspace change');
+				break;
+		}
+		card.appendChild(title);
+
+		if (parsedDiff.summary) {
+			const summary = document.createElement('div');
+			summary.className = 'vsclone-tool-diff-summary';
+			summary.textContent = parsedDiff.summary;
+			card.appendChild(summary);
+		}
+
+		const body = document.createElement('div');
+		body.className = 'vsclone-tool-diff-body';
+		for (const rawLine of parsedDiff.diff.split('\n')) {
+			const line = document.createElement('div');
+			line.className = 'vsclone-tool-diff-line';
+			if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
+				line.classList.add('added');
+			} else if (rawLine.startsWith('-') && !rawLine.startsWith('---')) {
+				line.classList.add('removed');
+			} else if (rawLine.startsWith('@@')) {
+				line.classList.add('hunk');
+			} else if (rawLine.startsWith('---') || rawLine.startsWith('+++')) {
+				line.classList.add('file');
+			}
+			line.textContent = rawLine || ' ';
+			body.appendChild(line);
+		}
+		card.appendChild(body);
+		return card;
 	}
 
 	private async applyAssistantEdits(turn: IVSCloneChatHistoryTurn, button: HTMLButtonElement): Promise<void> {
@@ -899,9 +1145,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private toReasoningEffortLabel(level: VSCloneReasoningEffortLevel): string {
 		switch (level) {
-			case 'low': return localize('vsclone.composer.reasoningEffort.low', 'Low');
+			case 'xhigh': return localize('vsclone.composer.reasoningEffort.xhigh', 'Extra High');
+			case 'max': return localize('vsclone.composer.reasoningEffort.max', 'Max');
 			case 'high': return localize('vsclone.composer.reasoningEffort.high', 'High');
-			default: return localize('vsclone.composer.reasoningEffort.medium', 'Medium');
+			case 'medium': return localize('vsclone.composer.reasoningEffort.medium', 'Medium');
+			case 'standard': return localize('vsclone.composer.reasoningEffort.standard', 'Standard');
+			case 'low': return localize('vsclone.composer.reasoningEffort.low', 'Low');
+			case 'minimal': return localize('vsclone.composer.reasoningEffort.minimal', 'Minimal');
+			case 'lite': return localize('vsclone.composer.reasoningEffort.lite', 'Lite');
+			case 'none': return localize('vsclone.composer.reasoningEffort.none', 'None');
 		}
 	}
 

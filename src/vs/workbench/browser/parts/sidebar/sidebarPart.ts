@@ -37,10 +37,20 @@ import { VisibleViewContainersTracker } from '../visibleViewContainersTracker.js
 export class SidebarPart extends AbstractPaneCompositePart {
 
 	static readonly activeViewletSettingsKey = 'workbench.sidebar.activeviewletid';
+	private static readonly defaultMinimumWidth = 170;
 
 	//#region IView
 
-	readonly minimumWidth: number = 170;
+	get minimumWidth(): number {
+		const activeViewContainerId = this.getActivePaneComposite()?.getId();
+		if (!activeViewContainerId) {
+			return SidebarPart.defaultMinimumWidth;
+		}
+
+		// Let specific view containers request a wider minimum sidebar width when they are active.
+		const minimumWidth = this.viewDescriptorServiceForSizing.getViewContainerById(activeViewContainerId)?.minimumWidth;
+		return Math.max(SidebarPart.defaultMinimumWidth, minimumWidth ?? 0);
+	}
 	readonly maximumWidth: number = Number.POSITIVE_INFINITY;
 	readonly minimumHeight: number = 0;
 	readonly maximumHeight: number = Number.POSITIVE_INFINITY;
@@ -65,6 +75,7 @@ export class SidebarPart extends AbstractPaneCompositePart {
 
 	private readonly activityBarPart = this._register(this.instantiationService.createInstance(ActivitybarPart, this));
 	private readonly visibleViewContainersTracker: VisibleViewContainersTracker;
+	private readonly viewDescriptorServiceForSizing: IViewDescriptorService;
 
 	//#endregion
 
@@ -106,6 +117,8 @@ export class SidebarPart extends AbstractPaneCompositePart {
 			extensionService,
 			menuService,
 		);
+
+		this.viewDescriptorServiceForSizing = viewDescriptorService;
 
 		// Track visible view containers for auto-hide
 		this.visibleViewContainersTracker = this._register(instantiationService.createInstance(VisibleViewContainersTracker, ViewContainerLocation.Sidebar));
