@@ -33,8 +33,11 @@ import { IVSCloneMockProviderService, VSCloneMockProviderService } from '../comm
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneModelCatalogService, VSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
 import { IVSClonePromptAssemblyService, VSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
-import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
+import { VSCloneUseMockProviderTransportSetting, VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
+import { IVSCloneCompletionBackend } from '../common/vscloneCompletionBackend.js';
+import { VSCloneAutocompleteService, VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from './vscloneAutocompleteService.js';
+import { VSCloneMockCompletionBackend } from './vscloneMockCompletionBackend.js';
 
 const vscloneContributionRegistrationKey = '__vscloneContributionRegistered__';
 type VSCloneContributionGlobalScope = typeof globalThis & {
@@ -83,11 +86,13 @@ function registerVSCloneContribution(): void {
 	registerSingleton(IVSCloneAgentLoopService, VSCloneAgentLoopService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatSessionService, VSCloneChatSessionService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneOAuthService, VSCloneOAuthService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneCompletionBackend, VSCloneMockCompletionBackend, InstantiationType.Delayed);
 
 	registerVSCloneChatHistoryActions();
 	registerVSCloneModelSwitcherActions();
 	registerVSCloneOAuthActions();
 	registerWorkbenchContribution2(VSCloneChatRuntimeService.ID, VSCloneChatRuntimeService, WorkbenchPhase.BlockRestore);
+	registerWorkbenchContribution2(VSCloneAutocompleteService.ID, VSCloneAutocompleteService, WorkbenchPhase.AfterRestored);
 
 	Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 		id: 'vsclone',
@@ -152,10 +157,29 @@ function registerVSCloneContribution(): void {
 				description: localize('vsclone.configuration.chat.useVSCodeChatBackend', 'Route VSClone sends through VS Code chat providers. Disabled keeps VSClone decoupled from Copilot/login-dependent chat backends.'),
 				scope: ConfigurationScope.WINDOW,
 			},
+			[VSCloneUseMockProviderTransportSetting]: {
+				type: 'boolean',
+				default: true,
+				description: localize('vsclone.configuration.chat.useMockProviderTransport', 'Use local mock auth + response transport for VSClone provider sends. Disable to use real provider OAuth/API flows.'),
+				scope: ConfigurationScope.WINDOW,
+			},
 			['vsclone.modelSwitcher.enabled']: {
 				type: 'boolean',
 				default: true,
 				description: localize('vsclone.configuration.modelSwitcher.enabled', 'Enable the VSClone model selector in the unified chat composer.'),
+				scope: ConfigurationScope.WINDOW,
+			},
+			[VSCloneAutocompleteEnabledSetting]: {
+				type: 'boolean',
+				default: true,
+				description: localize('vsclone.configuration.autocomplete.enabled', 'Enable VSClone inline code completions.'),
+				scope: ConfigurationScope.WINDOW,
+			},
+			[VSCloneAutocompleteDebounceMsSetting]: {
+				type: 'number',
+				default: 500,
+				minimum: 0,
+				description: localize('vsclone.configuration.autocomplete.debounceMs', 'Delay in milliseconds before VSClone requests an inline completion after typing stops.'),
 				scope: ConfigurationScope.WINDOW,
 			},
 		},

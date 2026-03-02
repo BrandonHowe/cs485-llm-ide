@@ -13,7 +13,7 @@ export const IVSCloneOAuthService = createDecorator<IVSCloneOAuthService>('vsclo
 export interface IVSCloneOAuthService {
 	readonly _serviceBrand: undefined;
 
-	/** Void-style: immutable state snapshot, always current */
+	/** Immutable state snapshot, always current */
 	readonly state: IVSCloneOAuthState;
 
 	/** Fires when any provider's auth state changes */

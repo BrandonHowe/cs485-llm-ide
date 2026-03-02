@@ -3,16 +3,18 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DeferredPromise } from '../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../base/common/async.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneApiSubmitOptions } from '../common/vscloneChatApiAdapters.js';
+import { VSCloneUseMockProviderTransportSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneEditApplicationService } from './vscloneEditApplicationService.js';
 import {
 	IVSCloneChatApiAbortedEvent,
@@ -57,6 +59,29 @@ interface IVSClonePendingApiRequest {
 	cancelled: boolean;
 }
 
+function buildMockResponseText(options: IVSCloneApiSubmitOptions): string {
+	const promptPreview = options.promptText.trim() || 'your request';
+	return `Mock provider response for "${promptPreview}"\n\nNo external API request was made while mock transport is enabled.`;
+}
+
+function splitIntoMockDeltas(text: string): readonly string[] {
+	const words = text.split(/(\s+)/).filter(chunk => chunk.length > 0);
+	const deltas: string[] = [];
+	let current = '';
+	for (const word of words) {
+		if (current.length + word.length > 36 && current.length > 0) {
+			deltas.push(current);
+			current = word;
+			continue;
+		}
+		current += word;
+	}
+	if (current.length > 0) {
+		deltas.push(current);
+	}
+	return deltas.length > 0 ? deltas : [text];
+}
+
 export class VSCloneChatApiService extends Disposable implements IVSCloneChatApiService {
 	declare readonly _serviceBrand: undefined;
 
@@ -66,6 +91,7 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 	constructor(
 		@IVSCloneOAuthService private readonly oauthService: IVSCloneOAuthService,
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IMainProcessService mainProcessService: IMainProcessService,
 		@ILogService private readonly logService: ILogService,
 		@IVSCloneEditApplicationService private readonly editApplicationService: IVSCloneEditApplicationService,
@@ -73,6 +99,11 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 		super();
 		this.channel = mainProcessService.getChannel(VSCLONE_CHAT_API_CHANNEL_NAME);
 		this.registerChannelListeners();
+	}
+
+	private get useMockProviderTransport(): boolean {
+		// This explicit gate keeps all provider traffic local until real integrations are intentionally enabled.
+		return this.configurationService.getValue<boolean>(VSCloneUseMockProviderTransportSetting) ?? true;
 	}
 
 	submitApiPrompt(options: IVSCloneApiSubmitOptions): IVSCloneApiRequestHandle {
@@ -140,6 +171,11 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 		const { requestId, options } = pending;
 
 		try {
+			if (this.useMockProviderTransport) {
+				await this.simulateMockRequest(pending);
+				return;
+			}
+
 			const headers = await this.oauthService.getApiHeaders(options.vendor);
 			if (!this.pendingRequests.has(requestId)) {
 				return;
@@ -170,6 +206,29 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 		}
 	}
 
+	private async simulateMockRequest(pending: IVSClonePendingApiRequest): Promise<void> {
+		const requestId = pending.requestId;
+		if (!this.pendingRequests.has(requestId) || pending.cancelled) {
+			return;
+		}
+
+		const deltas = splitIntoMockDeltas(buildMockResponseText(pending.options));
+		for (const delta of deltas) {
+			if (!this.pendingRequests.has(requestId) || pending.cancelled) {
+				return;
+			}
+
+			this.handleDeltaEvent({ requestId, text: delta });
+			await timeout(45);
+		}
+
+		if (!this.pendingRequests.has(requestId) || pending.cancelled) {
+			return;
+		}
+
+		this.handleCompleteEvent({ requestId });
+	}
+
 	private cancelRequest(requestId: string): void {
 		const pending = this.pendingRequests.get(requestId);
 		if (!pending) {
@@ -178,9 +237,11 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 
 		pending.cancelled = true;
 
-		void this.channel.call<void>(VSCLONE_CHAT_API_COMMAND_ABORT, { requestId }).catch(error => {
-			this.logService.warn('[VSCloneChatApi] Failed to abort request in main process', error);
-		});
+		if (!this.useMockProviderTransport) {
+			void this.channel.call<void>(VSCLONE_CHAT_API_COMMAND_ABORT, { requestId }).catch(error => {
+				this.logService.warn('[VSCloneChatApi] Failed to abort request in main process', error);
+			});
+		}
 
 		if (pending.mode === 'history') {
 			this.historyService.applyTurnUpdate({

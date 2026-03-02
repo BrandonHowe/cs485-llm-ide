@@ -16,7 +16,7 @@ import { deriveThreadId } from '../common/vscloneChatHistoryModel.js';
 import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
 import { VSCloneModelVendor } from '../common/vscloneMockProviderService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
-import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
+import { VSCloneUseMockProviderTransportSetting, VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneModelSelection } from '../common/vscloneThreadModelSelectionService.js';
 import { IVSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
 import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopService } from './vscloneAgentLoopService.js';
@@ -135,10 +135,19 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		return this.configurationService.getValue<boolean>(VSCloneUseVSCodeChatBackendSetting) ?? false;
 	}
 
+	private get useMockProviderTransport(): boolean {
+		// Mock mode is the default development path so model/session UI can be exercised without real provider wiring.
+		return this.configurationService.getValue<boolean>(VSCloneUseMockProviderTransportSetting) ?? true;
+	}
+
 	async submitPrompt(promptText: string, options: IVSCloneChatSubmitOptions = {}): Promise<IVSCloneChatSubmitResult | undefined> {
 		const trimmedPrompt = promptText.trim();
 		if (!trimmedPrompt) {
 			return undefined;
+		}
+
+		if (this.useMockProviderTransport) {
+			return this.submitMockPrompt(trimmedPrompt, options);
 		}
 
 		// 1. Try real API if vendor is signed in via OAuth
@@ -222,7 +231,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	}
 
 	cancelThread(threadId: string): void {
-		if (this.useVSCodeChatBackend) {
+		if (this.useVSCodeChatBackend && !this.useMockProviderTransport) {
 			const thread = this.historyService.getThreads({ includeArchived: true }).find(candidate => candidate.threadId === threadId);
 			const sessionResource = parseSessionResource(thread?.sessionResource);
 			if (sessionResource) {

@@ -39,13 +39,13 @@ export interface IVSCloneOAuthProviderState {
 	readonly isReady: boolean;
 }
 
-// -- Full immutable state (Void-style readonly state pattern) --
+// -- Full immutable state (readonly snapshot pattern) --
 
 export interface IVSCloneOAuthState {
 	readonly providers: Readonly<Record<VSCloneModelVendor, IVSCloneOAuthProviderState>>;
 }
 
-// -- Static provider config registry (Void-style const-as-source-of-truth) --
+// -- Static provider config registry (const-as-source-of-truth) --
 
 export type VSCloneOAuthRedirectStrategy = 'loopback' | 'manual_paste';
 
@@ -123,7 +123,7 @@ export const defaultOAuthProviderConfig: Readonly<Record<VSCloneModelVendor, IVS
 	},
 } as const;
 
-/** Display helpers (Void-style displayInfoOf pattern) */
+/** Display helpers (vendor-to-displayInfo mapping pattern) */
 export interface IVSCloneOAuthDisplayInfo {
 	readonly title: string;
 	readonly description: string;
