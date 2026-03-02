@@ -105,6 +105,7 @@ export const defaultOAuthProviderConfig: Readonly<Record<VSCloneModelVendor, IVS
 	google: {
 		vendor: 'google',
 		displayName: 'Google',
+		// Keep repository defaults credential-free; real OAuth credentials must be supplied out-of-band.
 		clientId: 'vsclone-google-client-id',
 		clientSecret: undefined,
 		authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
