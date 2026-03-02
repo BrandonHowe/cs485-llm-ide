@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { env } from '../../../../base/common/process.js';
 import { VSCloneModelVendor } from './vscloneMockProviderService.js';
 
 // -- Status & Events --
@@ -70,6 +71,15 @@ export interface IVSCloneOAuthProviderConfig {
 	readonly apiEndpoint: string;
 }
 
+/**
+ * Resolve optional OAuth credential overrides from process environment.
+ * Empty strings are normalized to `undefined` so local `.env` files can leave keys blank.
+ */
+function optionalOAuthEnvValue(key: string): string | undefined {
+	const rawValue = env[key]?.trim();
+	return rawValue && rawValue.length > 0 ? rawValue : undefined;
+}
+
 /** Single source of truth - add new providers here */
 export const defaultOAuthProviderConfig: Readonly<Record<VSCloneModelVendor, IVSCloneOAuthProviderConfig>> = {
 	openai: {
@@ -105,9 +115,9 @@ export const defaultOAuthProviderConfig: Readonly<Record<VSCloneModelVendor, IVS
 	google: {
 		vendor: 'google',
 		displayName: 'Google',
-		// Keep repository defaults credential-free; real OAuth credentials must be supplied out-of-band.
-		clientId: 'vsclone-google-client-id',
-		clientSecret: undefined,
+		// Keep repository defaults credential-free while letting local env vars provide real credentials.
+		clientId: optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_ID') ?? 'vsclone-google-client-id',
+		clientSecret: optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET'),
 		authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
 		tokenUrl: 'https://oauth2.googleapis.com/token',
 		scopes: [

@@ -25,3 +25,7 @@ product.overrides.json
 .vscode-test
 vscode-telemetry-docs/
 test-output.json
+# Keep local OAuth credentials out of version control while allowing tracked templates.
+.env
+.env.local
+.env.vsclone
