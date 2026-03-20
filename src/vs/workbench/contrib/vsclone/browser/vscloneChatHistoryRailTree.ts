@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IVSCloneChatHistoryThread } from '../common/vscloneChatHistoryService.js';
+import { IVSCloneChatHistoryThread } from '../common/backend/vscloneChatHistoryService.js';
 
 export interface IVSCloneChatHistoryRailRow {
 	threadId: string;

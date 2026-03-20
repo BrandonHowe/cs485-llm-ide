@@ -20,9 +20,9 @@ import {
 	IVSCloneChatHistoryTurn,
 	IVSCloneChatTurnUpdate,
 	VSCloneChatHistoryScope,
-} from '../../common/vscloneChatHistoryService.js';
+} from '../../common/backend/vscloneChatHistoryService.js';
 import { IVSClonePromptAssemblyService } from '../../common/vsclonePromptAssemblyService.js';
-import { IVSCloneModelSelection } from '../../common/vscloneThreadModelSelectionService.js';
+import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { VSCloneUseVSCodeChatBackendSetting } from '../../common/vscloneChatSettings.js';
 
 class TestHistoryService implements IVSCloneChatHistoryService {
@@ -52,6 +52,40 @@ class TestAgentLoopService implements IVSCloneAgentLoopService {
 			done: Promise.resolve(),
 			cancel: () => { this.cancelCalls += 1; },
 		};
+	}
+}
+
+class TestSelectionService implements IVSCloneThreadModelSelectionService {
+	declare readonly _serviceBrand: undefined;
+	readonly onDidChangeSelection = Event.None;
+	private readonly selectedByThread = new Map<string, IVSCloneModelSelection>();
+	private locationSelection: IVSCloneModelSelection | undefined;
+
+	async initialize(): Promise<void> { }
+
+	getCurrentSelectionForThread(threadId: string, _location: 'chat' | 'editorInline' | 'notebook' | 'terminal'): IVSCloneModelSelection | undefined {
+		return this.selectedByThread.get(threadId) ?? this.locationSelection;
+	}
+
+	async setSelectionForThread(threadId: string, selection: IVSCloneModelSelection): Promise<void> {
+		this.selectedByThread.set(threadId, { ...selection, threadId });
+		this.locationSelection = { ...selection, threadId: undefined };
+	}
+
+	async switchToNextModel(_threadId: string, _location: 'chat' | 'editorInline' | 'notebook' | 'terminal'): Promise<IVSCloneModelSelection | undefined> {
+		return undefined;
+	}
+
+	async resetSelectionForThread(threadId: string): Promise<void> {
+		this.selectedByThread.delete(threadId);
+	}
+
+	hasSelectionForThread(threadId: string): boolean {
+		return this.selectedByThread.has(threadId);
+	}
+
+	getRecentModelIdentifiers(limit = 3): readonly string[] {
+		return [];
 	}
 }
 
@@ -114,6 +148,8 @@ suite('VSCloneChatSessionService', () => {
 		historyService.turnsByThread.set('thread-1', [createTurn('thread-1')]);
 
 		const agentLoopService = new TestAgentLoopService();
+		const selectionService = new TestSelectionService();
+		await selectionService.setSelectionForThread('thread-1', createModelSelection());
 		const configService = new TestConfigurationService({
 			[VSCloneUseVSCodeChatBackendSetting]: false,
 			// This old setting remains in user configs; routing must now ignore it.
@@ -132,6 +168,7 @@ suite('VSCloneChatSessionService', () => {
 		const service = testDisposables.add(new VSCloneChatSessionService(
 			chatService,
 			historyService,
+			selectionService,
 			configService,
 			new NullLogService(),
 			agentLoopService,
@@ -161,6 +198,7 @@ suite('VSCloneChatSessionService', () => {
 		const testDisposables = store.add(new DisposableStore());
 		const historyService = new TestHistoryService();
 		const agentLoopService = new TestAgentLoopService();
+		const selectionService = new TestSelectionService();
 		const configService = new TestConfigurationService({ [VSCloneUseVSCodeChatBackendSetting]: false });
 
 		const chatService = {
@@ -175,6 +213,7 @@ suite('VSCloneChatSessionService', () => {
 		const service = testDisposables.add(new VSCloneChatSessionService(
 			chatService,
 			historyService,
+			selectionService,
 			configService,
 			new NullLogService(),
 			agentLoopService,
@@ -220,6 +259,7 @@ suite('VSCloneChatSessionService', () => {
 		const service = testDisposables.add(new VSCloneChatSessionService(
 			chatService,
 			historyService,
+			new TestSelectionService(),
 			new TestConfigurationService({
 				[VSCloneUseVSCodeChatBackendSetting]: true,
 				'vsclone.chat.useMockProviderTransport': true,

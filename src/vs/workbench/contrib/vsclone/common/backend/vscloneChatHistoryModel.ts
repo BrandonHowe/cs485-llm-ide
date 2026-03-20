@@ -3,9 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { fromNow } from '../../../../base/common/date.js';
-import { hash } from '../../../../base/common/hash.js';
-import type { IVSCloneChatHistoryQuery, IVSCloneChatHistorySnapshot, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from './vscloneChatHistoryService.js';
+import { fromNow } from '../../../../../base/common/date.js';
+import { hash } from '../../../../../base/common/hash.js';
+import type { IVSCloneChatHistoryQuery, IVSCloneChatHistorySnapshot, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../vscloneChatHistoryTypes.js';
+import { allVSCloneChatLocations, type IVSCloneChatLocation, type IVSCloneModelSelection, type IVSCloneUnifiedChatSelectionState } from '../vscloneModelSelectionTypes.js';
 
 export function deriveThreadId(sessionResource: string): string {
 	// Use a stable hash of the session resource so VSClone IDs stay deterministic without native chat URI helpers.
@@ -17,12 +18,18 @@ export class VSCloneChatHistoryModel {
 	private readonly turnsByThreadId = new Map<string, readonly IVSCloneChatHistoryTurn[]>();
 	private readonly threadIdsBySessionResource = new Map<string, string>();
 	private readonly searchTextByThreadId = new Map<string, string>();
+	private readonly selectedByThread = new Map<string, IVSCloneModelSelection>();
+	private readonly selectedByLocation = new Map<IVSCloneChatLocation, IVSCloneModelSelection>();
+	private recentModelIdentifiers: string[] = [];
 
 	initialize(snapshot: IVSCloneChatHistorySnapshot): void {
 		this.threads.clear();
 		this.turnsByThreadId.clear();
 		this.threadIdsBySessionResource.clear();
 		this.searchTextByThreadId.clear();
+		this.selectedByThread.clear();
+		this.selectedByLocation.clear();
+		this.recentModelIdentifiers = [...snapshot.recentModelIdentifiers];
 
 		for (const thread of snapshot.threads) {
 			const turns = snapshot.turnsByThreadId[thread.threadId] ?? [];
@@ -30,6 +37,18 @@ export class VSCloneChatHistoryModel {
 			this.threadIdsBySessionResource.set(thread.sessionResource, thread.threadId);
 			this.turnsByThreadId.set(thread.threadId, turns);
 			this.updateSearchText(thread, turns);
+		}
+
+		for (const [threadId, selection] of Object.entries(snapshot.selectedByThread)) {
+			this.selectedByThread.set(threadId, { ...selection, threadId: undefined });
+		}
+
+		for (const location of allVSCloneChatLocations) {
+			const selection = snapshot.selectedByLocation[location];
+			if (!selection) {
+				continue;
+			}
+			this.selectedByLocation.set(location, { ...selection, threadId: undefined });
 		}
 	}
 
@@ -46,10 +65,23 @@ export class VSCloneChatHistoryModel {
 			turnsByThreadId[threadId] = turns;
 		}
 
+		const selectedByThread: Record<string, IVSCloneModelSelection> = {};
+		for (const [threadId, selection] of this.selectedByThread) {
+			selectedByThread[threadId] = { ...selection, threadId: undefined };
+		}
+
+		const selectedByLocation: Partial<Record<IVSCloneChatLocation, IVSCloneModelSelection>> = {};
+		for (const [location, selection] of this.selectedByLocation) {
+			selectedByLocation[location] = { ...selection, threadId: undefined };
+		}
+
 		return {
 			updatedAt,
 			threads,
 			turnsByThreadId,
+			selectedByThread,
+			selectedByLocation,
+			recentModelIdentifiers: [...this.recentModelIdentifiers],
 		};
 	}
 
@@ -109,6 +141,7 @@ export class VSCloneChatHistoryModel {
 		this.turnsByThreadId.delete(threadId);
 		this.threadIdsBySessionResource.delete(thread.sessionResource);
 		this.searchTextByThreadId.delete(threadId);
+		this.selectedByThread.delete(threadId);
 		return thread;
 	}
 
@@ -117,6 +150,9 @@ export class VSCloneChatHistoryModel {
 		this.turnsByThreadId.clear();
 		this.threadIdsBySessionResource.clear();
 		this.searchTextByThreadId.clear();
+		this.selectedByThread.clear();
+		this.selectedByLocation.clear();
+		this.recentModelIdentifiers = [];
 	}
 
 	getTurns(threadId: string): readonly IVSCloneChatHistoryTurn[] {
@@ -202,6 +238,46 @@ export class VSCloneChatHistoryModel {
 
 	formatRelativeTimestamp(timestamp: number): string {
 		return fromNow(timestamp, true);
+	}
+
+	getSelectionState(): IVSCloneUnifiedChatSelectionState {
+		const selectedByThread: Record<string, IVSCloneModelSelection> = {};
+		for (const [threadId, selection] of this.selectedByThread) {
+			selectedByThread[threadId] = { ...selection, threadId: undefined };
+		}
+
+		const selectedByLocation: Partial<Record<IVSCloneChatLocation, IVSCloneModelSelection>> = {};
+		for (const [location, selection] of this.selectedByLocation) {
+			selectedByLocation[location] = { ...selection, threadId: undefined };
+		}
+
+		return {
+			selectedByThread,
+			selectedByLocation,
+			recentModelIdentifiers: [...this.recentModelIdentifiers],
+		};
+	}
+
+	/**
+	 * Replacing the full selection state in one shot keeps catalog reconciliation atomic. Without
+	 * this, a provider refresh could persist partially-updated defaults and thread bindings.
+	 */
+	replaceSelectionState(state: IVSCloneUnifiedChatSelectionState): void {
+		this.selectedByThread.clear();
+		this.selectedByLocation.clear();
+		this.recentModelIdentifiers = [...state.recentModelIdentifiers];
+
+		for (const [threadId, selection] of Object.entries(state.selectedByThread)) {
+			this.selectedByThread.set(threadId, { ...selection, threadId: undefined });
+		}
+
+		for (const location of allVSCloneChatLocations) {
+			const selection = state.selectedByLocation[location];
+			if (!selection) {
+				continue;
+			}
+			this.selectedByLocation.set(location, { ...selection, threadId: undefined });
+		}
 	}
 
 	private updateSearchText(thread: IVSCloneChatHistoryThread, turns: readonly IVSCloneChatHistoryTurn[]): void {

@@ -8,9 +8,10 @@ import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { VSCloneModelCatalogService } from '../../common/vscloneModelCatalogService.js';
 import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderPreferencesService.js';
-import { IVSCloneModelSelection, VSCloneThreadModelSelectionService } from '../../common/vscloneThreadModelSelectionService.js';
+import { IVSCloneModelSelection, VSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { TestVSCloneOAuthService } from './vscloneTestOAuthService.js';
+import { TestVSCloneUnifiedChatBackendService } from './vscloneTestUnifiedChatBackendService.js';
 
 suite('VSCloneThreadModelSelectionService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -30,13 +31,14 @@ suite('VSCloneThreadModelSelectionService', () => {
 		const providerPreferencesService = testDisposables.add(new VSCloneProviderPreferencesService(storageService));
 		const oauthService = new TestVSCloneOAuthService();
 		const catalogService = testDisposables.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
-		const selectionService = testDisposables.add(new VSCloneThreadModelSelectionService(storageService, catalogService));
+		const backendService = new TestVSCloneUnifiedChatBackendService();
+		const selectionService = testDisposables.add(new VSCloneThreadModelSelectionService(backendService, catalogService));
 
 		await providerPreferencesService.initialize();
 		await catalogService.refreshCatalog();
 		await selectionService.initialize();
 
-		return { providerPreferencesService, oauthService, catalogService, selectionService };
+		return { providerPreferencesService, oauthService, catalogService, selectionService, backendService };
 	}
 
 	function toSelection(modelIdentifier: string, vendor: IVSCloneModelSelection['vendor'], modelId: string, modelName: string, reasoningEffort?: 'low' | 'medium' | 'high'): IVSCloneModelSelection {

@@ -10,7 +10,7 @@ import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IChatService } from '../../chat/common/chatService/chatService.js';
 import { ChatAgentLocation } from '../../chat/common/constants.js';
 import { IChatModel } from '../../chat/common/model/chatModel.js';
-import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { VSCloneChatSessionBridge } from './vscloneChatSessionBridge.js';
 

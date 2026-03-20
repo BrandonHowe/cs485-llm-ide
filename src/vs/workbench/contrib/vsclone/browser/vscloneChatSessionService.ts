@@ -11,10 +11,10 @@ import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { ChatSendResult, IChatService } from '../../chat/common/chatService/chatService.js';
 import { ChatAgentLocation } from '../../chat/common/constants.js';
-import { deriveThreadId } from '../common/vscloneChatHistoryModel.js';
-import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { deriveThreadId } from '../common/backend/vscloneChatHistoryModel.js';
+import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
-import { IVSCloneModelSelection } from '../common/vscloneThreadModelSelectionService.js';
+import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { IVSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
 import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopService } from './vscloneAgentLoopService.js';
@@ -63,6 +63,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	constructor(
 		@IChatService private readonly chatService: IChatService,
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
+		@IVSCloneThreadModelSelectionService private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
 		@IVSCloneAgentLoopService private readonly agentLoopService: IVSCloneAgentLoopService,
@@ -82,19 +83,21 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			return undefined;
 		}
 
-		const apiVendor = this.getApiVendor(options.modelSelection);
+		await this.modelSelectionService.initialize();
+		const baseSelection = options.modelSelection ?? this.modelSelectionService.getCurrentSelectionForThread(options.threadId ?? '', 'chat');
+		const apiVendor = this.getApiVendor(baseSelection);
 		if (!this.useVSCodeChatBackend) {
-			if (!apiVendor || !options.modelSelection) {
-				return this.rejectMissingApiSelection(trimmedPrompt, options);
+			if (!apiVendor || !baseSelection) {
+				return this.rejectMissingApiSelection(trimmedPrompt, options, baseSelection);
 			}
-			return this.submitApiPrompt(trimmedPrompt, options, apiVendor);
+			return this.submitApiPrompt(trimmedPrompt, options, apiVendor, baseSelection);
 		}
 
 		if (!this.chatService.isEnabled(ChatAgentLocation.Chat)) {
-			if (apiVendor && options.modelSelection) {
-				return this.submitApiPrompt(trimmedPrompt, options, apiVendor);
+			if (apiVendor && baseSelection) {
+				return this.submitApiPrompt(trimmedPrompt, options, apiVendor, baseSelection);
 			}
-			return this.rejectMissingApiSelection(trimmedPrompt, options);
+			return this.rejectMissingApiSelection(trimmedPrompt, options, baseSelection);
 		}
 
 		const preferredResource = parseSessionResource(options.sessionResource);
@@ -118,6 +121,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			const sessionResource = activeResource.toString();
 			const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
 			const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
+			const resolvedSelection = await this.ensureThreadSelectionBinding(threadId, baseSelection);
 			const sendResult = await this.chatService.sendRequest(activeResource, trimmedPrompt, { location: ChatAgentLocation.Chat });
 
 			if (ChatSendResult.isRejected(sendResult)) {
@@ -126,7 +130,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 					sessionResource,
 					promptText: trimmedPrompt,
 					reason: sendResult.reason,
-					modelSelection: options.modelSelection,
+					modelSelection: resolvedSelection,
 				});
 				return {
 					threadId,
@@ -142,7 +146,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 							sessionResource,
 							promptText: trimmedPrompt,
 							reason: result.reason,
-							modelSelection: options.modelSelection,
+							modelSelection: resolvedSelection,
 						});
 					}
 				});
@@ -154,8 +158,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			};
 		} catch (error) {
 			this.logService.warn('VSClone chat send failed, retrying with the direct VSClone API backend when possible', error);
-			if (apiVendor && options.modelSelection) {
-				return this.submitApiPrompt(trimmedPrompt, options, apiVendor);
+			if (apiVendor && baseSelection) {
+				return this.submitApiPrompt(trimmedPrompt, options, apiVendor, baseSelection);
 			}
 			return undefined;
 		}
@@ -187,10 +191,16 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		super.dispose();
 	}
 
-	private async submitApiPrompt(promptText: string, options: IVSCloneChatSubmitOptions, vendor: VSCloneModelVendor): Promise<IVSCloneChatSubmitResult> {
+	private async submitApiPrompt(
+		promptText: string,
+		options: IVSCloneChatSubmitOptions,
+		vendor: VSCloneModelVendor,
+		modelSelection: IVSCloneModelSelection,
+	): Promise<IVSCloneChatSubmitResult> {
 		const sessionResource = options.sessionResource ?? createApiSessionResource(generateUuid());
 		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
 		const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
+		const resolvedSelection = await this.ensureThreadSelectionBinding(threadId, modelSelection);
 		const turnId = `${threadId}:api:${Date.now()}`;
 		const sequence = this.historyService.getTurns(threadId).length + 1;
 
@@ -206,8 +216,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			}
 		}
 
-		const modelId = options.modelSelection?.modelId ?? '';
-		const modelIdentifier = options.modelSelection?.modelIdentifier ?? '';
+		const modelId = resolvedSelection?.modelId ?? '';
+		const modelIdentifier = resolvedSelection?.modelIdentifier ?? '';
 		let systemMessage: string | undefined;
 
 		try {
@@ -227,7 +237,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			vendor,
 			modelId,
 			modelIdentifier,
-			reasoningEffort: options.modelSelection?.reasoningEffort,
+			reasoningEffort: resolvedSelection?.reasoningEffort,
 			previousTurns,
 			systemMessage,
 		});
@@ -244,6 +254,32 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		return {
 			threadId,
 			sessionResource,
+		};
+	}
+
+	/**
+	 * The first time a thread is addressed we bind the resolved selection to that thread id. This
+	 * keeps later restores and retries aligned with the model that actually sent the request.
+	 */
+	private async ensureThreadSelectionBinding(threadId: string, selection: IVSCloneModelSelection | undefined): Promise<IVSCloneModelSelection | undefined> {
+		if (!selection) {
+			return undefined;
+		}
+
+		if (!this.modelSelectionService.hasSelectionForThread(threadId)) {
+			await this.modelSelectionService.setSelectionForThread(threadId, {
+				...selection,
+				threadId,
+				location: 'chat',
+				selectedAt: Date.now(),
+			});
+		}
+
+		return this.modelSelectionService.getCurrentSelectionForThread(threadId, 'chat') ?? {
+			...selection,
+			threadId,
+			location: 'chat',
+			selectedAt: Date.now(),
 		};
 	}
 
@@ -296,7 +332,11 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		}
 	}
 
-	private rejectMissingApiSelection(promptText: string, options: IVSCloneChatSubmitOptions): IVSCloneChatSubmitResult {
+	private rejectMissingApiSelection(
+		promptText: string,
+		options: IVSCloneChatSubmitOptions,
+		modelSelection: IVSCloneModelSelection | undefined,
+	): IVSCloneChatSubmitResult {
 		const sessionResource = options.sessionResource ?? createApiSessionResource(generateUuid());
 		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
 		const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
@@ -306,7 +346,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			sessionResource,
 			promptText,
 			reason: 'Sign in to a provider and choose a model before sending messages through VSClone.',
-			modelSelection: options.modelSelection,
+			modelSelection,
 		});
 
 		return {

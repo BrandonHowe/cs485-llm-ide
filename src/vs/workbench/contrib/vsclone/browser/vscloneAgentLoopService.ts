@@ -8,7 +8,7 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IVSCloneApiRequestHandle, IVSCloneChatApiService } from './vscloneChatApiService.js';
-import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import type { VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
 import { formatToolResult } from '../common/vscloneToolDefinitions.js';

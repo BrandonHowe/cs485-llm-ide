@@ -9,7 +9,7 @@ import { localize2 } from '../../../../nls.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { VSCloneViewId } from './vsclone.js';
 import { VSCloneUnifiedChatViewPane } from './vscloneUnifiedChatViewPane.js';
-import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 
 export const VSCloneChatHistoryCommandIds = {
 	open: 'vsclone.chat.open',

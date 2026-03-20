@@ -31,7 +31,7 @@ import {
 	IVSCloneChatHistoryTurn,
 	IVSCloneChatTurnUpdate,
 	VSCloneChatHistoryScope,
-} from '../../common/vscloneChatHistoryService.js';
+} from '../../common/backend/vscloneChatHistoryService.js';
 import { IVSCloneOAuthService } from '../../common/vscloneOAuthService.js';
 import { IVSCloneOAuthState, IVSCloneOAuthTokenSet } from '../../common/vscloneOAuthTypes.js';
 import { VSCloneChatApiService } from '../../browser/vscloneChatApiService.js';

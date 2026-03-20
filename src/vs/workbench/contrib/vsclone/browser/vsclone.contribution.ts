@@ -27,17 +27,17 @@ import { IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge
 import { IVSCloneToolExecutionService, VSCloneToolExecutionService } from './vscloneToolExecutionService.js';
 import { VSCloneUnifiedChatViewPane } from './vscloneUnifiedChatViewPane.js';
 import { VSCloneViewContainerId, VSCloneViewId } from './vsclone.js';
-import { IVSCloneChatHistoryMigrationService, VSCloneChatHistoryMigrationService } from '../common/vscloneChatHistoryMigrationService.js';
-import { IVSCloneChatHistoryService, VSCloneChatHistoryEnabledSetting, VSCloneChatHistoryMaxThreadsSetting, VSCloneChatHistoryMaxTurnsPerThreadSetting, VSCloneChatHistoryPersistScopeSetting, VSCloneChatHistoryRailWidthSetting, VSCloneChatHistoryRedactSecretsSetting, VSCloneChatHistoryRetentionDaysSetting, VSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { IVSCloneChatHistoryService, VSCloneChatHistoryEnabledSetting, VSCloneChatHistoryMaxThreadsSetting, VSCloneChatHistoryMaxTurnsPerThreadSetting, VSCloneChatHistoryPersistScopeSetting, VSCloneChatHistoryRailWidthSetting, VSCloneChatHistoryRedactSecretsSetting, VSCloneChatHistoryRetentionDaysSetting, VSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneModelCatalogService, VSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
 import { IVSClonePromptAssemblyService, VSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
 import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
-import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
+import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { IVSCloneCompletionBackend } from '../common/vscloneCompletionBackend.js';
 import { IVSCloneProviderPreferencesService, VSCloneProviderPreferencesService } from '../common/vscloneProviderPreferencesService.js';
 import { VSCloneAutocompleteService, VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from './vscloneAutocompleteService.js';
 import { VSCloneMockCompletionBackend } from './vscloneMockCompletionBackend.js';
+import { IVSCloneUnifiedChatBackendService, VSCloneUnifiedChatBackendService } from '../common/backend/vscloneUnifiedChatBackendService.js';
 
 const vscloneContributionRegistrationKey = '__vscloneContributionRegistered__';
 type VSCloneContributionGlobalScope = typeof globalThis & {
@@ -72,7 +72,7 @@ function registerVSCloneContribution(): void {
 
 	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([viewDescriptor], vscloneViewContainer);
 
-	registerSingleton(IVSCloneChatHistoryMigrationService, VSCloneChatHistoryMigrationService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneUnifiedChatBackendService, VSCloneUnifiedChatBackendService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatHistoryService, VSCloneChatHistoryService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneProviderPreferencesService, VSCloneProviderPreferencesService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneModelCatalogService, VSCloneModelCatalogService, InstantiationType.Delayed);

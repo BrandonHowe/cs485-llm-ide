@@ -8,8 +8,8 @@ import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
 import { ResponseModelState } from '../../chat/common/chatService/chatService.js';
 import { IChatModel, IChatRequestModel, IChatResponseModel } from '../../chat/common/model/chatModel.js';
 import { getPromptText } from '../../chat/common/requestParser/chatParserTypes.js';
-import { deriveThreadId } from '../common/vscloneChatHistoryModel.js';
-import { IVSCloneChatTurnUpdate, VSCloneChatTurnPhase } from '../common/vscloneChatHistoryService.js';
+import { deriveThreadId } from '../common/backend/vscloneChatHistoryModel.js';
+import { IVSCloneChatTurnUpdate, VSCloneChatTurnPhase } from '../common/backend/vscloneChatHistoryService.js';
 
 interface IRequestState {
 	sequence: number;

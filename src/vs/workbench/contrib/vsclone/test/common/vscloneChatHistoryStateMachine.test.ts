@@ -5,8 +5,8 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { reduceThreadTurns } from '../../common/vscloneChatHistoryStateMachine.js';
-import { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatTurnUpdate } from '../../common/vscloneChatHistoryService.js';
+import { reduceThreadTurns } from '../../common/backend/vscloneChatHistoryStateMachine.js';
+import { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatTurnUpdate } from '../../common/backend/vscloneChatHistoryService.js';
 
 suite('VSCloneChatHistoryStateMachine', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();

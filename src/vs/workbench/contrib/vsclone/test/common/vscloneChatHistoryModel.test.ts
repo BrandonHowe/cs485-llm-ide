@@ -5,8 +5,8 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { VSCloneChatHistoryModel } from '../../common/vscloneChatHistoryModel.js';
-import { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../../common/vscloneChatHistoryService.js';
+import { VSCloneChatHistoryModel } from '../../common/backend/vscloneChatHistoryModel.js';
+import { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../../common/backend/vscloneChatHistoryService.js';
 
 suite('VSCloneChatHistoryModel', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -45,6 +45,9 @@ suite('VSCloneChatHistoryModel', () => {
 			updatedAt: 1,
 			threads: [thread('a', 10), thread('b', 30), thread('c', 20)],
 			turnsByThreadId: {},
+			selectedByThread: {},
+			selectedByLocation: {},
+			recentModelIdentifiers: [],
 		});
 
 		const ids = model.getThreads({ includeArchived: true }).map(t => t.threadId);
@@ -61,6 +64,9 @@ suite('VSCloneChatHistoryModel', () => {
 				thread('archived', 10, { status: 'archived', archived: true }),
 			],
 			turnsByThreadId: {},
+			selectedByThread: {},
+			selectedByLocation: {},
+			recentModelIdentifiers: [],
 		});
 
 		assert.deepStrictEqual(model.getThreads({ tab: 'all' }).map(t => t.threadId), ['active', 'completed', 'archived']);
@@ -77,6 +83,9 @@ suite('VSCloneChatHistoryModel', () => {
 				first: [turn('first', 1, 'normalize tables')],
 				second: [turn('second', 1, 'memo and useCallback')],
 			},
+			selectedByThread: {},
+			selectedByLocation: {},
+			recentModelIdentifiers: [],
 		});
 
 		assert.deepStrictEqual(model.getThreads({ text: 'database' }).map(t => t.threadId), ['first']);
@@ -98,6 +107,9 @@ suite('VSCloneChatHistoryModel', () => {
 				middle: [turn('middle', 1, 'b')],
 				old: [turn('old', 1, 'c')],
 			},
+			selectedByThread: {},
+			selectedByLocation: {},
+			recentModelIdentifiers: [],
 		});
 
 		const result = model.applyRetention(1, 30, now);

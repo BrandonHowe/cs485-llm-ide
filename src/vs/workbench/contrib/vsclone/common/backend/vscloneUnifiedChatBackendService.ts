@@ -3,108 +3,38 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Delayer } from '../../../../base/common/async.js';
-import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
-import { localize } from '../../../../nls.js';
-import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
-import { ILogService } from '../../../../platform/log/common/log.js';
-import { INotificationService } from '../../../../platform/notification/common/notification.js';
-import { VSCloneUnsupportedHistoryVersionError } from './vscloneChatHistoryMigrationService.js';
+import { Delayer } from '../../../../../base/common/async.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
+import { Disposable } from '../../../../../base/common/lifecycle.js';
+import { localize } from '../../../../../nls.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { createDecorator, IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import { ILogService } from '../../../../../platform/log/common/log.js';
+import { INotificationService } from '../../../../../platform/notification/common/notification.js';
+import {
+	VSCloneChatHistoryEnabledSetting,
+	VSCloneChatHistoryMaxThreadsSetting,
+	VSCloneChatHistoryMaxTurnsPerThreadSetting,
+	VSCloneChatHistoryPersistScopeSetting,
+	VSCloneChatHistoryRedactSecretsSetting,
+	VSCloneChatHistoryRetentionDaysSetting,
+} from '../vscloneChatHistorySettings.js';
 import { VSCloneChatHistoryModel } from './vscloneChatHistoryModel.js';
 import { VSCloneChatHistoryStore } from './vscloneChatHistoryStore.js';
+import {
+	type IVSCloneChatHistoryChangeEvent,
+	type IVSCloneChatHistoryQuery,
+	type IVSCloneChatHistoryThread,
+	type IVSCloneChatHistoryTurn,
+	type IVSCloneChatTurnUpdate,
+	type VSCloneChatHistoryScope,
+} from '../vscloneChatHistoryTypes.js';
 import { reduceThreadTurns } from './vscloneChatHistoryStateMachine.js';
+import type { IVSCloneUnifiedChatSelectionState } from '../vscloneModelSelectionTypes.js';
 
-export const VSCloneChatHistoryEnabledSetting = 'vsclone.chatHistory.enabled';
-export const VSCloneChatHistoryMaxThreadsSetting = 'vsclone.chatHistory.maxThreads';
-export const VSCloneChatHistoryMaxTurnsPerThreadSetting = 'vsclone.chatHistory.maxTurnsPerThread';
-export const VSCloneChatHistoryRetentionDaysSetting = 'vsclone.chatHistory.retentionDays';
-export const VSCloneChatHistoryRailWidthSetting = 'vsclone.chatHistory.railWidth';
-export const VSCloneChatHistoryPersistScopeSetting = 'vsclone.chatHistory.persistScope';
-export const VSCloneChatHistoryRedactSecretsSetting = 'vsclone.chatHistory.redactSecrets';
+export const IVSCloneUnifiedChatBackendService = createDecorator<IVSCloneUnifiedChatBackendService>('vscloneUnifiedChatBackendService');
 
-export const IVSCloneChatHistoryService = createDecorator<IVSCloneChatHistoryService>('vscloneChatHistoryService');
-
-export type VSCloneChatHistoryScope = 'workspace' | 'profile';
-
-export type VSCloneChatThreadStatus = 'active' | 'completed' | 'failed' | 'archived';
-export type VSCloneChatTurnStatus = 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled';
-
-export interface IVSCloneChatHistoryThread {
-	threadId: string;
-	sessionResource: string;
-	title: string;
-	activeModelIdentifier?: string;
-	createdAt: number;
-	updatedAt: number;
-	status: VSCloneChatThreadStatus;
-	archived: boolean;
-	turnCount: number;
-	lastTurnPreview: string;
-}
-
-export interface IVSCloneChatHistoryTurn {
-	turnId: string;
-	threadId: string;
-	sequence: number;
-	modelIdentifier?: string;
-	providerId?: string;
-	promptText: string;
-	responseMarkdown: string;
-	responsePlainText: string;
-	startedAt: number;
-	completedAt?: number;
-	status: VSCloneChatTurnStatus;
-	errorCode?: string;
-	lastEventAt?: number;
-}
-
-export interface IVSCloneChatHistorySnapshot {
-	updatedAt: number;
-	threads: readonly IVSCloneChatHistoryThread[];
-	turnsByThreadId: Record<string, readonly IVSCloneChatHistoryTurn[]>;
-}
-
-export type VSCloneChatHistoryTab = 'all' | 'active' | 'archived';
-
-export interface IVSCloneChatHistoryQuery {
-	text?: string;
-	tab?: VSCloneChatHistoryTab;
-	includeArchived?: boolean;
-	fromTimestamp?: number;
-	toTimestamp?: number;
-	limit?: number;
-}
-
-export type VSCloneChatTurnPhase = 'prompt' | 'stream' | 'complete' | 'error' | 'cancel';
-
-export interface IVSCloneChatTurnUpdate {
-	threadId: string;
-	turnId: string;
-	sequence: number;
-	sessionResource: string;
-	phase: VSCloneChatTurnPhase;
-	occurredAt: number;
-	promptText?: string;
-	threadTitle?: string;
-	modelIdentifier?: string;
-	providerId?: string;
-	responseMarkdownDelta?: string;
-	responsePlainTextDelta?: string;
-	responseMarkdownReplace?: string;
-	responsePlainTextReplace?: string;
-	errorCode?: string;
-}
-
-export interface IVSCloneChatHistoryChangeEvent {
-	reason: 'initialize' | 'turnUpdate' | 'archive' | 'delete' | 'clear' | 'error';
-	scope: VSCloneChatHistoryScope;
-	threadIds: readonly string[];
-	error?: Error;
-}
-
-export interface IVSCloneChatHistoryService {
+export interface IVSCloneUnifiedChatBackendService {
 	readonly _serviceBrand: undefined;
 	readonly onDidChange: Event<IVSCloneChatHistoryChangeEvent>;
 	initialize(): Promise<void>;
@@ -114,6 +44,8 @@ export interface IVSCloneChatHistoryService {
 	archiveThread(threadId: string, archived: boolean): Promise<void>;
 	deleteThread(threadId: string): Promise<void>;
 	clearAll(scope: VSCloneChatHistoryScope): Promise<void>;
+	getSelectionState(): IVSCloneUnifiedChatSelectionState;
+	replaceSelectionState(state: IVSCloneUnifiedChatSelectionState): Promise<void>;
 }
 
 function normalizeScope(scope: string | undefined): VSCloneChatHistoryScope {
@@ -127,7 +59,28 @@ function toError(error: unknown): Error {
 	return new Error(String(error));
 }
 
-export class VSCloneChatHistoryService extends Disposable implements IVSCloneChatHistoryService {
+function createEmptySelectionState(): IVSCloneUnifiedChatSelectionState {
+	return {
+		selectedByThread: {},
+		selectedByLocation: {},
+		recentModelIdentifiers: [],
+	};
+}
+
+function cloneSelectionState(state: IVSCloneUnifiedChatSelectionState): IVSCloneUnifiedChatSelectionState {
+	return {
+		selectedByThread: Object.fromEntries(Object.entries(state.selectedByThread).map(([threadId, selection]) => [threadId, { ...selection, threadId: undefined }])),
+		selectedByLocation: Object.fromEntries(Object.entries(state.selectedByLocation).map(([location, selection]) => [location, selection ? { ...selection, threadId: undefined } : undefined])),
+		recentModelIdentifiers: [...state.recentModelIdentifiers],
+	};
+}
+
+/**
+ * This service is the single owner of durable VSClone conversation state. History and model
+ * selection facades both delegate here so the selected model used for execution cannot drift away
+ * from the thread snapshot restored in the UI.
+ */
+export class VSCloneUnifiedChatBackendService extends Disposable implements IVSCloneUnifiedChatBackendService {
 	declare readonly _serviceBrand: undefined;
 
 	private readonly model = new VSCloneChatHistoryModel();
@@ -190,41 +143,6 @@ export class VSCloneChatHistoryService extends Disposable implements IVSCloneCha
 		});
 
 		return this.initializing;
-	}
-
-	private async doInitialize(): Promise<void> {
-		try {
-			const snapshot = await this.store.load(this.persistScope);
-			this.model.initialize(snapshot);
-
-			const retention = this.model.applyRetention(this.maxThreads, this.retentionDays, Date.now());
-			if (retention.deletedThreadIds.length > 0) {
-				await this.persistNow();
-			}
-
-			this.initialized = true;
-			this._onDidChange.fire({
-				reason: 'initialize',
-				scope: this.persistScope,
-				threadIds: this.model.getThreads({ includeArchived: true }).map(thread => thread.threadId),
-			});
-		} catch (error) {
-			const err = toError(error);
-			if (error instanceof VSCloneUnsupportedHistoryVersionError) {
-				this.disabled = true;
-				this.notificationService.warn(localize(
-					'vsclone.history.unsupportedVersion',
-					"VSClone chat history is temporarily disabled because the stored format is not supported."
-				));
-				this.logService.warn('VSClone chat history disabled due to unsupported schema version', error);
-				this._onDidChange.fire({ reason: 'error', scope: this.persistScope, threadIds: [], error: err });
-				return;
-			}
-
-			this.logService.error('Failed to initialize VSClone chat history', error);
-			this._onDidChange.fire({ reason: 'error', scope: this.persistScope, threadIds: [], error: err });
-			throw err;
-		}
 	}
 
 	getThreads(query: IVSCloneChatHistoryQuery = {}): readonly IVSCloneChatHistoryThread[] {
@@ -314,6 +232,56 @@ export class VSCloneChatHistoryService extends Disposable implements IVSCloneCha
 		}
 
 		await this.store.clear(normalizedScope);
+	}
+
+	getSelectionState(): IVSCloneUnifiedChatSelectionState {
+		if (!this.initialized || this.disabled || !this.enabled) {
+			return createEmptySelectionState();
+		}
+
+		return cloneSelectionState(this.model.getSelectionState());
+	}
+
+	async replaceSelectionState(state: IVSCloneUnifiedChatSelectionState): Promise<void> {
+		if (!this.enabled || this.disabled) {
+			return;
+		}
+
+		await this.initialize();
+		if (!this.initialized || this.disabled) {
+			return;
+		}
+
+		this.model.replaceSelectionState(cloneSelectionState(state));
+		await this.persistNow();
+	}
+
+	private async doInitialize(): Promise<void> {
+		try {
+			const snapshot = await this.store.load(this.persistScope);
+			this.model.initialize(snapshot);
+
+			const retention = this.model.applyRetention(this.maxThreads, this.retentionDays, Date.now());
+			if (retention.deletedThreadIds.length > 0) {
+				await this.persistNow();
+			}
+
+			this.initialized = true;
+			this._onDidChange.fire({
+				reason: 'initialize',
+				scope: this.persistScope,
+				threadIds: this.model.getThreads({ includeArchived: true }).map(thread => thread.threadId),
+			});
+		} catch (error) {
+			const err = toError(error);
+			this.logService.error('Failed to initialize VSClone chat history', error);
+			this.notificationService.warn(localize(
+				'vsclone.history.initializeFailed',
+				'VSClone chat history could not be restored from storage.'
+			));
+			this._onDidChange.fire({ reason: 'error', scope: this.persistScope, threadIds: [], error: err });
+			throw err;
+		}
 	}
 
 	private schedulePersist(): void {

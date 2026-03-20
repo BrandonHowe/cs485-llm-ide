@@ -10,7 +10,7 @@ import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneApiSubmitOptions } from '../common/vscloneChatApiAdapters.js';
 import { IVSCloneEditApplicationService } from './vscloneEditApplicationService.js';

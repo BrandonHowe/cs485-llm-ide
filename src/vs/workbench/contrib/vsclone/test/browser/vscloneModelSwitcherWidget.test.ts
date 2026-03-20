@@ -9,9 +9,10 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { VSCloneModelSwitcherWidget } from '../../browser/vscloneModelSwitcherWidget.js';
 import { VSCloneModelCatalogService } from '../../common/vscloneModelCatalogService.js';
 import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderPreferencesService.js';
-import { VSCloneThreadModelSelectionService } from '../../common/vscloneThreadModelSelectionService.js';
+import { VSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { TestVSCloneOAuthService } from '../common/vscloneTestOAuthService.js';
+import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
 
 suite('VSCloneModelSwitcherWidget', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -31,7 +32,8 @@ suite('VSCloneModelSwitcherWidget', () => {
 		const providerPreferencesService = testDisposables.add(new VSCloneProviderPreferencesService(storageService));
 		const oauthService = new TestVSCloneOAuthService();
 		const catalogService = testDisposables.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
-		const selectionService = testDisposables.add(new VSCloneThreadModelSelectionService(storageService, catalogService));
+		const backendService = new TestVSCloneUnifiedChatBackendService();
+		const selectionService = testDisposables.add(new VSCloneThreadModelSelectionService(backendService, catalogService));
 
 		let manageProvidersCalls = 0;
 		const bridge = {

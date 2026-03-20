@@ -7,7 +7,7 @@ import { addDisposableListener, EventType, getWindow } from '../../../../base/br
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
 import { IVSCloneModelCatalogModelDescriptor, IVSCloneModelCatalogService, IVSCloneModelCatalogState } from '../common/vscloneModelCatalogService.js';
-import { IVSCloneChatLocation, IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
+import { IVSCloneChatLocation, IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { IVSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
 
 export interface IVSCloneModelSwitcherContext {

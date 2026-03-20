@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatTurnUpdate } from './vscloneChatHistoryService.js';
+import type { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatTurnUpdate } from '../vscloneChatHistoryTypes.js';
 
 export interface IVSCloneHistoryTransitionOptions {
 	sessionResource: string;
