@@ -6,7 +6,8 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { VSCloneModelCatalogService } from '../../common/vscloneModelCatalogService.js';
-import { VSCloneMockProviderService } from '../../common/vscloneMockProviderService.js';
+import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderPreferencesService.js';
+import { TestVSCloneOAuthService } from './vscloneTestOAuthService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 
 suite('VSCloneModelCatalogService', () => {
@@ -23,10 +24,11 @@ suite('VSCloneModelCatalogService', () => {
 
 	test('refresh success returns configured provider sections', async () => {
 		const storageService = store.add(new TestStorageService());
-		const providerService = store.add(new VSCloneMockProviderService(storageService));
-		const catalogService = store.add(new VSCloneModelCatalogService(providerService));
+		const providerPreferencesService = store.add(new VSCloneProviderPreferencesService(storageService));
+		const oauthService = new TestVSCloneOAuthService();
+		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
 
-		await providerService.initialize();
+		await providerPreferencesService.initialize();
 		await catalogService.refreshCatalog();
 
 		const state = catalogService.getState();
@@ -39,34 +41,36 @@ suite('VSCloneModelCatalogService', () => {
 		assert.ok(state.models.some(model => model.identifier === 'anthropic/claude-opus-4.5'));
 	});
 
-	test('provider status projects requires_config when enabled but unconfigured', async () => {
+	test('provider status projects requires_sign_in when enabled but signed out', async () => {
 		const storageService = store.add(new TestStorageService());
-		const providerService = store.add(new VSCloneMockProviderService(storageService));
-		const catalogService = store.add(new VSCloneModelCatalogService(providerService));
+		const providerPreferencesService = store.add(new VSCloneProviderPreferencesService(storageService));
+		const oauthService = new TestVSCloneOAuthService();
+		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
 
-		await providerService.initialize();
-		await providerService.setProviderEnabled('google', true);
-		await providerService.setProviderConfigured('google', false);
+		await providerPreferencesService.initialize();
+		await providerPreferencesService.setProviderEnabled('google', true);
+		oauthService.setReady('google', false);
 		await catalogService.refreshCatalog();
 		await waitForCatalogToSettle(catalogService);
 
 		const state = catalogService.getState();
 		const googleProvider = state.providers.find(provider => provider.vendor === 'google');
 		assert.ok(googleProvider);
-		assert.strictEqual(googleProvider?.status, 'requires_config');
+		assert.strictEqual(googleProvider?.status, 'requires_sign_in');
 
 		const googleModel = state.models.find(model => model.vendor === 'google');
 		assert.ok(googleModel);
 		assert.strictEqual(googleModel?.isSelectable, false);
-		assert.strictEqual(googleModel?.unavailableReason, 'provider_requires_configuration');
+		assert.strictEqual(googleModel?.unavailableReason, 'provider_requires_sign_in');
 	});
 
 	test('error transition recovers on subsequent refresh', async () => {
 		const storageService = store.add(new TestStorageService());
-		const providerService = store.add(new VSCloneMockProviderService(storageService));
-		const catalogService = store.add(new VSCloneModelCatalogService(providerService));
+		const providerPreferencesService = store.add(new VSCloneProviderPreferencesService(storageService));
+		const oauthService = new TestVSCloneOAuthService();
+		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
 
-		await providerService.initialize();
+		await providerPreferencesService.initialize();
 		catalogService.setFailNextRefreshForTest();
 		await catalogService.refreshCatalog();
 		assert.strictEqual(catalogService.getState().status, 'error');

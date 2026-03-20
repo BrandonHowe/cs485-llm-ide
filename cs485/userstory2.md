@@ -3,6 +3,12 @@
 Rationale: The most important goal is to acquire accurate usage data from OpenAI/Claude/etc APIs. This data needs to be integrated with VSCode in a way that the user can see it, but not in the chat panel. If the numbers are not reliable, budget warnings and cost visibility lose most of their value.
 
 - **Spec ID:** `BC-USAGE-LOG-001`
+- **Revision:** `current usage-ledger revision`
+- **Author(s):** Brandon Howe
+- **Role(s):** Developer
+- **Version History:**
+  - `v1.0` - Initial Story 2 development specification.
+  - `v1.1` - Current revision with explicit risk likelihood, impact, and recovery framing.
 - **Feature:** VSClone Provider-Verified Usage + Remaining Quota Side Panel
 - **User Story:** As a developer, I want to see a running log of my LLM usage and remaining tokens so that I can manage my spending and avoid unexpected costs.
 - **Primary Outcome:** A live, queryable usage ledger in a side panel with provider-authoritative token and cost totals, plus remaining quota and budget alerts.
@@ -88,19 +94,19 @@ Rationale: The flow chart keeps ordering simple: capture request references, syn
 
 # Development Risks and Failures
 
-Rationale: Most risk here comes from outside dependencies, especially provider latency, schema drift, and rate limits. The mitigations focus on clear failure states, retries, and graceful degradation instead of trying to hide those failures. That keeps behavior honest when provider systems are slow or partially unavailable.
+Rationale: Most risk here comes from outside dependencies, especially provider latency, schema drift, and rate limits. Some failures are inevitable because this feature depends on provider-owned usage and quota APIs, so I am framing the response as recovery methods with explicit likelihood and impact instead of assuming every failure can be fully prevented.
 
-| Risk | Failure Mode | Mitigation |
-|---|---|---|
-| Usage capture tied to view lifecycle | Missing request rows when usage view is closed | Startup-scoped capture bridge/service owns ingestion independent of view visibility |
-| Provider usage API latency or eventual consistency | Recent requests stay unresolved for a short window | Mark entries `pending_sync`; retry on interval; show `lastSyncedAt` and manual refresh |
-| Provider usage API rate limits | Sync gaps or delayed updates | Per-provider backoff/jitter and bounded concurrency |
-| Missing provider correlation identifier | Authoritative usage cannot be retrieved | Mark `sync_failed` with reason; do not estimate values |
-| Provider schema/version drift | Parse/normalization failures | Versioned provider adapters + contract tests |
-| Provider lacks usage endpoint for selected account/model | No usage row available | Mark provider as unsupported and surface explicit UI state |
-| Large ledger growth | Slow load and high memory | JSONL append + compacted summary + retention pruning + pagination |
-| Multi-window writes | Corrupted or lost lines | File-level lock/atomic append strategy, periodic reload reconciliation |
-| Quota API latency/staleness | Warning state flickers | Cache last quota snapshot with timestamp; UI shows `last updated` |
+| Risk | Likelihood | Impact | Affected Scope | Failure Mode | Recovery Method |
+|---|---|---|---|---|---|
+| Usage capture tied to view lifecycle | Low | High | Usage ledger accuracy only | Missing request rows when usage view is closed | Keep capture startup-scoped; if the view opens after missed activity, replay buffered request references before rendering summaries |
+| Provider usage API latency or eventual consistency | High | Medium | Recent usage rows and totals, not the whole system | Recent requests stay unresolved for a short window | Mark entries `pending_sync`, retry on interval, and expose `lastSyncedAt` plus manual refresh so the user can see that the system is waiting on the provider |
+| Provider usage API rate limits | Medium | Medium | Sync freshness for the affected provider | Sync gaps or delayed updates | Apply per-provider backoff/jitter, reduce concurrency, and recover by resuming sync after the cooldown window instead of dropping rows |
+| Missing provider correlation identifier | Medium | Medium | Affected request rows only | Authoritative usage cannot be retrieved | Mark the row `sync_failed` with a reason and preserve the request reference so it can be retried if later metadata becomes available |
+| Provider schema/version drift | Medium | High | Provider adapter for the changed vendor | Parse or normalization failures | Keep versioned adapters and contract tests; if parsing breaks, isolate the provider as degraded and continue serving existing persisted usage data |
+| Provider lacks usage endpoint for selected account/model | Medium | Medium | Affected provider integration only | No authoritative usage row can be loaded | Mark the provider unsupported and surface explicit UI state rather than inventing estimated numbers |
+| Large ledger growth | Medium | Medium | Usage view load time and memory | Slow load and high memory use | Compact aggressively, paginate the view, and prune retained history before the feature degrades the rest of the workbench |
+| Multi-window writes | Low | High | Usage ledger storage only | Corrupted or lost lines | Use append discipline plus reconciliation on reopen; if corruption is detected, rebuild summaries from the last valid portion of the ledger |
+| Quota API latency/staleness | High | Low | Warning/budget indicators only | Warning state flickers or lags | Cache the last quota snapshot with a timestamp and show staleness explicitly until the next successful refresh arrives |
 
 # Technology Stack
 
@@ -316,10 +322,12 @@ Rationale: I kept privacy strict by storing usage metadata only and avoiding pro
 
 # Risks to Completion
 
-Rationale: The main completion risks are provider differences and evolving product expectations around export and scope. A lot of uncertainty here comes from external API behavior, not just implementation effort. The other main completion risk is if project specifications change the requirements for the usage panel.
+Rationale: The main completion risks are provider differences and evolving product expectations around export and scope. The table below turns those into concrete actions so the spec answers not just what can go wrong, but what the team would do about it.
 
-- Provider usage API contracts may evolve, requiring adapter maintenance.
-- Some providers may not support near-real-time usage retrieval, causing temporary pending states.
-- Account/org/project scoping rules vary by provider and may require additional UX for source selection.
-- Export requirements (CSV schema stability, compliance needs) may grow beyond MVP.
-- Performance tuning may be needed if usage volume is high in large agent-heavy sessions.
+| Completion Risk | Likelihood | Impact on Delivery | What We Can Do Now | Contingency if It Happens |
+|---|---|---|---|---|
+| Provider usage API contracts evolve during implementation | Medium | High | Encapsulate every provider behind a dedicated adapter and write contract tests around normalized output | Temporarily freeze support for the affected provider version and ship with degraded or unsupported-provider state instead of bad numbers |
+| Some providers do not support near-real-time usage retrieval | Medium | Medium | Design `pending_sync` as a first-class state and ensure the UI communicates delay honestly | Treat delayed resolution as acceptable MVP behavior and avoid blocking the rest of the panel on near-real-time accuracy |
+| Account/org/project scoping rules differ by provider | Medium | Medium | Add provider-specific configuration seams now rather than assuming one universal scope model | Limit MVP to the most common scope path and defer advanced source-selection UX to a follow-up iteration |
+| Export requirements grow beyond MVP | Medium | Medium | Keep export code behind one service with explicit schema versioning and tests | Narrow the first release to JSON/CSV basics and document compliance-oriented export as post-MVP work |
+| Performance tuning is needed for large agent-heavy sessions | Medium | Medium | Add retention, pagination, and compaction hooks before volume grows | Reduce default retention/max-entry settings for MVP and schedule deeper optimization after correctness is stable |

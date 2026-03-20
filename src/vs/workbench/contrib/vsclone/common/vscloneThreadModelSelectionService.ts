@@ -8,6 +8,7 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IVSCloneModelCatalogService, isVSCloneReasoningEffortLevel, type IVSCloneModelCatalogModelDescriptor, type VSCloneReasoningEffortLevel } from './vscloneModelCatalogService.js';
+import { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 
 export const IVSCloneThreadModelSelectionService = createDecorator<IVSCloneThreadModelSelectionService>('vsCloneThreadModelSelectionService');
 
@@ -17,7 +18,7 @@ export interface IVSCloneModelSelection {
 	threadId?: string;
 	location: IVSCloneChatLocation;
 	modelIdentifier: string;
-	vendor: string;
+	vendor: VSCloneModelVendor;
 	modelId: string;
 	modelName: string;
 	reasoningEffort?: VSCloneReasoningEffortLevel;
@@ -54,6 +55,17 @@ const selectionStorageKey = 'vsclone.modelSwitcher.selection.v1';
 const maxRecentModelIdentifiers = 8;
 
 const allLocations: readonly IVSCloneChatLocation[] = ['chat', 'editorInline', 'notebook', 'terminal'];
+
+function isVSCloneModelVendor(value: string): value is VSCloneModelVendor {
+	switch (value) {
+		case 'openai':
+		case 'anthropic':
+		case 'google':
+			return true;
+		default:
+			return false;
+	}
+}
 
 function normalizeThreadId(threadId: string): string | undefined {
 	const normalized = threadId.trim();
@@ -297,7 +309,7 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 			threadId: undefined,
 			location: value.location,
 			modelIdentifier: value.modelIdentifier,
-			vendor: typeof value.vendor === 'string' && value.vendor.length > 0 ? value.vendor : derivedVendor,
+			vendor: isVSCloneModelVendor(value.vendor) ? value.vendor : isVSCloneModelVendor(derivedVendor) ? derivedVendor : model?.vendor ?? 'openai',
 			modelId: typeof value.modelId === 'string' && value.modelId.length > 0 ? value.modelId : derivedModelId,
 			modelName: typeof value.modelName === 'string' && value.modelName.length > 0 ? value.modelName : derivedModelId,
 			reasoningEffort: model ? this.normalizeReasoningEffort(model, parsedReasoningEffort) : parsedReasoningEffort,

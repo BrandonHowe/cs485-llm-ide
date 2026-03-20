@@ -1,26 +1,19 @@
 flowchart TD
-  A[User opens unified chat pane] --> B[User selects thread in history rail]
-  B --> C[Restore thread context and model selection]
-  C --> D[User sends prompt from composer]
-  D --> E[Existing IChatService processes request]
-  E --> F[VSCloneChatSessionBridge receives addRequest event]
-  F --> G{Thread exists for sessionResource?}
-  G -- No --> H[Create thread metadata]
-  G -- Yes --> I[Reuse existing thread]
-  H --> J[Create pending turn with prompt text]
-  I --> J
-  J --> K[Receive streaming response events]
-  K --> L[Update in-memory turn content]
-  L --> M{Response terminal state?}
-  M -- No --> K
-  M -- Yes --> N[Finalize turn and capture model metadata]
-  N --> O[VSCloneChatHistoryService marks model dirty]
-  O --> P[Persist thread plus index]
-  P --> Q{Persist success?}
-  Q -- Yes --> R[Refresh history rail in unified pane]
-  Q -- No --> S[Retry with backoff and log]
-  R --> T[User selects history item]
-  T --> U{Action}
-  U -- Copy --> V[Copy prompt or response to clipboard]
-  U -- Reuse --> W[Set chat input and restore turn model]
-  U -- Open --> X[Open and focus original session]
+  A[User opens unified chat pane] --> B[Unified backend initialize and recover snapshot]
+  B --> C[History rail requests thread summaries]
+  C --> D[User selects a thread]
+  D --> E[Backend returns thread turns plus active model selection]
+  E --> F[View pane restores conversation and composer badge]
+  F --> G[User sends prompt or reuses a previous prompt]
+  G --> H[ChatSessionService resolves selected model for active thread]
+  H --> I[IChatService starts or reuses session]
+  I --> J[Runtime service receives chat model events]
+  J --> K[Unified backend reduces turn update]
+  K --> L[Backend updates thread summary active model and timestamps]
+  L --> M[Unified store persists index thread doc and preferences]
+  M --> N[History rail refreshes from backend snapshot]
+  N --> O{User chooses action}
+  O -- Copy --> P[Copy prompt or response]
+  O -- Archive --> Q[Archive thread]
+  O -- Delete --> R[Delete thread and persisted doc]
+  O -- Reuse --> S[Push prompt back into composer with restored model]

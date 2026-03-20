@@ -173,10 +173,125 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		rail.confirmDeleteThread('thread-1', 'Thread 1');
 		const overlay = container.querySelector('.vsclone-chat-history-delete-overlay') as HTMLElement;
+		const modal = container.querySelector('.vsclone-chat-history-delete-modal') as HTMLElement;
 		const confirm = container.querySelector('.vsclone-chat-history-delete-confirm') as HTMLButtonElement;
 		assert.ok(overlay.classList.contains('visible'));
+		assert.strictEqual(overlay.getAttribute('aria-hidden'), 'false');
+		assert.strictEqual(modal.getAttribute('role'), 'dialog');
+		assert.strictEqual(modal.getAttribute('aria-modal'), 'true');
 		confirm.click();
 		assert.strictEqual(deletedThreadId, 'thread-1');
+	});
+
+	test('history rail delete modal traps keyboard focus and restores previous focus on escape', () => {
+		const contextMenuService: IContextMenuService = {
+			_serviceBrand: undefined,
+			showContextMenu: () => undefined,
+			configure: () => undefined,
+			closeContextView: () => undefined,
+			hideContextView: () => undefined,
+			layout: () => undefined,
+			getContextViewElement: () => document.createElement('div'),
+		} as unknown as IContextMenuService;
+
+		const rail = store.add(new VSCloneChatHistoryRail(contextMenuService));
+		const container = document.createElement('div');
+		document.body.appendChild(container);
+		rail.render(container);
+
+		const priorFocus = document.createElement('button');
+		document.body.appendChild(priorFocus);
+		priorFocus.focus();
+
+		rail.confirmDeleteThread('thread-1', 'Thread 1');
+		const overlay = container.querySelector('.vsclone-chat-history-delete-overlay') as HTMLElement;
+		const cancel = container.querySelector('.vsclone-chat-history-delete-cancel') as HTMLButtonElement;
+		const confirm = container.querySelector('.vsclone-chat-history-delete-confirm') as HTMLButtonElement;
+		assert.strictEqual(document.activeElement, cancel);
+
+		// Tab and Shift+Tab should wrap inside the two modal action buttons.
+		confirm.focus();
+		overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+		assert.strictEqual(document.activeElement, cancel);
+		cancel.focus();
+		overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+		assert.strictEqual(document.activeElement, confirm);
+
+		overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+		assert.strictEqual(overlay.getAttribute('aria-hidden'), 'true');
+		assert.ok(!overlay.classList.contains('visible'));
+		assert.strictEqual(document.activeElement, priorFocus);
+		container.remove();
+		priorFocus.remove();
+	});
+
+	test('history rail exposes state container roles and list accessibility labels', () => {
+		const contextMenuService: IContextMenuService = {
+			_serviceBrand: undefined,
+			showContextMenu: () => undefined,
+			configure: () => undefined,
+			closeContextView: () => undefined,
+			hideContextView: () => undefined,
+			layout: () => undefined,
+			getContextViewElement: () => document.createElement('div'),
+		} as unknown as IContextMenuService;
+
+		const rail = store.add(new VSCloneChatHistoryRail(contextMenuService));
+		const container = document.createElement('div');
+		rail.render(container);
+
+		const list = container.querySelector('.vsclone-chat-history-list') as HTMLElement;
+		assert.strictEqual(list.getAttribute('role'), 'list');
+		assert.strictEqual(list.getAttribute('aria-label'), 'Conversation threads');
+
+		rail.setLoading();
+		assert.strictEqual((container.querySelector('.vsclone-chat-history-state') as HTMLElement).getAttribute('role'), 'status');
+		rail.setError('boom');
+		assert.strictEqual((container.querySelector('.vsclone-chat-history-state') as HTMLElement).getAttribute('role'), 'alert');
+		rail.setRows([{
+			threadId: 'thread-1',
+			title: 'Thread 1',
+			preview: 'Preview',
+			updatedLabel: 'just now',
+			turnCount: 2,
+			archived: false,
+			status: 'active',
+			selected: false,
+		}]);
+		assert.strictEqual((container.querySelector('.vsclone-chat-history-state') as HTMLElement).getAttribute('role'), null);
+	});
+
+	test('history rail rows render as keyboard-focusable buttons with selection state', () => {
+		const contextMenuService: IContextMenuService = {
+			_serviceBrand: undefined,
+			showContextMenu: () => undefined,
+			configure: () => undefined,
+			closeContextView: () => undefined,
+			hideContextView: () => undefined,
+			layout: () => undefined,
+			getContextViewElement: () => document.createElement('div'),
+		} as unknown as IContextMenuService;
+
+		const rail = store.add(new VSCloneChatHistoryRail(contextMenuService));
+		const container = document.createElement('div');
+		rail.render(container);
+		rail.setRows([{
+			threadId: 'thread-1',
+			title: 'Thread 1',
+			preview: 'Preview',
+			updatedLabel: 'just now',
+			turnCount: 2,
+			archived: false,
+			status: 'active',
+			selected: false,
+		}]);
+
+		const row = container.querySelector('.vsclone-chat-history-row') as HTMLButtonElement;
+		assert.strictEqual(row.tagName, 'BUTTON');
+		assert.strictEqual(row.getAttribute('aria-pressed'), 'false');
+
+		rail.setSelectedThread('thread-1');
+		assert.strictEqual(row.getAttribute('aria-pressed'), 'true');
 	});
 
 	test('search/tab filter mapping updates query semantics', () => {
@@ -225,6 +340,19 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		target.renderConversationSurface(parent);
 		assert.ok(parent.querySelector('.vsclone-thread-model-switcher'));
 		assert.ok(parent.querySelector('.vsclone-thread-reasoning-level-select'));
+		assert.strictEqual((parent.querySelector('.vsclone-thread-action-button') as HTMLButtonElement).getAttribute('aria-label'), 'Show chat history');
+		assert.strictEqual((parent.querySelector('.vsclone-thread-action-overflow') as HTMLButtonElement).textContent, '\u22ef');
+		assert.strictEqual((parent.querySelector('.vsclone-thread-action-overflow') as HTMLButtonElement).getAttribute('aria-haspopup'), 'menu');
+		assert.strictEqual((parent.querySelector('.vsclone-thread-messages') as HTMLElement).getAttribute('role'), 'log');
+		assert.strictEqual((parent.querySelector('.vsclone-thread-messages') as HTMLElement).getAttribute('aria-live'), 'polite');
+		assert.strictEqual((parent.querySelector('.vsclone-thread-messages') as HTMLElement).getAttribute('aria-relevant'), 'additions text');
+		assert.strictEqual((parent.querySelector('.vsclone-thread-messages') as HTMLElement).getAttribute('aria-label'), 'Conversation messages');
+		assert.strictEqual((parent.querySelector('.vsclone-thread-composer-input') as HTMLTextAreaElement).getAttribute('aria-label'), 'Chat message');
+		const hint = parent.querySelector('.vsclone-thread-composer-hint') as HTMLElement;
+		assert.strictEqual((parent.querySelector('.vsclone-thread-composer-input') as HTMLTextAreaElement).getAttribute('aria-describedby'), hint.id);
+		// Explicitly dispose synthesized registrations in this unit harness to satisfy leak checks.
+		(target.modelSwitcher as { dispose?: () => void } | undefined)?.dispose?.();
+		(target.composerFocusDisposable as { value?: { dispose?: () => void } }).value?.dispose?.();
 	});
 
 	test('submitPrompt passes selected model metadata to session service', async () => {
@@ -276,7 +404,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		target.sessionService = {
 			submitPrompt: async (_prompt: string, options: IVSCloneChatSubmitOptions) => {
 				capturedOptions = options;
-				return { threadId: 'thread-new', sessionResource: 'vsclone://mock/thread-new', mocked: true };
+				return { threadId: 'thread-new', sessionResource: 'vsclone://api/thread-new' };
 			},
 		};
 

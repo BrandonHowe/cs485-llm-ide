@@ -33,6 +33,8 @@ interface IDeleteDialogState {
 	threadTitle: string;
 }
 
+let deleteDialogIdPool = 0;
+
 export class VSCloneChatHistoryRail extends Disposable {
 	private readonly _onDidSelectThread = this._register(new Emitter<string>());
 	readonly onDidSelectThread: Event<string> = this._onDidSelectThread.event;
@@ -58,8 +60,12 @@ export class VSCloneChatHistoryRail extends Disposable {
 	private tabButtons = new Map<VSCloneRailTab, HTMLButtonElement>();
 	private modalContainer: HTMLElement | undefined;
 	private modalDescription: HTMLElement | undefined;
+	private modalCancelButton: HTMLButtonElement | undefined;
+	private modalConfirmButton: HTMLButtonElement | undefined;
+	private modalPreviouslyFocused: HTMLElement | undefined;
 	private readonly renderDisposables = this._register(new DisposableStore());
 	private readonly searchDelayer = this._register(new Delayer<void>(140));
+	private readonly deleteDialogId = ++deleteDialogIdPool;
 
 	private filterState: IVSCloneChatHistoryRailFilterState = { query: '', tab: 'all' };
 	private rows: readonly IVSCloneChatHistoryRailRow[] = [];
@@ -89,7 +95,9 @@ export class VSCloneChatHistoryRail extends Disposable {
 		backButton.type = 'button';
 		backButton.className = 'vsclone-chat-history-back';
 		backButton.textContent = '\u2190';
-		backButton.title = localize('vsclone.rail.back.tooltip', 'Back to conversation');
+		const backButtonLabel = localize('vsclone.rail.back.tooltip', 'Back to conversation');
+		backButton.title = backButtonLabel;
+		backButton.setAttribute('aria-label', backButtonLabel);
 		this._register(DOM.addDisposableListener(backButton, DOM.EventType.CLICK, () => this._onDidRequestClose.fire()));
 		headerRow.appendChild(backButton);
 
@@ -110,6 +118,7 @@ export class VSCloneChatHistoryRail extends Disposable {
 		search.className = 'vsclone-chat-history-search';
 		search.type = 'search';
 		search.placeholder = localize('vsclone.rail.search.placeholder', 'Search threads...');
+		search.setAttribute('aria-label', localize('vsclone.rail.search.ariaLabel', 'Search chat history'));
 		search.value = this.filterState.query;
 		this.searchInput = search;
 		header.appendChild(search);
@@ -145,6 +154,8 @@ export class VSCloneChatHistoryRail extends Disposable {
 
 		const listContainer = document.createElement('div');
 		listContainer.className = 'vsclone-chat-history-list';
+		listContainer.setAttribute('role', 'list');
+		listContainer.setAttribute('aria-label', localize('vsclone.rail.list.ariaLabel', 'Conversation threads'));
 		this.listContainer = listContainer;
 		this._register(DOM.addDisposableListener(listContainer, DOM.EventType.CLICK, (event: MouseEvent) => this.onListClick(event)));
 		this._register(DOM.addDisposableListener(listContainer, DOM.EventType.CONTEXT_MENU, (event: MouseEvent) => this.onListContextMenu(event)));
@@ -232,10 +243,16 @@ export class VSCloneChatHistoryRail extends Disposable {
 
 	confirmDeleteThread(threadId: string, threadTitle: string): void {
 		this.pendingDelete = { threadId, threadTitle };
+		const targetWindow = this.modalContainer ? DOM.getWindow(this.modalContainer) : DOM.getActiveWindow();
+		const activeElement = targetWindow.document.activeElement;
+		this.modalPreviouslyFocused = DOM.isHTMLElement(activeElement) ? activeElement : undefined;
 		if (this.modalDescription) {
 			this.modalDescription.textContent = localize('vsclone.rail.delete.message', 'Are you sure you want to delete "{0}"? This action cannot be undone.', threadTitle);
 		}
 		this.modalContainer?.classList.add('visible');
+		this.modalContainer?.setAttribute('aria-hidden', 'false');
+		// Move focus into the dialog immediately so keyboard and screen-reader users remain in modal context.
+		this.modalCancelButton?.focus();
 	}
 
 	private updateTab(tab: VSCloneRailTab): void {
@@ -250,7 +267,9 @@ export class VSCloneChatHistoryRail extends Disposable {
 
 	private refreshTabStyles(): void {
 		for (const [tab, button] of this.tabButtons) {
-			button.classList.toggle('active', this.filterState.tab === tab);
+			const selected = this.filterState.tab === tab;
+			button.classList.toggle('active', selected);
+			button.setAttribute('aria-pressed', String(selected));
 		}
 	}
 
@@ -263,6 +282,9 @@ export class VSCloneChatHistoryRail extends Disposable {
 
 		this.listContainer.classList.toggle('hidden', this.viewState !== 'ready');
 		this.stateContainer.classList.toggle('hidden', this.viewState === 'ready');
+		if (this.viewState === 'ready') {
+			this.stateContainer.removeAttribute('role');
+		}
 
 		if (this.viewState === 'ready') {
 			this.renderRows();
@@ -296,10 +318,13 @@ export class VSCloneChatHistoryRail extends Disposable {
 	}
 
 	private createRowElement(row: IVSCloneChatHistoryRailRow): HTMLElement {
-		const rowElement = document.createElement('div');
+		const rowElement = document.createElement('button');
+		rowElement.type = 'button';
 		rowElement.className = 'vsclone-chat-history-row';
 		rowElement.classList.toggle('selected', row.threadId === this.selectedThreadId || row.selected);
 		rowElement.dataset.threadId = row.threadId;
+		rowElement.setAttribute('aria-pressed', String(row.threadId === this.selectedThreadId || row.selected));
+		rowElement.setAttribute('aria-label', this.getRowAriaLabel(row));
 
 		const top = document.createElement('div');
 		top.className = 'vsclone-chat-history-row-top';
@@ -321,7 +346,7 @@ export class VSCloneChatHistoryRail extends Disposable {
 
 		const metadata = document.createElement('div');
 		metadata.className = 'vsclone-chat-history-row-metadata';
-		metadata.textContent = `${row.turnCount}`;
+		metadata.textContent = localize('vsclone.rail.turnCount', '{0} turns', row.turnCount);
 		if (row.archived) {
 			const archived = document.createElement('span');
 			archived.className = 'vsclone-chat-history-row-archived';
@@ -343,9 +368,22 @@ export class VSCloneChatHistoryRail extends Disposable {
 			}
 			if (child.dataset.threadId === threadId) {
 				child.classList.toggle('selected', selected);
+				child.setAttribute('aria-pressed', String(selected));
 				return;
 			}
 		}
+	}
+
+	private getRowAriaLabel(row: IVSCloneChatHistoryRailRow): string {
+		const archivedSuffix = row.archived ? localize('vsclone.rail.row.archived', 'Archived.') : '';
+		return localize(
+			'vsclone.rail.row.ariaLabel',
+			'{0}. {1} turns. Updated {2}. {3}',
+			row.title,
+			row.turnCount,
+			row.updatedLabel,
+			archivedSuffix,
+		).trim();
 	}
 
 	private onListClick(event: MouseEvent): void {
@@ -408,9 +446,11 @@ export class VSCloneChatHistoryRail extends Disposable {
 			return;
 		}
 		this.stateContainer.replaceChildren();
+		this.stateContainer.setAttribute('role', 'status');
 		const icon = document.createElement('div');
 		icon.className = 'vsclone-chat-history-state-icon';
 		icon.textContent = '[]';
+		icon.setAttribute('aria-hidden', 'true');
 		const heading = document.createElement('div');
 		heading.className = 'vsclone-chat-history-state-title';
 		heading.textContent = localize('vsclone.rail.empty.title', 'No conversations yet');
@@ -427,9 +467,11 @@ export class VSCloneChatHistoryRail extends Disposable {
 			return;
 		}
 		this.stateContainer.replaceChildren();
+		this.stateContainer.setAttribute('role', 'alert');
 		const icon = document.createElement('div');
 		icon.className = 'vsclone-chat-history-state-icon error';
 		icon.textContent = '!';
+		icon.setAttribute('aria-hidden', 'true');
 		const heading = document.createElement('div');
 		heading.className = 'vsclone-chat-history-state-title';
 		heading.textContent = localize('vsclone.rail.error.title', 'Something went wrong');
@@ -453,8 +495,10 @@ export class VSCloneChatHistoryRail extends Disposable {
 			return;
 		}
 		this.stateContainer.replaceChildren();
+		this.stateContainer.setAttribute('role', 'status');
 		const skeleton = document.createElement('div');
 		skeleton.className = 'vsclone-chat-history-skeleton';
+		skeleton.setAttribute('aria-hidden', 'true');
 		for (let i = 0; i < 7; i++) {
 			const row = document.createElement('div');
 			row.className = 'vsclone-chat-history-skeleton-row';
@@ -471,16 +515,23 @@ export class VSCloneChatHistoryRail extends Disposable {
 	private createDeleteModal(): HTMLElement {
 		const overlay = document.createElement('div');
 		overlay.className = 'vsclone-chat-history-delete-overlay';
+		overlay.setAttribute('aria-hidden', 'true');
 
 		const modal = document.createElement('div');
 		modal.className = 'vsclone-chat-history-delete-modal';
+		modal.setAttribute('role', 'dialog');
+		modal.setAttribute('aria-modal', 'true');
+		modal.setAttribute('aria-labelledby', `vsclone-chat-history-delete-title-${this.deleteDialogId}`);
+		modal.setAttribute('aria-describedby', `vsclone-chat-history-delete-description-${this.deleteDialogId}`);
 
 		const title = document.createElement('div');
 		title.className = 'vsclone-chat-history-delete-title';
 		title.textContent = localize('vsclone.rail.delete.title', 'Delete thread?');
+		title.id = `vsclone-chat-history-delete-title-${this.deleteDialogId}`;
 
 		const description = document.createElement('div');
 		description.className = 'vsclone-chat-history-delete-description';
+		description.id = `vsclone-chat-history-delete-description-${this.deleteDialogId}`;
 		this.modalDescription = description;
 
 		const actions = document.createElement('div');
@@ -490,22 +541,24 @@ export class VSCloneChatHistoryRail extends Disposable {
 		cancel.type = 'button';
 		cancel.className = 'vsclone-chat-history-delete-cancel';
 		cancel.textContent = localize('vsclone.rail.delete.cancel', 'Cancel');
+		this.modalCancelButton = cancel;
 		this._register(DOM.addDisposableListener(cancel, DOM.EventType.CLICK, () => {
 			this.pendingDelete = undefined;
-			overlay.classList.remove('visible');
+			this.closeDeleteModal();
 		}));
 
 		const confirm = document.createElement('button');
 		confirm.type = 'button';
 		confirm.className = 'vsclone-chat-history-delete-confirm';
 		confirm.textContent = localize('vsclone.rail.delete.confirm', 'Delete');
+		this.modalConfirmButton = confirm;
 		this._register(DOM.addDisposableListener(confirm, DOM.EventType.CLICK, () => {
 			if (!this.pendingDelete) {
 				return;
 			}
 			const request = this.pendingDelete;
 			this.pendingDelete = undefined;
-			overlay.classList.remove('visible');
+			this.closeDeleteModal();
 			this._onDidRequestAction.fire({ action: 'delete', threadId: request.threadId });
 		}));
 
@@ -518,11 +571,49 @@ export class VSCloneChatHistoryRail extends Disposable {
 
 		this._register(DOM.addDisposableListener(overlay, DOM.EventType.CLICK, (event: MouseEvent) => {
 			if (event.target === overlay) {
-				overlay.classList.remove('visible');
 				this.pendingDelete = undefined;
+				this.closeDeleteModal();
+			}
+		}));
+
+		this._register(DOM.addDisposableListener(overlay, DOM.EventType.KEY_DOWN, (event: KeyboardEvent) => {
+			if (!overlay.classList.contains('visible')) {
+				return;
+			}
+
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				this.pendingDelete = undefined;
+				this.closeDeleteModal();
+				return;
+			}
+
+			// Keep keyboard focus cycling inside the modal while it is visible.
+			if (event.key === 'Tab' && this.modalCancelButton && this.modalConfirmButton) {
+				const active = DOM.getWindow(overlay).document.activeElement;
+				if (event.shiftKey) {
+					if (!active || active === this.modalCancelButton || !modal.contains(active)) {
+						event.preventDefault();
+						this.modalConfirmButton.focus();
+					}
+					return;
+				}
+				if (!active || active === this.modalConfirmButton || !modal.contains(active)) {
+					event.preventDefault();
+					this.modalCancelButton.focus();
+				}
 			}
 		}));
 
 		return overlay;
+	}
+
+	private closeDeleteModal(): void {
+		this.modalContainer?.classList.remove('visible');
+		this.modalContainer?.setAttribute('aria-hidden', 'true');
+		if (this.modalPreviouslyFocused?.isConnected) {
+			this.modalPreviouslyFocused.focus();
+		}
+		this.modalPreviouslyFocused = undefined;
 	}
 }

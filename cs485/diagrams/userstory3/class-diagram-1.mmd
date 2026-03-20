@@ -1,7 +1,59 @@
 classDiagram
-class VSCloneModelSwitcherContribution {
+direction LR
+
+class VSCloneContribution {
   +register(): void
   +dispose(): void
+}
+
+class VSCloneChatRuntimeService {
+  +initialize(): Promise~void~
+  +attachModel(model): void
+  +detachModel(sessionResource): void
+}
+
+class VSCloneChatSessionService {
+  +submitPrompt(promptText, options): Promise~SubmitResult~
+  +cancelThread(threadId): void
+}
+
+class VSCloneUnifiedChatBackendService {
+  +initialize(): Promise~void~
+  +getThreadSnapshot(threadId): ThreadSnapshot
+  +setThreadSelection(threadId, selection): Promise~void~
+  +getThreadSelection(threadId, location): Selection
+  +getRecentModelIdentifiers(limit): string[]
+}
+
+class VSCloneUnifiedChatModel {
+  +rehydrate(snapshot): void
+  +getThreadSnapshot(threadId): ThreadSnapshot
+  +setSelection(threadId, selection): void
+  +setDefaultSelection(location, modelIdentifier): void
+}
+
+class VSCloneUnifiedChatStore {
+  +load(scope): Promise~Snapshot~
+  +save(snapshot, scope): Promise~void~
+}
+
+class VSCloneUnifiedChatSerializer {
+  +serializeIndex(snapshot): string
+  +serializeThread(thread): string
+  +serializePreferences(preferences): string
+}
+
+class VSCloneUnifiedChatMigrationService {
+  +migrateLegacyHistory(raw): Snapshot
+  +migrateLegacySelections(raw): Snapshot
+}
+
+class VSCloneThreadModelSelectionService {
+  +initialize(): Promise~void~
+  +getCurrentSelectionForThread(threadId, location): Selection
+  +setSelectionForThread(threadId, selection): Promise~void~
+  +switchToNextModel(threadId, location): Promise~Selection~
+  +resetSelectionForThread(threadId): Promise~void~
 }
 
 class VSCloneModelCatalogService {
@@ -17,26 +69,10 @@ class VSCloneModelAvailabilityService {
 
 class VSCloneModelCompatibilityService {
   +filterSupported(models, context): Model[]
-  +explainIncompatibility(model, context): string|undefined
-}
-
-class VSCloneThreadModelSelectionService {
-  +initialize(): Promise~void~
-  +getCurrentSelectionForThread(threadId, location): Selection|undefined
-  +setSelectionForThread(threadId, selection): Promise~void~
-  +switchToNextModel(threadId, location): Promise~Selection|undefined~
-  +resetSelectionForThread(threadId): Promise~void~
-}
-
-class VSCloneModelPreferenceStore {
-  +load(): PreferencesSnapshot
-  +saveSelection(selection): void
-  +saveRecent(modelId): void
-  +clear(): void
+  +explainIncompatibility(model, context): string
 }
 
 class VSCloneProviderConfigurationBridge {
-  +listProviderGroups(providerId): Group[]
   +openProviderConfig(providerId): Promise~void~
   +validateProviderConfiguration(providerId): Promise~ValidationResult~
 }
@@ -57,22 +93,21 @@ class VSCloneModelSwitcherActionRegistrar {
   +registerCommands(): void
 }
 
-class VSCloneModelSelectionMigrationService {
-  +migrate(snapshot): PreferencesSnapshot
-}
-
-VSCloneModelSwitcherContribution --> VSCloneModelSwitcherActionRegistrar
-VSCloneModelSwitcherContribution --> VSCloneModelPickerController
-VSCloneModelSwitcherContribution --> VSCloneThreadModelSelectionService
-
+VSCloneContribution --> VSCloneChatRuntimeService
+VSCloneContribution --> VSCloneChatSessionService
+VSCloneContribution --> VSCloneModelPickerController
+VSCloneContribution --> VSCloneUnifiedChatModelSwitcherActionItem
+VSCloneChatRuntimeService --> VSCloneUnifiedChatBackendService
+VSCloneChatSessionService --> VSCloneThreadModelSelectionService
+VSCloneThreadModelSelectionService --> VSCloneUnifiedChatBackendService
+VSCloneUnifiedChatBackendService --> VSCloneUnifiedChatModel
+VSCloneUnifiedChatBackendService --> VSCloneUnifiedChatStore
+VSCloneUnifiedChatStore --> VSCloneUnifiedChatSerializer
+VSCloneUnifiedChatStore --> VSCloneUnifiedChatMigrationService
 VSCloneModelPickerController --> VSCloneModelCatalogService
 VSCloneModelPickerController --> VSCloneModelAvailabilityService
 VSCloneModelPickerController --> VSCloneModelCompatibilityService
 VSCloneModelPickerController --> VSCloneThreadModelSelectionService
 VSCloneModelPickerController --> VSCloneProviderConfigurationBridge
-
-VSCloneThreadModelSelectionService --> VSCloneModelPreferenceStore
-VSCloneThreadModelSelectionService --> VSCloneModelSelectionMigrationService
-VSCloneThreadModelSelectionService --> VSCloneModelCatalogService
-
 VSCloneUnifiedChatModelSwitcherActionItem --> VSCloneModelPickerController
+VSCloneModelSwitcherActionRegistrar --> VSCloneModelPickerController

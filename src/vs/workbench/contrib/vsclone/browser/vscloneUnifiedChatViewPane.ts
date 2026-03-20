@@ -24,6 +24,7 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IVSCloneChatHistoryQuery, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
+import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneModelCatalogService, type VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
 import { IVSCloneChatLocation, IVSCloneThreadModelSelectionService, type IVSCloneModelSelection } from '../common/vscloneThreadModelSelectionService.js';
 import { parseToolCalls } from '../common/vscloneToolCallParser.js';
@@ -407,18 +408,29 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		historyButton.type = 'button';
 		historyButton.className = 'vsclone-thread-action-button';
 		historyButton.textContent = localize('vsclone.thread.actions.history', 'Chat History');
-		historyButton.title = localize('vsclone.thread.actions.history.tooltip', 'Show chat history');
+		// Mirror tooltip text into an accessible name so screen readers announce this icon-like action clearly.
+		const historyButtonLabel = localize('vsclone.thread.actions.history.tooltip', 'Show chat history');
+		historyButton.title = historyButtonLabel;
+		historyButton.setAttribute('aria-label', historyButtonLabel);
 		actions.appendChild(historyButton);
 
 		const overflowButton = document.createElement('button');
 		overflowButton.type = 'button';
 		overflowButton.className = 'vsclone-thread-action-overflow';
-		overflowButton.textContent = '...';
-		overflowButton.title = localize('vsclone.thread.actions.more', 'More actions');
+		overflowButton.textContent = '\u22ef';
+		const overflowButtonLabel = localize('vsclone.thread.actions.more', 'More actions');
+		overflowButton.title = overflowButtonLabel;
+		overflowButton.setAttribute('aria-label', overflowButtonLabel);
+		overflowButton.setAttribute('aria-haspopup', 'menu');
 		actions.appendChild(overflowButton);
 
 		const messages = document.createElement('div');
 		messages.className = 'vsclone-thread-messages';
+		// Announce newly appended message bubbles without repeatedly reading the whole transcript.
+		messages.setAttribute('role', 'log');
+		messages.setAttribute('aria-live', 'polite');
+		messages.setAttribute('aria-relevant', 'additions text');
+		messages.setAttribute('aria-label', localize('vsclone.thread.messages', 'Conversation messages'));
 		this.conversationList = messages;
 
 		const emptyState = document.createElement('div');
@@ -433,6 +445,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		input.className = 'vsclone-thread-composer-input';
 		input.rows = 1;
 		input.placeholder = localize('vsclone.composer.placeholder', 'Ask a follow-up question...');
+		input.setAttribute('aria-label', localize('vsclone.composer.inputLabel', 'Chat message'));
 		this.composerInput = input;
 
 		const send = document.createElement('button');
@@ -478,6 +491,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const hint = document.createElement('div');
 		hint.className = 'vsclone-thread-composer-hint';
 		hint.textContent = localize('vsclone.composer.hint', 'Press Enter to send, Shift+Enter for new line');
+		// Associate keyboard-help text to the composer so instructions are available to assistive technology.
+		hint.id = `${this.id}-composer-hint`;
+		input.setAttribute('aria-describedby', hint.id);
 
 		composer.appendChild(input);
 		composer.appendChild(send);
@@ -976,7 +992,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const hasText = this.composerInput.value.trim().length > 0;
 		const threadBusy = this.activeThreadId ? this.isThreadBusy(this.activeThreadId) : false;
 		const composerBusy = threadBusy || this.submittingPrompt;
-		const disabled = !hasText || composerBusy;
+		const requiresExplicitModelSelection = !(this.configurationService.getValue<boolean>(VSCloneUseVSCodeChatBackendSetting) ?? false);
+		const hasSelectedModel = !requiresExplicitModelSelection || !!this.getCurrentComposerModelSelection(this.activeThreadId);
+		const disabled = !hasText || composerBusy || !hasSelectedModel;
 		this.composerSendButton.disabled = disabled;
 		this.composerInput.disabled = composerBusy;
 		if (this.reasoningEffortSelect) {
@@ -985,6 +1003,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		if (this.composerInput.disabled) {
 			this.composerInput.placeholder = localize('vsclone.composer.waiting', 'Waiting for response...');
+		} else if (!hasSelectedModel) {
+			// The direct VSClone API path needs a concrete provider/model pair before we can send.
+			this.composerInput.placeholder = localize('vsclone.composer.signInRequired', 'Sign in to a provider and choose a model to start chatting...');
 		} else {
 			this.composerInput.placeholder = localize('vsclone.composer.placeholder', 'Ask a follow-up question...');
 		}

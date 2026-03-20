@@ -1,54 +1,71 @@
 flowchart LR
   subgraph Client["Workbench Renderer (Client)"]
     Dev["Developer"]
-    ChatUI["VSClone Unified Chat View"]
-    HistRail["History Rail"]
-    Composer["Composer Toolbar"]
-    PickerCtl["VSCloneModelPickerController"]
-    Catalog["VSCloneModelCatalogService"]
-    Compat["VSCloneModelCompatibilityService"]
-    SelectSvc["VSCloneThreadModelSelectionService"]
-    PrefStore["VSCloneModelPreferenceStore"]
+    View["VSCloneUnifiedChatViewPane"]
+    Rail["History Rail"]
+    Toolbar["Composer Toolbar"]
+    Switcher["Model Switcher Action Item"]
+    Picker["VSCloneModelPickerController"]
     ConfigBridge["VSCloneProviderConfigurationBridge"]
   end
 
-  subgraph Server["Extension Host / Workbench Services"]
-    LMService["ILanguageModelsService"]
-    LMConfig["ILanguageModelsConfigurationService"]
-    ChatSvc["IChatService (sendRequest)"]
+  subgraph Backend["VSClone Unified Chat Backend (Shared by Story 1 and Story 3)"]
+    Runtime["VSCloneChatRuntimeService"]
+    Session["VSCloneChatSessionService"]
+    BackendSvc["VSCloneUnifiedChatBackendService"]
+    Selection["VSCloneThreadModelSelectionService"]
+    Catalog["VSCloneModelCatalogService"]
+    Availability["VSCloneModelAvailabilityService"]
+    Compatibility["VSCloneModelCompatibilityService"]
+    Store["VSCloneUnifiedChatStore"]
   end
 
-  subgraph Local["Local Profile Storage"]
-    KVS[("storage keys\nselection + recents")]
-    LMFile[("chatLanguageModels.json")]
+  subgraph Workbench["Workbench Services"]
+    ChatSvc["IChatService + IChatModel"]
+    LM["ILanguageModelsService"]
+    LMConfig["ILanguageModelsConfigurationService"]
+  end
+
+  subgraph Local["Local Persistence and Provider Config"]
+    Index[("thread-index.v2.json")]
+    Threads[("threads/{threadId}.v2.json")]
+    Prefs[("preferences.v1.json")]
+    ProviderConfig[("chatLanguageModels.json")]
     Secrets[("Secret Storage")]
   end
 
-  subgraph Cloud["LLM Providers (Cloud)"]
-    ProviderA["Provider A API"]
-    ProviderB["Provider B API"]
+  subgraph Cloud["LLM Providers"]
+    Providers["Configured Provider APIs"]
   end
 
-  Dev -->|select active thread| HistRail
-  Dev -->|open dropdown / select model| Composer
-  ChatUI --> HistRail
-  ChatUI --> Composer
-  Composer --> PickerCtl
-  PickerCtl --> Catalog
-  PickerCtl --> Compat
-  PickerCtl --> SelectSvc
-  HistRail -->|active thread context| SelectSvc
+  Dev -->|select thread| Rail
+  Dev -->|open picker and choose model| Switcher
+  View --> Rail
+  View --> Toolbar
+  Toolbar --> Switcher
+  Switcher --> Picker
+  Picker --> Catalog
+  Picker --> Availability
+  Picker --> Compatibility
+  Picker --> Selection
+  Picker --> ConfigBridge
 
-  Catalog -->|vendors + models + metadata| LMService
-  Compat -->|capability checks| LMService
-  SelectSvc -->|persist thread selection + recents| PrefStore
-  PrefStore --> KVS
-
-  PickerCtl -->|configure provider if needed| ConfigBridge
+  Selection -->|read or write active thread selection| BackendSvc
+  Catalog --> LM
+  Availability --> LM
+  Compatibility --> LM
   ConfigBridge --> LMConfig
-  LMConfig --> LMFile
+  LMConfig --> ProviderConfig
   LMConfig --> Secrets
 
-  SelectSvc -->|userSelectedModelId for active thread| ChatSvc
-  ChatSvc --> ProviderA
-  ChatSvc --> ProviderB
+  Selection -->|resolve selected model id| Session
+  Session --> ChatSvc
+  ChatSvc --> Providers
+  Providers --> ChatSvc
+  ChatSvc --> Runtime
+  Runtime --> BackendSvc
+  BackendSvc --> Store
+  Store --> Index
+  Store --> Threads
+  Store --> Prefs
+  BackendSvc -->|active thread snapshot| Picker

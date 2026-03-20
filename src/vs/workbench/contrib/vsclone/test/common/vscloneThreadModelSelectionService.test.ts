@@ -7,9 +7,10 @@ import assert from 'assert';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { VSCloneModelCatalogService } from '../../common/vscloneModelCatalogService.js';
-import { VSCloneMockProviderService } from '../../common/vscloneMockProviderService.js';
+import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderPreferencesService.js';
 import { IVSCloneModelSelection, VSCloneThreadModelSelectionService } from '../../common/vscloneThreadModelSelectionService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
+import { TestVSCloneOAuthService } from './vscloneTestOAuthService.js';
 
 suite('VSCloneThreadModelSelectionService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -26,18 +27,19 @@ suite('VSCloneThreadModelSelectionService', () => {
 	async function createHarness() {
 		const testDisposables = store.add(new DisposableStore());
 		const storageService = testDisposables.add(new TestStorageService());
-		const providerService = testDisposables.add(new VSCloneMockProviderService(storageService));
-		const catalogService = testDisposables.add(new VSCloneModelCatalogService(providerService));
+		const providerPreferencesService = testDisposables.add(new VSCloneProviderPreferencesService(storageService));
+		const oauthService = new TestVSCloneOAuthService();
+		const catalogService = testDisposables.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
 		const selectionService = testDisposables.add(new VSCloneThreadModelSelectionService(storageService, catalogService));
 
-		await providerService.initialize();
+		await providerPreferencesService.initialize();
 		await catalogService.refreshCatalog();
 		await selectionService.initialize();
 
-		return { providerService, catalogService, selectionService };
+		return { providerPreferencesService, oauthService, catalogService, selectionService };
 	}
 
-	function toSelection(modelIdentifier: string, vendor: string, modelId: string, modelName: string, reasoningEffort?: 'low' | 'medium' | 'high'): IVSCloneModelSelection {
+	function toSelection(modelIdentifier: string, vendor: IVSCloneModelSelection['vendor'], modelId: string, modelName: string, reasoningEffort?: 'low' | 'medium' | 'high'): IVSCloneModelSelection {
 		return {
 			threadId: 'thread-1',
 			location: 'chat',
@@ -87,9 +89,9 @@ suite('VSCloneThreadModelSelectionService', () => {
 	});
 
 	test('reconciles stale thread selection after catalog changes', async () => {
-		const { providerService, catalogService, selectionService } = await createHarness();
-		await providerService.setProviderEnabled('google', true);
-		await providerService.setProviderConfigured('google', true);
+		const { providerPreferencesService, oauthService, catalogService, selectionService } = await createHarness();
+		await providerPreferencesService.setProviderEnabled('google', true);
+		oauthService.setReady('google', true);
 		await catalogService.refreshCatalog();
 		await waitForCatalogToSettle(catalogService);
 
@@ -98,7 +100,7 @@ suite('VSCloneThreadModelSelectionService', () => {
 		await selectionService.setSelectionForThread('thread-1', toSelection(googleModel.identifier, googleModel.vendor, googleModel.modelId, googleModel.modelName));
 		assert.strictEqual(selectionService.getCurrentSelectionForThread('thread-1', 'chat')?.modelIdentifier, googleModel.identifier);
 
-		await providerService.setProviderConfigured('google', false);
+		oauthService.setReady('google', false);
 		await catalogService.refreshCatalog();
 		await waitForCatalogToSettle(catalogService);
 

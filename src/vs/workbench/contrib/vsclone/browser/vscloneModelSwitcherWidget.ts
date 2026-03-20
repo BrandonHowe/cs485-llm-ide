@@ -15,11 +15,16 @@ export interface IVSCloneModelSwitcherContext {
 	location: IVSCloneChatLocation;
 }
 
+let switcherIdPool = 0;
+
 export class VSCloneModelSwitcherWidget extends Disposable {
 	private root: HTMLElement | undefined;
 	private button: HTMLButtonElement | undefined;
 	private menu: HTMLElement | undefined;
 	private isOpen = false;
+	private readonly switcherId = ++switcherIdPool;
+	private readonly buttonId = `vsclone-model-switcher-button-${this.switcherId}`;
+	private readonly menuId = `vsclone-model-switcher-menu-${this.switcherId}`;
 	private readonly menuDisposables = this._register(new DisposableStore());
 	private readonly windowDisposables = this._register(new DisposableStore());
 
@@ -53,7 +58,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		this.windowDisposables.add(addDisposableListener(targetWindow.document, EventType.KEY_DOWN, (event: KeyboardEvent) => {
 			if (this.isOpen && event.key === 'Escape') {
 				event.preventDefault();
-				this.close();
+				this.close({ restoreButtonFocus: true });
 			}
 		}));
 
@@ -64,11 +69,18 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		const button = document.createElement('button');
 		button.type = 'button';
 		button.className = 'vsclone-model-switcher-button';
+		button.id = this.buttonId;
+		button.setAttribute('aria-haspopup', 'dialog');
+		button.setAttribute('aria-controls', this.menuId);
 		this.button = button;
 		root.appendChild(button);
 
 		const menu = document.createElement('div');
 		menu.className = 'vsclone-model-switcher-menu hidden';
+		menu.id = this.menuId;
+		menu.setAttribute('role', 'dialog');
+		menu.setAttribute('aria-modal', 'false');
+		menu.setAttribute('aria-labelledby', this.buttonId);
 		this.menu = menu;
 		root.appendChild(menu);
 
@@ -76,7 +88,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 
 		this._register(addDisposableListener(button, EventType.CLICK, () => {
 			if (this.isOpen) {
-				this.close();
+				this.close({ restoreButtonFocus: true });
 			} else {
 				this.open();
 			}
@@ -101,7 +113,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		}
 	}
 
-	close(): void {
+	close(options?: { restoreButtonFocus?: boolean }): void {
 		if (!this.root || !this.menu) {
 			return;
 		}
@@ -109,6 +121,9 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		this.root.classList.remove('open');
 		this.menu.classList.add('hidden');
 		this.refresh();
+		if (options?.restoreButtonFocus) {
+			this.button?.focus();
+		}
 	}
 
 	refresh(): void {
@@ -122,6 +137,11 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 			this.button.appendChild(this.createButtonProviderLabel(selection.vendor.toLowerCase()));
 		}
 		this.button.appendChild(this.createButtonChevron());
+		this.button.setAttribute('aria-expanded', String(this.isOpen));
+		// Announce the current model in the control name so assistive tech users can verify selection quickly.
+		this.button.setAttribute('aria-label', selection
+			? localize('vsclone.modelSwitcher.aria.currentModel', 'Model: {0}', selection.modelName)
+			: localize('vsclone.modelSwitcher.aria.selectModel', 'Select model'));
 
 		if (this.isOpen) {
 			this.renderMenu();
@@ -173,7 +193,9 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		const refresh = document.createElement('button');
 		refresh.type = 'button';
 		refresh.className = 'vsclone-model-switcher-refresh';
-		refresh.title = localize('vsclone.modelSwitcher.refresh', 'Refresh models');
+		const refreshLabel = localize('vsclone.modelSwitcher.refresh', 'Refresh models');
+		refresh.title = refreshLabel;
+		refresh.setAttribute('aria-label', refreshLabel);
 		refresh.appendChild(this.createCodicon('codicon-refresh'));
 		header.appendChild(refresh);
 
@@ -301,9 +323,16 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		if (selected?.modelIdentifier === model.identifier) {
 			row.classList.add('selected');
 		}
+		row.setAttribute('aria-pressed', String(selected?.modelIdentifier === model.identifier));
 		if (!model.isSelectable) {
 			row.classList.add('locked');
 		}
+		row.setAttribute(
+			'aria-label',
+			model.isSelectable
+				? localize('vsclone.modelSwitcher.row.aria', '{0} model', model.modelName)
+				: localize('vsclone.modelSwitcher.row.requiresSignIn.aria', '{0} model, provider requires sign in', model.modelName),
+		);
 
 		const title = document.createElement('span');
 		title.className = 'vsclone-model-switcher-row-label';
@@ -323,7 +352,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 
 			const subtext = document.createElement('div');
 			subtext.className = 'vsclone-model-switcher-row-subtext';
-			subtext.textContent = localize('vsclone.modelSwitcher.requiresConfig', 'Provider requires configuration');
+			subtext.textContent = localize('vsclone.modelSwitcher.requiresSignIn', 'Sign in to use this provider');
 			row.appendChild(subtext);
 		}
 
@@ -350,7 +379,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 				selectedAt: Date.now(),
 			};
 			void this.selectionService.setSelectionForThread(context.threadId, nextSelection);
-			this.close();
+			this.close({ restoreButtonFocus: true });
 		}));
 
 		return row;
@@ -440,7 +469,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 
 		const description = document.createElement('div');
 		description.className = 'vsclone-model-switcher-state-description';
-		description.textContent = localize('vsclone.modelSwitcher.emptyDescription', 'Configure a provider to get started');
+		description.textContent = localize('vsclone.modelSwitcher.emptyDescription', 'Sign in to a provider to get started');
 		root.appendChild(description);
 
 		const manage = document.createElement('button');
@@ -462,6 +491,8 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 	private createCodicon(codicon: string): HTMLElement {
 		const icon = document.createElement('span');
 		icon.className = `codicon ${codicon}`;
+		// Codicon-only spans are decorative next to text labels and should not be announced separately.
+		icon.setAttribute('aria-hidden', 'true');
 		return icon;
 	}
 }

@@ -6,7 +6,7 @@
 import { PlatformToString, platform } from '../../../../base/common/platform.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { VSCloneModelVendor } from './vscloneMockProviderService.js';
+import { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import { formatToolDefinitionsForPrompt } from './vscloneToolDefinitions.js';
 
 const maxActiveFileChars = 8000;

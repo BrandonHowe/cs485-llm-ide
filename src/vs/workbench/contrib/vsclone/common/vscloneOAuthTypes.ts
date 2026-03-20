@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { env } from '../../../../base/common/process.js';
-import { VSCloneModelVendor } from './vscloneMockProviderService.js';
+
+export type VSCloneModelVendor = 'openai' | 'anthropic' | 'google';
 
 // -- Status & Events --
 

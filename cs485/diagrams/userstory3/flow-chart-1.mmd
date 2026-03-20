@@ -1,21 +1,19 @@
 flowchart TD
-  A[User selects thread in history rail] --> B[Restore model for active thread]
-  B --> C[User clicks provider/model dropdown]
-  C --> D[ModelPickerController.open]
-  D --> E[Fetch providers/models from CatalogService]
-  E --> F[Apply compatibility filtering by thread context]
-  F --> G{Any valid models?}
-  G -- No --> H[Show empty-state + Manage Providers action]
-  G -- Yes --> I[Render grouped dropdown sections]
-  I --> J[User selects provider/model]
-  J --> K[Validate availability + compatibility]
-  K --> L{Provider configured/authenticated?}
-  L -- No --> M[Open provider configuration flow]
+  A[User selects a thread in the history rail] --> B[Unified backend returns thread snapshot and current selection]
+  B --> C[Composer badge updates from backend snapshot]
+  C --> D[User opens model dropdown]
+  D --> E[Picker controller refreshes catalog and availability]
+  E --> F[Compatibility service filters models for thread context]
+  F --> G{Any valid models available?}
+  G -- No --> H[Show empty state and Manage Providers action]
+  G -- Yes --> I[Render grouped provider and model sections]
+  I --> J[User selects a model]
+  J --> K[Validate availability compatibility and provider config]
+  K --> L{Provider configured?}
+  L -- No --> M[Open provider configuration flow and refresh catalog]
   M --> E
-  L -- Yes --> N[ThreadSelectionService.setSelectionForThread]
-  N --> O[Persist thread selection + update recents]
-  O --> P[Update composer label and active-model badge]
-  P --> Q[Next sendRequest uses userSelectedModelId]
-  Q --> R{Model unavailable at send time?}
-  R -- Yes --> S[Apply fallback or prompt re-selection]
-  R -- No --> T[Request routed to selected provider/model]
+  L -- Yes --> N[ThreadModelSelectionService writes selection through unified backend]
+  N --> O[Unified store persists thread doc and preferences]
+  O --> P[Composer badge and history rail model indicator refresh]
+  P --> Q[Next prompt uses selected model id]
+  Q --> R[Runtime captures actual request events and updates active model metadata]

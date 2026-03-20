@@ -8,7 +8,7 @@ import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { IServerChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { getVendorAdapter } from '../common/vscloneChatApiAdapters.js';
+import { getVendorAdapter, type IVSCloneVendorAdapter } from '../common/vscloneChatApiAdapters.js';
 import {
 	IVSCloneChatApiAbortRequest,
 	IVSCloneChatApiAbortedEvent,
@@ -23,6 +23,11 @@ import {
 	VSCLONE_CHAT_API_EVENT_DELTA,
 	VSCLONE_CHAT_API_EVENT_ERROR,
 } from '../common/vscloneChatApiIpc.js';
+
+interface IStreamConsumptionState {
+	currentEventType: string | undefined;
+	streamedAnyContent: boolean;
+}
 
 export class VSCloneChatApiChannel extends Disposable implements IServerChannel {
 
@@ -142,8 +147,10 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 		const decoder = new TextDecoder();
 
 		let bufferedChunk = '';
-		let currentEventType: string | undefined;
-		let streamedAnyContent = false;
+		const state: IStreamConsumptionState = {
+			currentEventType: undefined,
+			streamedAnyContent: false,
+		};
 
 		try {
 			while (true) {
@@ -157,48 +164,90 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 				}
 
 				bufferedChunk += decoder.decode(value, { stream: true });
-				const lines = bufferedChunk.split('\n');
-				bufferedChunk = lines.pop() ?? '';
-
-				for (const rawLine of lines) {
-					const line = rawLine.trimEnd();
-					if (line === '') {
-						currentEventType = undefined;
-						continue;
-					}
-
-					if (line.startsWith('event:')) {
-						currentEventType = line.slice(6).trim();
-						continue;
-					}
-
-					const parsed = adapter.parseLine(line, currentEventType);
-					if (!parsed) {
-						continue;
-					}
-
-					switch (parsed.type) {
-						case 'delta':
-							if (parsed.text && parsed.text.length > 0) {
-								streamedAnyContent = true;
-								this.onDeltaEmitter.fire({ requestId, text: parsed.text });
-							}
-							break;
-						case 'done':
-							this.onCompleteEmitter.fire({ requestId });
-							return;
-						case 'error':
-							throw new Error(parsed.message ?? 'Unknown API error');
-					}
+				const processedChunk = this.processBufferedSseText(bufferedChunk, requestId, adapter, state, false);
+				bufferedChunk = processedChunk.remainder;
+				if (processedChunk.completed) {
+					return;
 				}
 			}
 
+			// Providers do not always terminate the final SSE event with a newline, so we must
+			// flush the decoder and parse any buffered tail to avoid truncating tool-call XML.
+			const processedTail = this.processBufferedSseText(bufferedChunk + decoder.decode(), requestId, adapter, state, true);
+			if (processedTail.completed) {
+				return;
+			}
+
 			// Some providers end the SSE stream without a terminal done event.
-			if (streamedAnyContent) {
+			if (state.streamedAnyContent) {
 				this.onCompleteEmitter.fire({ requestId });
 			}
 		} finally {
 			reader.releaseLock();
+		}
+	}
+
+	/**
+	 * SSE payloads may arrive split across arbitrary transport chunks, so we keep the last partial
+	 * line buffered until it is complete or the stream ends and we intentionally flush the remainder.
+	 */
+	private processBufferedSseText(
+		bufferedChunk: string,
+		requestId: string,
+		adapter: IVSCloneVendorAdapter,
+		state: IStreamConsumptionState,
+		flushRemainder: boolean,
+	): { remainder: string; completed: boolean } {
+		const lines = bufferedChunk.split('\n');
+		const remainder = flushRemainder ? '' : (lines.pop() ?? '');
+
+		for (const rawLine of lines) {
+			if (this.processSseLine(rawLine, requestId, adapter, state)) {
+				return { remainder, completed: true };
+			}
+		}
+
+		return { remainder, completed: false };
+	}
+
+	/**
+	 * Keeping line parsing in one place avoids subtle drift between normal chunk handling and the
+	 * EOF flush path, which both need identical SSE semantics to preserve the stream transcript.
+	 */
+	private processSseLine(
+		rawLine: string,
+		requestId: string,
+		adapter: IVSCloneVendorAdapter,
+		state: IStreamConsumptionState,
+	): boolean {
+		const line = rawLine.trimEnd();
+		if (line === '') {
+			state.currentEventType = undefined;
+			return false;
+		}
+
+		if (line.startsWith('event:')) {
+			state.currentEventType = line.slice(6).trim();
+			return false;
+		}
+
+		const parsed = adapter.parseLine(line, state.currentEventType);
+		if (!parsed) {
+			return false;
+		}
+
+		switch (parsed.type) {
+			case 'delta':
+				if (parsed.text && parsed.text.length > 0) {
+					state.streamedAnyContent = true;
+					this.onDeltaEmitter.fire({ requestId, text: parsed.text });
+				}
+				return false;
+			case 'done':
+				this.onCompleteEmitter.fire({ requestId });
+				return true;
+			case 'error':
+				throw new Error(parsed.message ?? 'Unknown API error');
 		}
 	}
 }

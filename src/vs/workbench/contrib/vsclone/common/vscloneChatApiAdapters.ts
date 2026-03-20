@@ -3,8 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { VSCloneModelVendor } from './vscloneMockProviderService.js';
-import { defaultOAuthProviderConfig } from './vscloneOAuthTypes.js';
+import { defaultOAuthProviderConfig, VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneReasoningEffortLevel } from './vscloneModelCatalogService.js';
 
 // -- Public types --

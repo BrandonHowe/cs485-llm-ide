@@ -1,43 +1,58 @@
 flowchart LR
   subgraph Client["Workbench Renderer (Client)"]
     Dev["Developer"]
-    ChatUI["VSClone Unified Chat View"]
-    HistRail["History Rail (embedded)"]
-    Composer["Composer + Model Toolbar"]
-    Bridge["VSCloneChatSessionBridge"]
-    HistSvc["VSCloneChatHistoryService"]
-    ThreadSel["External: VSCloneThreadModelSelectionService (Story 3)"]
+    View["VSCloneUnifiedChatViewPane"]
+    Rail["VSCloneChatHistoryRail"]
+    Composer["Composer + Model Switcher"]
+    Actions["History Actions"]
   end
 
-  subgraph Server["Extension Host / Remote Agent (Server Process)"]
-    ChatSvc["IChatService + IChatModel (existing)"]
+  subgraph Backend["VSClone Unified Chat Backend (Shared by Story 1 and Story 3)"]
+    Runtime["VSCloneChatRuntimeService"]
+    Session["VSCloneChatSessionService"]
+    BackendSvc["VSCloneUnifiedChatBackendService"]
+    Selection["VSCloneThreadModelSelectionService"]
+    Store["VSCloneUnifiedChatStore"]
   end
 
-  subgraph Local["Local Persistence (Workspace/Profile Storage)"]
-    Store["VSCloneChatHistoryStore"]
-    Index[("history.index.v1.json")]
-    Threads[("threads/{threadId}.v1.json")]
+  subgraph Workbench["Workbench / Extension Host Services"]
+    ChatSvc["IChatService + IChatModel"]
+    LM["ILanguageModelsService + ILanguageModelsConfigurationService"]
   end
 
-  subgraph Cloud["LLM Provider (Cloud)"]
-    LLM["Model API (existing provider path)"]
+  subgraph Local["Local Persistence"]
+    Index[("thread-index.v2.json")]
+    Threads[("threads/{threadId}.v2.json")]
+    Prefs[("preferences.v1.json")]
   end
 
-  Dev -->|Select thread / browse history| HistRail
-  Dev -->|Prompt text + context| Composer
-  ChatUI --> HistRail
-  ChatUI --> Composer
-  ChatUI -->|sendRequest| ChatSvc
-  ChatSvc -->|Request| LLM
-  LLM -->|Streaming tokens + final response| ChatSvc
+  subgraph Cloud["LLM Providers"]
+    Providers["Configured Provider APIs"]
+  end
 
-  ChatSvc -->|onDidCreateModel/onDidChange events| Bridge
-  Bridge -->|Normalized turn updates| HistSvc
-  HistSvc -->|Observable updates| HistRail
-  HistSvc -->|Persist deltas| Store
+  Dev -->|browse threads| Rail
+  Dev -->|send prompt| Composer
+  View --> Rail
+  View --> Composer
+  Actions --> View
+
+  Rail -->|query thread summaries| BackendSvc
+  Actions -->|archive delete reuse copy| BackendSvc
+  Composer -->|set active model| Selection
+  Composer -->|submit prompt| Session
+
+  Session -->|startSession sendRequest| ChatSvc
+  Session -->|resolve selected model| Selection
+  ChatSvc -->|request| Providers
+  Providers -->|streaming response| ChatSvc
+
+  ChatSvc -->|model lifecycle events| Runtime
+  Runtime -->|normalized turn updates| BackendSvc
+  LM -->|catalog and validation| Selection
+  Selection -->|persist thread selection| BackendSvc
+  BackendSvc --> Store
   Store --> Index
   Store --> Threads
-
-  HistRail -->|Thread selection| ThreadSel
-  ThreadSel -->|Restore model for active thread| Composer
-  HistRail -->|Copy/Reuse/Open Session| ChatUI
+  Store --> Prefs
+  BackendSvc -->|thread snapshot + active model| View
+  BackendSvc -->|thread summary updates| Rail

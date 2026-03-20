@@ -7,9 +7,8 @@ import { localize, localize2 } from '../../../../nls.js';
 import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
-import { VSCloneModelVendor } from '../common/vscloneMockProviderService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
-import { defaultOAuthProviderConfig, displayInfoOfOAuthProvider } from '../common/vscloneOAuthTypes.js';
+import { defaultOAuthProviderConfig, displayInfoOfOAuthProvider, VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
 
 export const VSCloneOAuthCommandIds = {
 	signIn: 'vsclone.oauth.signIn',

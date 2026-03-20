@@ -5,8 +5,7 @@
 
 import { Event } from '../../../../base/common/event.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { VSCloneModelVendor } from './vscloneMockProviderService.js';
-import { IVSCloneOAuthState, IVSCloneOAuthStateChangeEvent, IVSCloneOAuthTokenSet } from './vscloneOAuthTypes.js';
+import { IVSCloneOAuthState, IVSCloneOAuthStateChangeEvent, IVSCloneOAuthTokenSet, VSCloneModelVendor } from './vscloneOAuthTypes.js';
 
 export const IVSCloneOAuthService = createDecorator<IVSCloneOAuthService>('vscloneOAuthService');
 

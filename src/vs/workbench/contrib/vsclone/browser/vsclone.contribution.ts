@@ -29,13 +29,13 @@ import { VSCloneUnifiedChatViewPane } from './vscloneUnifiedChatViewPane.js';
 import { VSCloneViewContainerId, VSCloneViewId } from './vsclone.js';
 import { IVSCloneChatHistoryMigrationService, VSCloneChatHistoryMigrationService } from '../common/vscloneChatHistoryMigrationService.js';
 import { IVSCloneChatHistoryService, VSCloneChatHistoryEnabledSetting, VSCloneChatHistoryMaxThreadsSetting, VSCloneChatHistoryMaxTurnsPerThreadSetting, VSCloneChatHistoryPersistScopeSetting, VSCloneChatHistoryRailWidthSetting, VSCloneChatHistoryRedactSecretsSetting, VSCloneChatHistoryRetentionDaysSetting, VSCloneChatHistoryService } from '../common/vscloneChatHistoryService.js';
-import { IVSCloneMockProviderService, VSCloneMockProviderService } from '../common/vscloneMockProviderService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneModelCatalogService, VSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
 import { IVSClonePromptAssemblyService, VSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
-import { VSCloneUseMockProviderTransportSetting, VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
+import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/vscloneThreadModelSelectionService.js';
 import { IVSCloneCompletionBackend } from '../common/vscloneCompletionBackend.js';
+import { IVSCloneProviderPreferencesService, VSCloneProviderPreferencesService } from '../common/vscloneProviderPreferencesService.js';
 import { VSCloneAutocompleteService, VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from './vscloneAutocompleteService.js';
 import { VSCloneMockCompletionBackend } from './vscloneMockCompletionBackend.js';
 
@@ -74,7 +74,7 @@ function registerVSCloneContribution(): void {
 
 	registerSingleton(IVSCloneChatHistoryMigrationService, VSCloneChatHistoryMigrationService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatHistoryService, VSCloneChatHistoryService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneMockProviderService, VSCloneMockProviderService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneProviderPreferencesService, VSCloneProviderPreferencesService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneModelCatalogService, VSCloneModelCatalogService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneContextGatheringService, VSCloneContextGatheringService, InstantiationType.Delayed);
@@ -155,12 +155,6 @@ function registerVSCloneContribution(): void {
 				type: 'boolean',
 				default: false,
 				description: localize('vsclone.configuration.chat.useVSCodeChatBackend', 'Route VSClone sends through VS Code chat providers. Disabled keeps VSClone decoupled from Copilot/login-dependent chat backends.'),
-				scope: ConfigurationScope.WINDOW,
-			},
-			[VSCloneUseMockProviderTransportSetting]: {
-				type: 'boolean',
-				default: true,
-				description: localize('vsclone.configuration.chat.useMockProviderTransport', 'Use local mock auth + response transport for VSClone provider sends. Disable to use real provider OAuth/API flows.'),
 				scope: ConfigurationScope.WINDOW,
 			},
 			['vsclone.modelSwitcher.enabled']: {

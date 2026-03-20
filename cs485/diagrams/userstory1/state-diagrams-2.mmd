@@ -1,11 +1,13 @@
 stateDiagram-v2
   [*] --> ColdStart
-  ColdStart --> Loading: initialize()
-  Loading --> Ready: snapshot loaded
-  Loading --> Error: load failure
-  Ready --> Dirty: new turn/update/archive/delete
+  ColdStart --> Rehydrating: initialize()
+  Rehydrating --> MigrationRequired: legacy files or keys found
+  MigrationRequired --> Rehydrating: unified migration succeeds
+  Rehydrating --> Ready: snapshot loaded
+  Rehydrating --> Error: load failure
+  Ready --> Dirty: turn or selection mutation
   Dirty --> Persisting: debounce or shutdown flush
-  Persisting --> Ready: success
+  Persisting --> Ready: atomic write succeeds
   Persisting --> RetryBackoff: write failure
   RetryBackoff --> Persisting: retry timer
-  Error --> Loading: manual retry
+  Error --> Rehydrating: manual retry

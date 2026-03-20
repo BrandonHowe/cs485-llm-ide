@@ -6,9 +6,9 @@
 import { localize } from '../../../../nls.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
-import { IVSCloneMockProviderService, VSCloneModelVendor } from '../common/vscloneMockProviderService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
-import { displayInfoOfOAuthProvider } from '../common/vscloneOAuthTypes.js';
+import { displayInfoOfOAuthProvider, VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
+import { IVSCloneProviderPreferencesService } from '../common/vscloneProviderPreferencesService.js';
 
 export interface IVSCloneProviderConfigurationBridge {
 	readonly _serviceBrand: undefined;
@@ -22,27 +22,21 @@ interface IProviderActionPick extends IQuickPickItem {
 	readonly vendor?: VSCloneModelVendor;
 }
 
-const providerNames: Record<VSCloneModelVendor, string> = {
-	openai: 'OpenAI',
-	anthropic: 'Anthropic',
-	google: 'Google',
-};
-
 export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfigurationBridge {
 	declare readonly _serviceBrand: undefined;
 
 	constructor(
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
-		@IVSCloneMockProviderService private readonly mockProviderService: IVSCloneMockProviderService,
+		@IVSCloneProviderPreferencesService private readonly providerPreferencesService: IVSCloneProviderPreferencesService,
 		@IVSCloneOAuthService private readonly oAuthService: IVSCloneOAuthService,
 	) {
 	}
 
 	async openManageProvidersPicker(): Promise<void> {
-		await this.mockProviderService.initialize();
+		await this.providerPreferencesService.initialize();
 		await this.oAuthService.initialize();
 
-		const providers = this.mockProviderService.getProviders();
+		const providers = this.providerPreferencesService.getProviders();
 		const picks: IProviderActionPick[] = [];
 
 		// OAuth sign-in/sign-out picks per provider
@@ -71,7 +65,7 @@ export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfi
 		}
 
 		for (const provider of providers) {
-			const providerName = providerNames[provider.vendor];
+			const providerName = displayInfoOfOAuthProvider(provider.vendor).title;
 			picks.push({
 				label: provider.enabled
 					? localize('vsclone.providers.disable', 'Disable {0}', providerName)
@@ -80,17 +74,6 @@ export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfi
 					? localize('vsclone.providers.disable.description', 'Hidden from model selector')
 					: localize('vsclone.providers.enable.description', 'Show in model selector'),
 				actionId: 'toggleEnabled',
-				vendor: provider.vendor,
-			});
-
-			picks.push({
-				label: provider.configured
-					? localize('vsclone.providers.markUnconfigured', 'Mark {0} as unconfigured', providerName)
-					: localize('vsclone.providers.markConfigured', 'Mark {0} as configured', providerName),
-				description: provider.configured
-					? localize('vsclone.providers.unconfigured.description', 'Models will appear locked')
-					: localize('vsclone.providers.configured.description', 'Models become selectable'),
-				actionId: 'toggleConfigured',
 				vendor: provider.vendor,
 			});
 		}
@@ -122,7 +105,7 @@ export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfi
 		}
 
 		if (selected.actionId === 'resetDefaults') {
-			await this.mockProviderService.resetDefaults();
+			await this.providerPreferencesService.resetDefaults();
 			return;
 		}
 
@@ -130,18 +113,13 @@ export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfi
 			return;
 		}
 
-		const provider = this.mockProviderService.getProvider(selected.vendor);
+		const provider = this.providerPreferencesService.getProvider(selected.vendor);
 		if (!provider) {
 			return;
 		}
 
 		if (selected.actionId === 'toggleEnabled') {
-			await this.mockProviderService.setProviderEnabled(selected.vendor, !provider.enabled);
-			return;
-		}
-
-		if (selected.actionId === 'toggleConfigured') {
-			await this.mockProviderService.setProviderConfigured(selected.vendor, !provider.configured);
+			await this.providerPreferencesService.setProviderEnabled(selected.vendor, !provider.enabled);
 		}
 	}
 }

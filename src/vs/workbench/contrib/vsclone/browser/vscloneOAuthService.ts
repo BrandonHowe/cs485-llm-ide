@@ -12,13 +12,11 @@ import { generateUuid } from '../../../../base/common/uuid.js';
 import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
 import { localize } from '../../../../nls.js';
-import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { ISecretStorageService } from '../../../../platform/secrets/common/secrets.js';
-import { IVSCloneMockProviderService, VSCloneModelVendor } from '../common/vscloneMockProviderService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import {
 	IVSCloneOAuthLoopbackStartResponse,
@@ -37,9 +35,9 @@ import {
 	IVSCloneOAuthStateChangeEvent,
 	IVSCloneOAuthTokenSet,
 	oauthSecretKey,
+	VSCloneModelVendor,
 	VSCloneOAuthStatus,
 } from '../common/vscloneOAuthTypes.js';
-import { VSCloneUseMockProviderTransportSetting } from '../common/vscloneChatSettings.js';
 
 const allVendors: readonly VSCloneModelVendor[] = ['openai', 'anthropic', 'google'];
 
@@ -343,12 +341,10 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 
 	constructor(
 		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
-		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
 		@IOpenerService private readonly openerService: IOpenerService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
-		@IVSCloneMockProviderService private readonly mockProviderService: IVSCloneMockProviderService,
 		@IMainProcessService private readonly mainProcessService: IMainProcessService,
 	) {
 		super();
@@ -359,33 +355,6 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		return this._state;
 	}
 
-	private get useMockProviderTransport(): boolean {
-		// When enabled, auth/UI flows are simulated locally so no provider OAuth endpoints are contacted.
-		return this.configurationService.getValue<boolean>(VSCloneUseMockProviderTransportSetting) ?? true;
-	}
-
-	private createMockTokenSet(vendor: VSCloneModelVendor): IVSCloneOAuthTokenSet {
-		const email = `mock-${vendor}@vsclone.local`;
-		const providerMetadata: Record<string, string> = {
-			email,
-			mock: 'true',
-		};
-		if (vendor === 'openai') {
-			// OpenAI header shaping reuses this account id field when present.
-			providerMetadata['chatgpt-account-id'] = 'vsclone-mock-account';
-		}
-
-		return {
-			vendor,
-			accessToken: `vsclone-mock-access-token-${vendor}`,
-			refreshToken: undefined,
-			idToken: undefined,
-			expiresAt: undefined,
-			scopes: [...defaultOAuthProviderConfig[vendor].scopes],
-			providerMetadata,
-		};
-	}
-
 	// -- Initialization --
 
 	async initialize(): Promise<void> {
@@ -393,19 +362,6 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 			return;
 		}
 		this._initialized = true;
-
-		await this.mockProviderService.initialize();
-		const useMockProviderTransport = this.useMockProviderTransport;
-		if (useMockProviderTransport) {
-			// Mock mode starts from a clean in-memory auth state so no persisted provider tokens are consumed.
-			this._tokenSets.clear();
-			this._refreshPromises.clear();
-			for (const vendor of allVendors) {
-				this._setProviderStatus(vendor, 'signed_out');
-			}
-			this._recomputeDerivedState();
-			return;
-		}
 
 		for (const vendor of allVendors) {
 			try {
@@ -459,22 +415,6 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		const currentStatus = this._state.providers[vendor].status;
 		if (currentStatus === 'signing_in') {
 			return; // Already signing in
-		}
-
-		if (this.useMockProviderTransport) {
-			// Mock mode keeps the command/UI flow intact while skipping browser redirects and token exchange.
-			this._setProviderStatus(vendor, 'signing_in');
-			const tokenSet = this.createMockTokenSet(vendor);
-			this._tokenSets.set(vendor, tokenSet);
-			// Mark the provider as available so model catalog consumers can immediately select mocked models.
-			await this.mockProviderService.setProviderConfigured(vendor, true);
-			await this.mockProviderService.setProviderEnabled(vendor, true);
-			this._setProviderStatus(vendor, 'signed_in', { userDisplayName: tokenSet.providerMetadata.email });
-			this._recomputeDerivedState();
-			this.notificationService.info(
-				localize('vsclone.oauth.mockSignedIn', 'Mock sign-in enabled for {0}. No provider network request was made.', displayInfoOfOAuthProvider(vendor).title)
-			);
-			return;
 		}
 
 		const config = defaultOAuthProviderConfig[vendor];
@@ -697,9 +637,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 
 		this._tokenSets.delete(vendor);
 		this._refreshPromises.delete(vendor);
-		if (!this.useMockProviderTransport) {
-			await this.secretStorageService.delete(oauthSecretKey(vendor));
-		}
+		await this.secretStorageService.delete(oauthSecretKey(vendor));
 		this._setProviderStatus(vendor, 'signed_out');
 		this._recomputeDerivedState();
 	}
@@ -716,10 +654,6 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 
 		// Check if token is near expiry (within 60s)
 		if (tokenSet.expiresAt && tokenSet.expiresAt - 60_000 < Date.now()) {
-			if (this.useMockProviderTransport) {
-				// In mock mode we avoid refresh calls entirely; callers only need a truthy token marker.
-				return tokenSet.accessToken;
-			}
 			if (tokenSet.refreshToken) {
 				await this._ensureRefreshed(vendor, tokenSet);
 				const refreshed = this._tokenSets.get(vendor);
@@ -811,11 +745,9 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	}
 
 	/**
-	 * Derived state recomputation.
-	 * In real-provider mode we additionally mirror readiness into the model-provider toggles.
+	 * Keeps the readonly OAuth snapshot in sync with the latest token validity checks.
 	 */
 	private _recomputeDerivedState(): void {
-		const syncProviderAvailability = !this.useMockProviderTransport;
 		for (const vendor of allVendors) {
 			const providerState = this._state.providers[vendor];
 			const isReady = providerState.status === 'signed_in' && this._isTokenValid(vendor);
@@ -826,14 +758,6 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 				const newProviders = { ...this._state.providers, [vendor]: newProviderState };
 				this._state = { providers: newProviders as Record<VSCloneModelVendor, IVSCloneOAuthProviderState> };
 			}
-
-			if (!syncProviderAvailability) {
-				continue;
-			}
-
-			// Keep model availability aligned with actual auth readiness when real OAuth transport is active.
-			void this.mockProviderService.setProviderConfigured(vendor, isReady);
-			void this.mockProviderService.setProviderEnabled(vendor, isReady);
 		}
 	}
 
@@ -866,14 +790,6 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	private async _doRefresh(vendor: VSCloneModelVendor, tokenSet: IVSCloneOAuthTokenSet): Promise<void> {
 		if (!tokenSet.refreshToken) {
 			throw new Error('No refresh token available');
-		}
-		if (this.useMockProviderTransport) {
-			// Defensive fallback: even if refresh is triggered in mock mode, stay fully local.
-			const mockTokenSet = this.createMockTokenSet(vendor);
-			this._tokenSets.set(vendor, mockTokenSet);
-			this._setProviderStatus(vendor, 'signed_in', { userDisplayName: mockTokenSet.providerMetadata.email });
-			this._recomputeDerivedState();
-			return;
 		}
 
 		const config = defaultOAuthProviderConfig[vendor];

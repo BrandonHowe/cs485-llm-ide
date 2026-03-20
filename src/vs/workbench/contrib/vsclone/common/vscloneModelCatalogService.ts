@@ -7,18 +7,20 @@ import { timeout } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IVSCloneMockProviderService, IVSCloneMockProviderState, VSCloneModelVendor } from './vscloneMockProviderService.js';
+import { IVSCloneOAuthService } from './vscloneOAuthService.js';
+import { VSCloneModelVendor } from './vscloneOAuthTypes.js';
+import { IVSCloneProviderPreferenceState, IVSCloneProviderPreferencesService } from './vscloneProviderPreferencesService.js';
 
 export type VSCloneModelCatalogStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 export interface IVSCloneModelCatalogProviderDescriptor {
 	readonly vendor: VSCloneModelVendor;
 	readonly displayName: string;
-	readonly status: 'available' | 'requires_config';
+	readonly status: 'available' | 'requires_sign_in';
 	readonly modelCount: number;
 }
 
-export type VSCloneModelUnavailableReason = 'provider_requires_configuration';
+export type VSCloneModelUnavailableReason = 'provider_requires_sign_in';
 
 export interface IVSCloneModelCatalogModelDescriptor {
 	readonly identifier: string;
@@ -120,11 +122,15 @@ export class VSCloneModelCatalogService extends Disposable implements IVSCloneMo
 	private refreshing = false;
 
 	constructor(
-		@IVSCloneMockProviderService private readonly providerService: IVSCloneMockProviderService,
+		@IVSCloneProviderPreferencesService private readonly providerPreferencesService: IVSCloneProviderPreferencesService,
+		@IVSCloneOAuthService private readonly oauthService: IVSCloneOAuthService,
 	) {
 		super();
 
-		this._register(this.providerService.onDidChangeProviders(() => {
+		this._register(this.providerPreferencesService.onDidChangeProviders(() => {
+			void this.refreshCatalog();
+		}));
+		this._register(this.oauthService.onDidChangeState(() => {
 			void this.refreshCatalog();
 		}));
 	}
@@ -152,16 +158,19 @@ export class VSCloneModelCatalogService extends Disposable implements IVSCloneMo
 		this._onDidChangeCatalog.fire();
 
 		try {
-			await this.providerService.initialize();
-			await timeout(120);
+			await this.providerPreferencesService.initialize();
+			await this.oauthService.initialize();
+			// Yield once so the model switcher can render a loading state even when auth state was already warm.
+			await timeout(0);
 
 			if (this.failNextRefreshForTest) {
 				this.failNextRefreshForTest = false;
 				throw new Error('Failed to fetch model catalog. Check your network connection.');
 			}
 
-			const providers = this.computeProviders(this.providerService.getProviders());
-			const models = this.computeModels(this.providerService.getProviders());
+			const providerPreferences = this.providerPreferencesService.getProviders();
+			const providers = this.computeProviders(providerPreferences);
+			const models = this.computeModels(providerPreferences);
 			this.state = {
 				status: 'ready',
 				providers,
@@ -211,28 +220,29 @@ export class VSCloneModelCatalogService extends Disposable implements IVSCloneMo
 		return this.state.models.filter(model => model.isSelectable);
 	}
 
-	private computeProviders(providerStates: readonly IVSCloneMockProviderState[]): IVSCloneModelCatalogProviderDescriptor[] {
-		return providerStates
-			.filter(providerState => providerState.enabled)
-			.map(providerState => ({
-				vendor: providerState.vendor,
-				displayName: providerState.displayName,
-				status: providerState.configured ? 'available' as const : 'requires_config' as const,
-				modelCount: modelDefinitionsByProvider[providerState.vendor].length,
+	private computeProviders(providerPreferences: readonly IVSCloneProviderPreferenceState[]): IVSCloneModelCatalogProviderDescriptor[] {
+		return providerPreferences
+			.filter(providerPreference => providerPreference.enabled)
+			.map(providerPreference => ({
+				vendor: providerPreference.vendor,
+				displayName: providerPreference.displayName,
+				status: this.oauthService.state.providers[providerPreference.vendor].isReady ? 'available' as const : 'requires_sign_in' as const,
+				modelCount: modelDefinitionsByProvider[providerPreference.vendor].length,
 			}))
 			.sort(byVendorOrder);
 	}
 
-	private computeModels(providerStates: readonly IVSCloneMockProviderState[]): IVSCloneModelCatalogModelDescriptor[] {
-		const providerByVendor = new Map(providerStates.map(providerState => [providerState.vendor, providerState]));
+	private computeModels(providerPreferences: readonly IVSCloneProviderPreferenceState[]): IVSCloneModelCatalogModelDescriptor[] {
+		const providerByVendor = new Map(providerPreferences.map(providerPreference => [providerPreference.vendor, providerPreference]));
 		const models: IVSCloneModelCatalogModelDescriptor[] = [];
 
 		for (const vendor of ['openai', 'anthropic', 'google'] satisfies VSCloneModelVendor[]) {
-			const providerState = providerByVendor.get(vendor);
-			if (!providerState || !providerState.enabled) {
+			const providerPreference = providerByVendor.get(vendor);
+			if (!providerPreference || !providerPreference.enabled) {
 				continue;
 			}
 
+			const providerReady = this.oauthService.state.providers[vendor].isReady;
 			for (const model of modelDefinitionsByProvider[vendor]) {
 				models.push({
 					identifier: toIdentifier(vendor, model.modelId),
@@ -241,8 +251,8 @@ export class VSCloneModelCatalogService extends Disposable implements IVSCloneMo
 					modelName: model.modelName,
 					reasoningEffortLevels: model.reasoningEffortLevels,
 					defaultReasoningEffort: model.defaultReasoningEffort,
-					isSelectable: providerState.configured,
-					unavailableReason: providerState.configured ? undefined : 'provider_requires_configuration',
+					isSelectable: providerReady,
+					unavailableReason: providerReady ? undefined : 'provider_requires_sign_in',
 				});
 			}
 		}
