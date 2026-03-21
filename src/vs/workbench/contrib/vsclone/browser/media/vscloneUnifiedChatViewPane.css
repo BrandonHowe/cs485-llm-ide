@@ -176,8 +176,79 @@
 }
 
 .vsclone-thread-message-text-segment {
-	white-space: pre-wrap;
 	margin-bottom: 6px;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown,
+.vsclone-tool-card-output.rendered-markdown,
+.vsclone-thread-message-text-segment > .rendered-markdown,
+.vsclone-tool-card-output > .rendered-markdown {
+	color: inherit;
+	white-space: normal;
+	line-height: 1.45;
+	font-size: inherit;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown p,
+.vsclone-tool-card-output.rendered-markdown p,
+.vsclone-thread-message-text-segment > .rendered-markdown p,
+.vsclone-tool-card-output > .rendered-markdown p {
+	margin: 0 0 8px;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown li > p,
+.vsclone-tool-card-output.rendered-markdown li > p,
+.vsclone-thread-message-text-segment > .rendered-markdown li > p,
+.vsclone-tool-card-output > .rendered-markdown li > p {
+	margin: 0;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown ul,
+.vsclone-thread-message-text-segment.rendered-markdown ol,
+.vsclone-tool-card-output.rendered-markdown ul,
+.vsclone-tool-card-output.rendered-markdown ol,
+.vsclone-thread-message-text-segment > .rendered-markdown ul,
+.vsclone-thread-message-text-segment > .rendered-markdown ol,
+.vsclone-tool-card-output > .rendered-markdown ul,
+.vsclone-tool-card-output > .rendered-markdown ol {
+	margin: 6px 0;
+	padding-inline-start: 20px;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown li,
+.vsclone-tool-card-output.rendered-markdown li,
+.vsclone-thread-message-text-segment > .rendered-markdown li,
+.vsclone-tool-card-output > .rendered-markdown li {
+	margin: 0 0 4px;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown h1,
+.vsclone-thread-message-text-segment.rendered-markdown h2,
+.vsclone-thread-message-text-segment.rendered-markdown h3,
+.vsclone-tool-card-output.rendered-markdown h1,
+.vsclone-tool-card-output.rendered-markdown h2,
+.vsclone-tool-card-output.rendered-markdown h3,
+.vsclone-thread-message-text-segment > .rendered-markdown h1,
+.vsclone-thread-message-text-segment > .rendered-markdown h2,
+.vsclone-thread-message-text-segment > .rendered-markdown h3,
+.vsclone-tool-card-output > .rendered-markdown h1,
+.vsclone-tool-card-output > .rendered-markdown h2,
+.vsclone-tool-card-output > .rendered-markdown h3 {
+	margin: 8px 0 6px;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown > :first-child,
+.vsclone-tool-card-output.rendered-markdown > :first-child,
+.vsclone-thread-message-text-segment > .rendered-markdown > :first-child,
+.vsclone-tool-card-output > .rendered-markdown > :first-child {
+	margin-top: 0;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown > :last-child,
+.vsclone-tool-card-output.rendered-markdown > :last-child,
+.vsclone-thread-message-text-segment > .rendered-markdown > :last-child,
+.vsclone-tool-card-output > .rendered-markdown > :last-child {
+	margin-bottom: 0;
 }
 
 /* Agent trace lines: fallback styling for older turns that still render as flat trace rows. */
@@ -281,6 +352,127 @@
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 40%, transparent 60%);
 }
 
+/* Activity group: collapsible container for consecutive tool calls and thinking. */
+
+.vsclone-activity-group {
+	margin: 6px 0;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 50%, transparent 50%);
+	border-radius: 6px;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-editorWidget-background) 8%);
+	box-sizing: border-box;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.vsclone-activity-summary {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 9px;
+	font-size: 12px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 78%, transparent 22%);
+	cursor: pointer;
+	user-select: none;
+	list-style: none;
+}
+
+.vsclone-activity-summary::-webkit-details-marker {
+	display: none;
+}
+
+.vsclone-activity-summary::before {
+	content: '';
+	display: inline-block;
+	width: 0;
+	height: 0;
+	border-left: 5px solid color-mix(in srgb, var(--vscode-editor-foreground) 55%, transparent 45%);
+	border-top: 4px solid transparent;
+	border-bottom: 4px solid transparent;
+	transition: transform 0.15s ease;
+	flex-shrink: 0;
+}
+
+.vsclone-activity-group[open] > .vsclone-activity-summary::before {
+	transform: rotate(90deg);
+}
+
+.vsclone-activity-group[open] > .vsclone-activity-summary {
+	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 40%, transparent 60%);
+}
+
+.vsclone-activity-icon {
+	font-size: 14px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 72%, transparent 28%);
+}
+
+.vsclone-activity-content {
+	padding: 4px 0;
+}
+
+/* Thinking block nested inside an activity group: remove redundant chrome. */
+.vsclone-activity-content > .vsclone-thinking-block {
+	margin: 0;
+	border: none;
+	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 30%, transparent 70%);
+	border-radius: 0;
+}
+
+/* Compact tool row: single-line status + icon + label inside an activity group. */
+
+.vsclone-activity-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 12px;
+	font-size: 12px;
+	line-height: 1.35;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.vsclone-activity-row-status {
+	font-size: 12px;
+	flex-shrink: 0;
+}
+
+.vsclone-activity-row.status-success .vsclone-activity-row-status {
+	color: var(--vscode-testing-iconPassed);
+}
+
+.vsclone-activity-row.status-error .vsclone-activity-row-status {
+	color: var(--vscode-testing-iconFailed);
+}
+
+.vsclone-activity-row.status-running .vsclone-activity-row-status {
+	color: var(--vscode-progressBar-background);
+}
+
+.vsclone-activity-row.status-complete .vsclone-activity-row-status {
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 60%, transparent 40%);
+}
+
+.vsclone-activity-row-icon {
+	font-size: 13px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 60%, transparent 40%);
+	flex-shrink: 0;
+}
+
+.vsclone-activity-row-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 82%, transparent 18%);
+}
+
+/* Diff card inside activity content */
+.vsclone-activity-content > .vsclone-tool-diff-card {
+	margin: 0 8px 4px;
+	border-radius: 4px;
+}
+
 /* Tool call card: pairs an invocation with its current or final execution state. */
 
 .vsclone-tool-card {
@@ -351,6 +543,14 @@
 
 .vsclone-tool-card.status-complete .vsclone-tool-card-status {
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 60%, transparent 40%);
+}
+
+.vsclone-tool-card-output {
+	padding: 0 10px 10px;
+	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 50%, transparent 50%);
+	font-size: 12px;
+	line-height: 1.45;
+	word-break: break-word;
 }
 
 /* Diff/code card: renders compact file changes and code snippets inside tool output. */
@@ -630,6 +830,51 @@
 
 .vsclone-thread-reasoning-level.hidden {
 	display: none;
+}
+
+.vsclone-plan-mode-toggle {
+	display: inline-flex;
+	align-items: center;
+	padding: 2px;
+	border-radius: 6px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 90%, white 10%);
+	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 72%, var(--vscode-editor-background) 28%);
+}
+
+.vsclone-plan-mode-button {
+	height: 24px;
+	min-width: 44px;
+	padding: 0 10px;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 86%, white 14%);
+	font-size: 11px;
+	font-weight: 700;
+	cursor: pointer;
+	transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.vsclone-plan-mode-button:hover {
+	background: color-mix(in srgb, var(--vscode-button-secondaryHoverBackground) 74%, transparent 26%);
+}
+
+.vsclone-plan-mode-button.active {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 24%, transparent 76%);
+	color: var(--vscode-editor-foreground);
+}
+
+.vsclone-plan-mode-toggle.plan-active .vsclone-plan-mode-button.active {
+	background: color-mix(in srgb, var(--vscode-testing-iconQueued) 20%, transparent 80%);
+}
+
+.vsclone-plan-mode-toggle.act-active .vsclone-plan-mode-button.active {
+	background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent 82%);
+}
+
+.vsclone-plan-mode-button:disabled {
+	cursor: default;
+	opacity: 0.65;
 }
 
 /* Scope with the pane class so we override global workbench select border defaults. */
@@ -1052,6 +1297,15 @@
 		width: auto;
 		min-width: 0;
 		max-width: none;
+	}
+
+	.vsclone-plan-mode-toggle {
+		width: 100%;
+		justify-content: stretch;
+	}
+
+	.vsclone-plan-mode-button {
+		flex: 1 1 0;
 	}
 
 	.vsclone-thread-reasoning-level {

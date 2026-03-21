@@ -8,6 +8,8 @@ export const VSCLONE_OAUTH_CHANNEL_NAME = 'vsclone-oauth';
 export const VSCLONE_OAUTH_COMMAND_START_LOOPBACK = 'startLoopback';
 export const VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK = 'waitForLoopback';
 export const VSCLONE_OAUTH_COMMAND_STOP_LOOPBACK = 'stopLoopback';
+export const VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE = 'tokenExchange';
+export const VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL = 'openExternal';
 
 export interface IVSCloneOAuthLoopbackStartRequest {
 	readonly sessionId: string;
@@ -32,4 +34,15 @@ export interface IVSCloneOAuthLoopbackWaitResponse {
 
 export interface IVSCloneOAuthLoopbackStopRequest {
 	readonly sessionId: string;
+}
+
+export interface IVSCloneOAuthTokenExchangeRequest {
+	readonly url: string;
+	readonly body: string;
+	readonly contentType: string;
+}
+
+export interface IVSCloneOAuthTokenExchangeResponse {
+	readonly statusCode: number;
+	readonly body: string;
 }

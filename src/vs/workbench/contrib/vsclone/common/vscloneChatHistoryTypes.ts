@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IVSCloneUnifiedChatSelectionState } from './vscloneModelSelectionTypes.js';
+import type { IVSCloneUnifiedChatPlanModeState, VSCloneChatMode } from './vsclonePlanModeTypes.js';
 
 export type VSCloneChatHistoryScope = 'workspace' | 'profile';
 
@@ -27,6 +28,7 @@ export interface IVSCloneChatHistoryTurn {
 	turnId: string;
 	threadId: string;
 	sequence: number;
+	executionMode?: VSCloneChatMode;
 	modelIdentifier?: string;
 	providerId?: string;
 	promptText: string;
@@ -43,7 +45,7 @@ export interface IVSCloneChatHistoryTurn {
  * The snapshot now carries both turn history and persisted model-selection state so thread restore
  * and send execution read from the same durable source of truth.
  */
-export interface IVSCloneChatHistorySnapshot extends IVSCloneUnifiedChatSelectionState {
+export interface IVSCloneChatHistorySnapshot extends IVSCloneUnifiedChatSelectionState, IVSCloneUnifiedChatPlanModeState {
 	updatedAt: number;
 	threads: readonly IVSCloneChatHistoryThread[];
 	turnsByThreadId: Record<string, readonly IVSCloneChatHistoryTurn[]>;
@@ -71,6 +73,7 @@ export interface IVSCloneChatTurnUpdate {
 	occurredAt: number;
 	promptText?: string;
 	threadTitle?: string;
+	executionMode?: VSCloneChatMode;
 	modelIdentifier?: string;
 	providerId?: string;
 	responseMarkdownDelta?: string;

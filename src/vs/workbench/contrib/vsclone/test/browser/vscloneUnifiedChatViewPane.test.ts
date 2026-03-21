@@ -10,6 +10,7 @@ import { IContextMenuService } from '../../../../../platform/contextview/browser
 import { VSCloneChatHistoryRail } from '../../browser/vscloneChatHistoryRail.js';
 import type { IVSCloneChatSubmitOptions } from '../../browser/vscloneChatSessionService.js';
 import { VSCloneUnifiedChatViewPane, toVSCloneHistoryQuery } from '../../browser/vscloneUnifiedChatViewPane.js';
+import type { IVSCloneChatHistoryTurn } from '../../common/backend/vscloneChatHistoryService.js';
 import { formatToolResultWithDiff } from '../../common/vscloneToolResultDiff.js';
 
 interface ITestPaneTarget {
@@ -45,6 +46,24 @@ interface ISubmitPromptTarget {
 interface IRenderToolAwareAssistantTarget {
 	[key: string]: unknown;
 	renderToolAwareAssistantText: (container: HTMLElement, text: string, streaming: boolean) => void;
+}
+
+interface IRenderAssistantMessageTarget {
+	[key: string]: unknown;
+	renderAssistantMessage: (turn: IVSCloneChatHistoryTurn) => HTMLElement;
+}
+
+function createPlainTextMarkdownRendererStub() {
+	return {
+		render: (markdown: { value?: string }, _options: unknown, outElement?: HTMLElement) => {
+			const element = outElement ?? document.createElement('div');
+			element.textContent = markdown.value ?? '';
+			return {
+				element,
+				dispose: () => undefined,
+			};
+		},
+	};
 }
 
 suite('VSCloneUnifiedChatViewPane', () => {
@@ -335,11 +354,19 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		target.providerConfigurationBridge = {
 			openManageProvidersPicker: async () => undefined,
 		};
+		target.planModeService = {
+			onDidChangeMode: Event.None,
+			initialize: async () => undefined,
+			getModeForThread: () => 'plan',
+			setModeForThread: async () => undefined,
+			isToolAllowed: () => true,
+		};
 
 		const parent = document.createElement('div');
 		target.renderConversationSurface(parent);
 		assert.ok(parent.querySelector('.vsclone-thread-model-switcher'));
 		assert.ok(parent.querySelector('.vsclone-thread-reasoning-level-select'));
+		assert.strictEqual(parent.querySelectorAll('.vsclone-plan-mode-button').length, 2);
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-button') as HTMLButtonElement).getAttribute('aria-label'), 'Show chat history');
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-overflow') as HTMLButtonElement).textContent, '\u22ef');
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-overflow') as HTMLButtonElement).getAttribute('aria-haspopup'), 'menu');
@@ -477,6 +504,39 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.ok(container.querySelector('.vsclone-tool-diff-line.removed'));
 		assert.ok(container.textContent?.includes('TS src/app.ts'));
 		assert.strictEqual((container.querySelector('.vsclone-tool-diff-title-line') as HTMLElement | null)?.textContent, 'Ln 12');
+	});
+
+	test('plan-mode assistant turns do not render apply changes buttons', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderAssistantMessageTarget;
+		target.editApplicationService = {
+			hasSearchReplaceBlocks: () => true,
+		};
+
+		const baseTurn: IVSCloneChatHistoryTurn = {
+			turnId: 'turn-1',
+			threadId: 'thread-1',
+			sequence: 1,
+			promptText: 'Prompt',
+			responseMarkdown: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			responsePlainText: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			startedAt: 1,
+			completedAt: 2,
+			status: 'completed',
+		};
+
+		const planRendered = target.renderAssistantMessage({
+			...baseTurn,
+			executionMode: 'plan',
+		});
+		const actRendered = target.renderAssistantMessage({
+			...baseTurn,
+			turnId: 'turn-2',
+			executionMode: 'act',
+		});
+
+		assert.strictEqual(planRendered.querySelector('.vsclone-thread-message-apply'), null);
+		assert.ok(actRendered.querySelector('.vsclone-thread-message-apply'));
 	});
 
 	test('tool-aware renderer opens the file at the rendered diff line', () => {
@@ -639,5 +699,133 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		assert.strictEqual(openEditorCalls.length, 1);
 		assert.strictEqual(openEditorCalls[0].options?.selection?.startLineNumber, 3);
+	});
+
+	test('tool-aware renderer shows full markdown output for non-diff tool results', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderToolAwareAssistantTarget & {
+			markdownRendererService: ReturnType<typeof createPlainTextMarkdownRendererStub>;
+			renderedMarkdownDisposables: { add: (value: { dispose(): void }) => void };
+		};
+		const container = document.createElement('div');
+		target.markdownRendererService = createPlainTextMarkdownRendererStub();
+		target.renderedMarkdownDisposables = {
+			add: () => undefined,
+		};
+
+		const assistantText = [
+			'<agent_trace type="tool" status="start">Listed . (recursive)</agent_trace>',
+			'<tool_result tool_name="list_directory" success="true">Directory listing for file:///workspace:\n(empty directory)</tool_result>',
+			'<agent_trace type="tool_result" status="success">list_directory succeeded</agent_trace>',
+		].join('\n');
+
+		target.renderToolAwareAssistantText(container, assistantText, false);
+
+		const output = container.querySelector('.vsclone-tool-card-output');
+		assert.ok(output);
+		assert.ok(output?.textContent?.includes('Directory listing for file:///workspace:'));
+		assert.ok(output?.textContent?.includes('(empty directory)'));
+	});
+
+	test('tool-aware renderer uses the full attempt completion result instead of a trace excerpt', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderToolAwareAssistantTarget & {
+			markdownRendererService: ReturnType<typeof createPlainTextMarkdownRendererStub>;
+			renderedMarkdownDisposables: { add: (value: { dispose(): void }) => void };
+		};
+		const container = document.createElement('div');
+		target.markdownRendererService = createPlainTextMarkdownRendererStub();
+		target.renderedMarkdownDisposables = {
+			add: () => undefined,
+		};
+
+		const fullSummary = [
+			'# Result',
+			'',
+			'- first point',
+			'- second point',
+			'- third point',
+			'',
+			'`src/main.jsx` and `src/App.jsx` were inspected.',
+		].join('\n');
+		const assistantText = [
+			'<agent_trace type="tool" status="start">Attempted completion</agent_trace>',
+			`<tool_result tool_name="attempt_completion" success="true">${fullSummary}</tool_result>`,
+			'<agent_trace type="tool_result" status="success">attempt_completion succeeded</agent_trace>',
+		].join('\n');
+
+		target.renderToolAwareAssistantText(container, assistantText, false);
+
+		assert.ok(container.textContent?.includes('# Result'));
+		assert.ok(container.textContent?.includes('second point'));
+		assert.ok(container.textContent?.includes('src/main.jsx'));
+		assert.strictEqual(container.querySelector('.vsclone-tool-card'), null);
+	});
+
+	test('tool-aware renderer suppresses duplicated pre-tool summaries when attempt completion repeats them', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderToolAwareAssistantTarget & {
+			markdownRendererService: ReturnType<typeof createPlainTextMarkdownRendererStub>;
+			renderedMarkdownDisposables: { add: (value: { dispose(): void }) => void };
+		};
+		const container = document.createElement('div');
+		target.markdownRendererService = createPlainTextMarkdownRendererStub();
+		target.renderedMarkdownDisposables = {
+			add: () => undefined,
+		};
+
+		const provisionalSummary = [
+			'I inspected the workspace and it appears empty, so here is a fresh small browser game idea and a concrete build plan.',
+			'',
+			'Game idea: "Pizza Panic"',
+			'A fast, funny browser arcade game.',
+		].join('\n');
+		const assistantText = [
+			provisionalSummary,
+			'<tool_call><tool_name>list_directory</tool_name><path>.</path><recursive>true</recursive></tool_call>',
+			'<agent_trace type="tool" status="start">Listed . (recursive)</agent_trace>',
+			'<tool_result tool_name="list_directory" success="true">Directory listing for file:///workspace:\n(empty directory)</tool_result>',
+			'<agent_trace type="tool_result" status="success">list_directory succeeded</agent_trace>',
+			'<agent_trace type="tool" status="start">Attempted completion</agent_trace>',
+			`<tool_result tool_name="attempt_completion" success="true">${provisionalSummary}</tool_result>`,
+			'<agent_trace type="tool_result" status="success">attempt_completion succeeded</agent_trace>',
+		].join('\n');
+
+		target.renderToolAwareAssistantText(container, assistantText, false);
+
+		const renderedSummaries = container.querySelectorAll('.vsclone-thread-message-text-segment');
+		assert.strictEqual(renderedSummaries.length, 1);
+		assert.ok(renderedSummaries[0].textContent?.includes('Pizza Panic'));
+		assert.ok(container.querySelector('.vsclone-tool-card'));
+	});
+
+	test('tool-aware renderer recovers inline thinking markers and trailing prose before a tool call', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderToolAwareAssistantTarget & {
+			markdownRendererService: ReturnType<typeof createPlainTextMarkdownRendererStub>;
+			renderedMarkdownDisposables: { add: (value: { dispose(): void }) => void };
+		};
+		const container = document.createElement('div');
+		target.markdownRendererService = createPlainTextMarkdownRendererStub();
+		target.renderedMarkdownDisposables = {
+			add: () => undefined,
+		};
+
+		const assistantText = [
+			'Thinking: I’ll inspect the workspace to see whether there is any existing game scaffold or relevant code to build on.Thinking: I’ll summarize a concrete small browser game idea and implementation plan based on the workspace contents.Here’s a fun, small browser game idea:',
+			'<tool_call><tool_name>list_directory</tool_name><path>.</path><recursive>true</recursive></tool_call>',
+		].join('\n');
+
+		target.renderToolAwareAssistantText(container, assistantText, false);
+
+		const thinkingSteps = Array.from(container.querySelectorAll('.vsclone-thinking-step'));
+		assert.strictEqual(thinkingSteps.length, 2);
+		assert.ok(thinkingSteps[0].textContent?.includes('inspect the workspace'));
+		assert.ok(thinkingSteps[1].textContent?.includes('implementation plan based on the workspace contents.'));
+		assert.ok(!thinkingSteps[1].textContent?.includes('Here’s a fun, small browser game idea:'));
+
+		const textSegment = container.querySelector('.vsclone-thread-message-text-segment');
+		assert.ok(textSegment?.textContent?.includes('Here’s a fun, small browser game idea:'));
+		assert.ok(container.querySelector('.vsclone-tool-card'));
 	});
 });

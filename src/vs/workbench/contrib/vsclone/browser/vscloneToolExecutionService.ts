@@ -14,10 +14,13 @@ import { createDecorator, IInstantiationService } from '../../../../platform/ins
 import { IMarkerService } from '../../../../platform/markers/common/markers.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { localize } from '../../../../nls.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { QueryBuilder } from '../../../services/search/common/queryBuilder.js';
 import { isFileMatch, ISearchService, resultIsMatch } from '../../../services/search/common/search.js';
+import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
+import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
 import { formatToolResultWithDiff } from '../common/vscloneToolResultDiff.js';
 import { resolveContentEdits, type IVSCloneParsedEdit, type IVSCloneResolvedContentEdit } from './vscloneEditApplicationService.js';
 
@@ -36,7 +39,7 @@ export const IVSCloneToolExecutionService = createDecorator<IVSCloneToolExecutio
 
 export interface IVSCloneToolExecutionService {
 	readonly _serviceBrand: undefined;
-	executeTool(toolName: string, params: Record<string, string>): Promise<IVSCloneToolExecutionResult>;
+	executeTool(toolName: string, params: Record<string, string>, mode?: VSCloneChatMode): Promise<IVSCloneToolExecutionResult>;
 }
 
 interface IParsedSearchReplaceBlock {
@@ -61,15 +64,29 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		@ISearchService private readonly searchService: ISearchService,
 		@IMarkerService private readonly markerService: IMarkerService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
+		@IVSClonePlanModeService private readonly planModeService: IVSClonePlanModeService,
 		@ILogService private readonly logService: ILogService,
 	) {
 	}
 
-	async executeTool(toolName: string, params: Record<string, string>): Promise<IVSCloneToolExecutionResult> {
+	async executeTool(toolName: string, params: Record<string, string>, mode: VSCloneChatMode = 'act'): Promise<IVSCloneToolExecutionResult> {
 		const invocationLog = `[VSCloneToolExecution] Executing ${toolName} (${summarizeToolParams(params)})`;
 		this.logService.info(invocationLog);
 		console.info(invocationLog);
 		try {
+			// Plan mode is enforced here as the last runtime gate so prompt drift or model disobedience
+			// cannot silently turn a read-only planning turn into a workspace mutation.
+			if (mode === 'plan' && !this.planModeService.isToolAllowed(mode, toolName)) {
+				return {
+					success: false,
+					output: localize(
+						'vsclone.toolExecution.planModeUnavailable',
+						'Tool "{0}" is not available in plan mode. Switch to Act mode to make edits.',
+						toolName,
+					),
+				};
+			}
+
 			switch (toolName) {
 				case 'read_file':
 					return this.executeReadFile(params);
@@ -161,6 +178,10 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		const lines: string[] = [`Directory listing for ${target.uri.toString()}:`];
 		const state = { count: 0, truncated: false };
 		await this.appendDirectoryListing(root.resource, '', recursive, lines, state);
+		// A blank listing is ambiguous to the model, so emit an explicit marker for truly empty folders.
+		if (state.count === 0) {
+			lines.push('(empty directory)');
+		}
 		if (state.truncated) {
 			lines.push(`[truncated after ${maxDirectoryEntries} entries]`);
 		}

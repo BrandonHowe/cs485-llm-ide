@@ -11,6 +11,8 @@ import { IVSCloneApiRequestHandle, IVSCloneChatApiService } from './vscloneChatA
 import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import type { VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
+import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
+import { sanitizeAgentModelOutput } from '../common/vscloneAgentTranscriptSanitizer.js';
 import { formatToolResult } from '../common/vscloneToolDefinitions.js';
 import { parseToolCalls } from '../common/vscloneToolCallParser.js';
 import { IVSCloneToolExecutionService } from './vscloneToolExecutionService.js';
@@ -31,6 +33,7 @@ export interface IVSCloneAgentLoopOptions {
 	readonly sequence: number;
 	readonly sessionResource: string;
 	readonly promptText: string;
+	readonly mode: VSCloneChatMode;
 	readonly vendor: VSCloneModelVendor;
 	readonly modelId: string;
 	readonly modelIdentifier: string;
@@ -113,6 +116,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'prompt',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
 		});
@@ -130,6 +134,10 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 				this.appendAssistantDelta(options, `\n\n---\n[Agent iteration ${iteration}]\n`);
 			}
 
+			// Each model iteration streams raw text into the turn before we know whether the model
+			// obeyed the tool protocol. Capture the transcript prefix now so we can replace only this
+			// iteration's segment with a sanitized version once the model finishes.
+			const responsePrefix = this.getCurrentTurnResponseText(options.threadId, options.turnId);
 			const iterationResult = await this.runModelIteration(options, messages, state);
 			if (iterationResult.errorMessage) {
 				this.applyError(options, state, iterationResult.errorMessage);
@@ -140,18 +148,33 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 				return;
 			}
 
-			const parsedCalls = parseToolCalls(iterationResult.responseText);
+			const sanitizedIteration = sanitizeAgentModelOutput(iterationResult.responseText);
+			if (sanitizedIteration.sanitizedText !== iterationResult.responseText) {
+				this.replaceCurrentIterationTranscript(options, responsePrefix, sanitizedIteration.sanitizedText);
+				const sanitizerEffects: string[] = [];
+				if (sanitizedIteration.removedFakeToolResults) {
+					sanitizerEffects.push('removed fabricated tool_result blocks');
+				}
+				if (sanitizedIteration.truncatedAfterAttemptCompletion) {
+					sanitizerEffects.push('dropped prose after attempt_completion');
+				}
+				this.logTrace('warn', `Sanitized invalid model tool transcript for thread ${options.threadId}: ${sanitizerEffects.join(', ')}`);
+			}
+
+			const parsedCalls = parseToolCalls(sanitizedIteration.sanitizedText);
 			if (parsedCalls.toolCalls.length === 0) {
-				if (this.shouldRepromptForToolUse(options.promptText, iterationResult.responseText, toolUsageRepromptCount)) {
+				if (this.shouldRepromptForToolUse(options.promptText, sanitizedIteration.sanitizedText, toolUsageRepromptCount)) {
 					toolUsageRepromptCount += 1;
-					const reprompt = this.createToolUsageReprompt();
+					const reprompt = this.createToolUsageReprompt(options.mode);
 					this.emitAgentTrace(
 						options,
 						'thinking',
-						'I already have workspace tool access, so I will proceed by calling tools instead of asking the user for file access.',
+						options.mode === 'plan'
+							? 'I already have read-only workspace tool access, so I will inspect the codebase instead of asking the user for files.'
+							: 'I already have workspace tool access, so I will proceed by calling tools instead of asking the user for file access.',
 					);
 					this.logTrace('warn', 'Model responded without tool calls for a file-operation prompt; sending corrective tool-usage reprompt.');
-					messages.push({ role: 'assistant', content: iterationResult.responseText });
+					messages.push({ role: 'assistant', content: sanitizedIteration.sanitizedText });
 					messages.push({ role: 'user', content: reprompt });
 					continue;
 				}
@@ -166,14 +189,14 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 					return;
 				}
 
-				const thinkingTrace = this.describeToolThinkingTrace(toolCall.name, toolCall.params);
+				const thinkingTrace = this.describeToolThinkingTrace(toolCall.name, toolCall.params, options.mode);
 				if (thinkingTrace) {
 					this.emitAgentTrace(options, 'thinking', thinkingTrace);
 				}
 				const toolAttemptTrace = this.describeToolAttemptTrace(toolCall.name, toolCall.params);
 				this.emitAgentTrace(options, 'tool', toolAttemptTrace, 'start');
 				this.logTrace('info', `[Tool Attempt] ${toolAttemptTrace}`);
-				const toolResult = await this.toolExecutionService.executeTool(toolCall.name, toolCall.params);
+				const toolResult = await this.toolExecutionService.executeTool(toolCall.name, toolCall.params, options.mode);
 				const formattedToolResult = formatToolResult(toolCall.name, toolResult);
 				toolResults.push(formattedToolResult);
 				const toolResultTrace = this.describeToolResultTrace(toolCall.name, toolResult.success);
@@ -187,7 +210,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 				}
 			}
 
-			messages.push({ role: 'assistant', content: iterationResult.responseText });
+			messages.push({ role: 'assistant', content: sanitizedIteration.sanitizedText });
 			messages.push({ role: 'user', content: toolResults.join('\n\n') });
 		}
 
@@ -257,11 +280,40 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'stream',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
 			responsePlainTextDelta: delta,
 			responseMarkdownDelta: delta,
 		});
+	}
+
+	/**
+	 * The history reducer stores one flat assistant transcript per turn, so post-iteration cleanup
+	 * has to rewrite the whole transcript rather than patching a substring in place. We rebuild the
+	 * current response from the stable prefix plus the sanitized iteration text before any canonical
+	 * trace/result records for the next step are appended.
+	 */
+	private replaceCurrentIterationTranscript(options: IVSCloneAgentLoopOptions, responsePrefix: string, sanitizedIterationText: string): void {
+		this.historyService.applyTurnUpdate({
+			threadId: options.threadId,
+			turnId: options.turnId,
+			sequence: options.sequence,
+			sessionResource: options.sessionResource,
+			phase: 'stream',
+			occurredAt: Date.now(),
+			promptText: options.promptText,
+			executionMode: options.mode,
+			modelIdentifier: options.modelIdentifier,
+			providerId: options.vendor,
+			responsePlainTextReplace: `${responsePrefix}${sanitizedIterationText}`,
+			responseMarkdownReplace: `${responsePrefix}${sanitizedIterationText}`,
+		});
+	}
+
+	private getCurrentTurnResponseText(threadId: string, turnId: string): string {
+		const currentTurn = this.historyService.getTurns(threadId).find(turn => turn.turnId === turnId);
+		return currentTurn ? (currentTurn.responsePlainText || currentTurn.responseMarkdown) : '';
 	}
 
 	private applyComplete(options: IVSCloneAgentLoopOptions, state: ILoopState): void {
@@ -278,6 +330,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'complete',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
 		});
@@ -297,6 +350,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'error',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			errorCode: 'api_error',
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
@@ -319,6 +373,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'cancel',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
 		});
@@ -339,7 +394,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 		this.appendAssistantDelta(options, `\n${tracePayload}\n`);
 	}
 
-	private describeToolThinkingTrace(toolName: string, params: Record<string, string>): string {
+	private describeToolThinkingTrace(toolName: string, params: Record<string, string>, mode: VSCloneChatMode): string {
 		switch (toolName) {
 			case 'read_file':
 				return `I will inspect ${formatPathForTrace(params.path)} before making changes.`;
@@ -352,7 +407,9 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			case 'create_file':
 				return `I will create ${formatPathForTrace(params.path)} with the requested content.`;
 			case 'attempt_completion':
-				return 'I have enough context and will finalize the task summary.';
+				return mode === 'plan'
+					? 'I have enough context and will finalize the implementation plan summary.'
+					: 'I have enough context and will finalize the task summary.';
 			default:
 				return `I will run ${toolName} to continue.`;
 		}
@@ -373,7 +430,8 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			case 'create_file':
 				return `Created ${formatPathForTrace(params.path)}`;
 			case 'attempt_completion':
-				return `Attempted completion: ${truncateTraceMessage(params.result ?? 'Task complete')}`;
+				// The structured tool_result already carries the full completion markdown for the UI.
+				return 'Attempted completion';
 			default:
 				return `Executed ${toolName}`;
 		}
@@ -399,7 +457,19 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 		return requiresWorkspaceMutation || (requiresWorkspaceInspection && requestsManualAccess);
 	}
 
-	private createToolUsageReprompt(): string {
+	private createToolUsageReprompt(mode: VSCloneChatMode): string {
+		if (mode === 'plan') {
+			// Plan mode keeps the same corrective pressure as act mode, but redirects it toward
+			// read-only inspection so "please fix X" prompts still produce researched plans.
+			return [
+				'System reminder: you already have direct read-only workspace tool access.',
+				'Do not ask the user to open/share/provide files.',
+				'Use the available XML tools now (read_file, list_directory, search_files, attempt_completion).',
+				'Do not edit or create files in plan mode.',
+				'Inspect the codebase first, then call attempt_completion with your plan.',
+			].join(' ');
+		}
+
 		return [
 			'System reminder: you already have direct workspace tool access.',
 			'Do not ask the user to open/share/provide files.',
@@ -429,14 +499,6 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 				break;
 		}
 	}
-}
-
-function truncateTraceMessage(value: string): string {
-	const maxTraceChars = 120;
-	if (value.length <= maxTraceChars) {
-		return value;
-	}
-	return `${value.slice(0, maxTraceChars)}...`;
 }
 
 function formatPathForTrace(value: string | undefined): string {

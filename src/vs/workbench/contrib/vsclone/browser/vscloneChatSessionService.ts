@@ -10,6 +10,8 @@ import { generateUuid } from '../../../../base/common/uuid.js';
 import { deriveThreadId } from '../common/backend/vscloneChatHistoryModel.js';
 import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
+import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
+import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
 import { IVSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
 import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopService } from './vscloneAgentLoopService.js';
@@ -46,6 +48,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	constructor(
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
 		@IVSCloneThreadModelSelectionService private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
+		@IVSClonePlanModeService private readonly planModeService: IVSClonePlanModeService,
 		@ILogService private readonly logService: ILogService,
 		@IVSCloneAgentLoopService private readonly agentLoopService: IVSCloneAgentLoopService,
 		@IVSCloneContextGatheringService private readonly contextGatheringService: IVSCloneContextGatheringService,
@@ -61,14 +64,18 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		}
 
 		await this.modelSelectionService.initialize();
+		await this.planModeService.initialize();
 		const baseSelection = options.modelSelection ?? this.modelSelectionService.getCurrentSelectionForThread(options.threadId ?? '', 'chat');
+		// Mode is snapshotted once per submission so prompt assembly, tool execution, and transcript
+		// rendering all agree even if the user flips the composer toggle while the turn is streaming.
+		const mode = this.planModeService.getModeForThread(options.threadId);
 		const apiVendor = this.getApiVendor(baseSelection);
 		// VSClone now owns chat transport entirely, so every send must resolve to a concrete
 		// provider/model pair instead of falling back to an implicit transport.
 		if (!apiVendor || !baseSelection) {
-			return this.rejectMissingApiSelection(trimmedPrompt, options, baseSelection);
+			return this.rejectMissingApiSelection(trimmedPrompt, options, baseSelection, mode);
 		}
-		return this.submitApiPrompt(trimmedPrompt, options, apiVendor, baseSelection);
+		return this.submitApiPrompt(trimmedPrompt, options, apiVendor, baseSelection, mode);
 	}
 
 	cancelThread(threadId: string): void {
@@ -96,10 +103,12 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		options: IVSCloneChatSubmitOptions,
 		vendor: VSCloneModelVendor,
 		modelSelection: IVSCloneModelSelection,
+		mode: VSCloneChatMode,
 	): Promise<IVSCloneChatSubmitResult> {
 		const sessionResource = options.sessionResource ?? createApiSessionResource(generateUuid());
 		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
 		const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
+		await this.planModeService.setModeForThread(threadId, mode);
 		const resolvedSelection = await this.ensureThreadSelectionBinding(threadId, modelSelection);
 		const turnId = `${threadId}:api:${Date.now()}`;
 		const sequence = this.historyService.getTurns(threadId).length + 1;
@@ -122,7 +131,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 
 		try {
 			const context = await this.contextGatheringService.gatherContext();
-			systemMessage = this.promptAssemblyService.assembleSystemMessage(context, vendor);
+			systemMessage = this.promptAssemblyService.assembleSystemMessage(context, vendor, mode);
 		} catch (error) {
 			// Prompt submission should not fail when context collection fails, so we degrade gracefully.
 			this.logService.warn('[VSCloneChatSession] Failed to gather prompt context; continuing without enriched system prompt', error);
@@ -134,6 +143,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			sequence,
 			sessionResource,
 			promptText,
+			mode,
 			vendor,
 			modelId,
 			modelIdentifier,
@@ -183,7 +193,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		};
 	}
 
-	private injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string; modelSelection?: IVSCloneModelSelection }): void {
+	private injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string; mode: VSCloneChatMode; modelSelection?: IVSCloneModelSelection }): void {
 		const turns = this.historyService.getTurns(options.threadId);
 		const sequence = turns.length + 1;
 		const turnId = `${options.threadId}:rejected:${Date.now()}`;
@@ -197,6 +207,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			phase: 'prompt',
 			occurredAt,
 			promptText: options.promptText,
+			executionMode: options.mode,
 			modelIdentifier: options.modelSelection?.modelIdentifier,
 			providerId: options.modelSelection?.vendor,
 		});
@@ -209,6 +220,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			phase: 'error',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			errorCode: 'request_rejected',
 			modelIdentifier: options.modelSelection?.modelIdentifier,
 			providerId: options.modelSelection?.vendor,
@@ -232,20 +244,22 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		}
 	}
 
-	private rejectMissingApiSelection(
+	private async rejectMissingApiSelection(
 		promptText: string,
 		options: IVSCloneChatSubmitOptions,
 		modelSelection: IVSCloneModelSelection | undefined,
-	): IVSCloneChatSubmitResult {
+		mode: VSCloneChatMode,
+	): Promise<IVSCloneChatSubmitResult> {
 		const sessionResource = options.sessionResource ?? createApiSessionResource(generateUuid());
 		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
 		const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
-
+		await this.planModeService.setModeForThread(threadId, mode);
 		this.injectRejectedTurn({
 			threadId,
 			sessionResource,
 			promptText,
 			reason: 'Sign in to a provider and choose a model before sending messages through VSClone.',
+			mode,
 			modelSelection,
 		});
 

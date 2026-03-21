@@ -30,6 +30,7 @@ suite('VSCloneChatHistorySerializer', () => {
 		turnId: 'a1',
 		threadId: 'a',
 		sequence: 1,
+		executionMode: 'plan',
 		promptText: 'hello',
 		responseMarkdown: 'hi',
 		responsePlainText: 'hi',
@@ -39,8 +40,8 @@ suite('VSCloneChatHistorySerializer', () => {
 	const turnA2: IVSCloneChatHistoryTurn = { ...turnA1, turnId: 'a2', sequence: 2, startedAt: 2 };
 
 	test('serializes deterministically', () => {
-		const first = serializer.serializeIndex('ws', 1, [threadA, threadB], {}, []);
-		const second = serializer.serializeIndex('ws', 1, [threadB, threadA], {}, []);
+		const first = serializer.serializeIndex('ws', 1, [threadA, threadB], { a: 'plan' }, {}, []);
+		const second = serializer.serializeIndex('ws', 1, [threadB, threadA], { a: 'plan' }, {}, []);
 		assert.strictEqual(first, second);
 
 		const turnsFirst = serializer.serializeThread('a', threadA.sessionResource, [turnA1, turnA2], undefined);
@@ -50,6 +51,8 @@ suite('VSCloneChatHistorySerializer', () => {
 
 	test('roundtrips index and thread files', () => {
 		const index = serializer.deserializeIndex(serializer.serializeIndex('ws', 3, [threadA, threadB], {
+			a: 'plan',
+		}, {
 			chat: {
 				location: 'chat',
 				modelIdentifier: 'openai/gpt-5.3-codex',
@@ -61,6 +64,7 @@ suite('VSCloneChatHistorySerializer', () => {
 		}, ['openai/gpt-5.3-codex']));
 		assert.strictEqual(index.threads.length, 2);
 		assert.strictEqual(index.threads[0].threadId, 'b');
+		assert.strictEqual(index.modeByThread?.a, 'plan');
 		assert.strictEqual(index.selectedByLocation.chat?.modelIdentifier, 'openai/gpt-5.3-codex');
 		assert.deepStrictEqual(index.recentModelIdentifiers, ['openai/gpt-5.3-codex']);
 
@@ -74,6 +78,7 @@ suite('VSCloneChatHistorySerializer', () => {
 		}));
 		assert.strictEqual(thread.turns.length, 2);
 		assert.strictEqual(thread.turns[1].turnId, 'a2');
+		assert.strictEqual(thread.turns[0].executionMode, 'plan');
 		assert.strictEqual(thread.selection?.modelIdentifier, 'openai/gpt-5.3-codex');
 	});
 

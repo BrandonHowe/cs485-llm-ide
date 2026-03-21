@@ -49,12 +49,16 @@ suite('VSCloneChatHistoryStore', () => {
 					turnId: 'turn-1',
 					threadId: 'thread-1',
 					sequence: 1,
+					executionMode: 'plan',
 					promptText: 'Prompt',
 					responseMarkdown: 'Response',
 					responsePlainText: 'Response',
 					startedAt: 1,
 					status: 'completed',
 				}],
+			},
+			modeByThread: {
+				'thread-1': 'plan',
 			},
 			selectedByThread: {
 				'thread-1': {
@@ -83,6 +87,8 @@ suite('VSCloneChatHistoryStore', () => {
 		assert.strictEqual(loaded.threads.length, 1);
 		assert.strictEqual(loaded.threads[0].threadId, 'thread-1');
 		assert.strictEqual(loaded.turnsByThreadId['thread-1']?.length, 1);
+		assert.strictEqual(loaded.turnsByThreadId['thread-1'][0].executionMode, 'plan');
+		assert.strictEqual(loaded.modeByThread['thread-1'], 'plan');
 		assert.strictEqual(loaded.turnsByThreadId['thread-1'][0].responsePlainText, 'Response');
 		assert.strictEqual(loaded.selectedByThread['thread-1']?.modelIdentifier, 'openai/gpt-5.3-codex');
 		assert.deepStrictEqual(loaded.recentModelIdentifiers, ['openai/gpt-5.3-codex']);
@@ -97,6 +103,7 @@ suite('VSCloneChatHistoryStore', () => {
 			updatedAt: 20,
 			threads: [],
 			turnsByThreadId: {},
+			modeByThread: {},
 			selectedByThread: {},
 			selectedByLocation: {},
 			recentModelIdentifiers: [],

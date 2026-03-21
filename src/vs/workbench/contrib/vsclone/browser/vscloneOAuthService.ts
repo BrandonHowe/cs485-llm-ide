@@ -7,23 +7,24 @@ import { DeferredPromise } from '../../../../base/common/async.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { getClaimsFromJWT, IAuthorizationTokenResponse, isAuthorizationErrorResponse, isAuthorizationTokenResponse } from '../../../../base/common/oauth.js';
-import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
 import { localize } from '../../../../nls.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
-import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { ISecretStorageService } from '../../../../platform/secrets/common/secrets.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import {
 	IVSCloneOAuthLoopbackStartResponse,
 	IVSCloneOAuthLoopbackWaitResponse,
+	IVSCloneOAuthTokenExchangeResponse,
 	VSCLONE_OAUTH_CHANNEL_NAME,
+	VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL,
 	VSCLONE_OAUTH_COMMAND_START_LOOPBACK,
 	VSCLONE_OAUTH_COMMAND_STOP_LOOPBACK,
+	VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE,
 	VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK,
 } from '../common/vscloneOAuthIpc.js';
 import {
@@ -116,38 +117,73 @@ function getLoopbackRedirectUri(config: IVSCloneOAuthProviderConfig): string {
 
 // -- Token Operations --
 
+/**
+ * OAuth providers are expected to return JSON, but some failures still come back as plain text or HTML.
+ * Parsing centrally lets the sign-in flow surface the provider's real response instead of an opaque JSON error.
+ */
+function parseOAuthResponseBody(responseText: string | null): unknown {
+	if (!responseText) {
+		return {};
+	}
+
+	try {
+		return JSON.parse(responseText);
+	} catch {
+		return { error_description: responseText };
+	}
+}
+
 async function exchangeCodeForTokens(
+	channel: IChannel,
 	config: IVSCloneOAuthProviderConfig,
 	code: string,
 	redirectUri: string,
-	codeVerifier: string
+	codeVerifier: string,
+	state: string
 ): Promise<IAuthorizationTokenResponse> {
-	const params = new URLSearchParams();
-	params.set('grant_type', 'authorization_code');
-	params.set('code', code);
-	params.set('redirect_uri', redirectUri);
-	params.set('client_id', config.clientId);
-	params.set('code_verifier', codeVerifier);
+	let requestBody: string;
+	let contentType: string;
 
-	if (config.clientSecret) {
-		params.set('client_secret', config.clientSecret);
+	if (config.vendor === 'anthropic') {
+		requestBody = JSON.stringify({
+			grant_type: 'authorization_code',
+			code,
+			redirect_uri: redirectUri,
+			client_id: config.clientId,
+			code_verifier: codeVerifier,
+			state,
+		});
+		contentType = 'application/json';
+	} else {
+		const params = new URLSearchParams();
+		params.set('grant_type', 'authorization_code');
+		params.set('code', code);
+		params.set('redirect_uri', redirectUri);
+		params.set('client_id', config.clientId);
+		params.set('code_verifier', codeVerifier);
+
+		if (config.clientSecret) {
+			params.set('client_secret', config.clientSecret);
+		}
+
+		for (const [key, value] of Object.entries(config.extraTokenParams)) {
+			params.set(key, value);
+		}
+
+		requestBody = params.toString();
+		contentType = 'application/x-www-form-urlencoded';
 	}
 
-	for (const [key, value] of Object.entries(config.extraTokenParams)) {
-		params.set(key, value);
-	}
+	// Proxy through the main process via IPC to avoid renderer-side CORS failures.
+	const response = await channel.call<IVSCloneOAuthTokenExchangeResponse>(
+		VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE,
+		{ url: config.tokenUrl, body: requestBody, contentType }
+	);
+	const body = parseOAuthResponseBody(response.body);
 
-	const response = await fetch(config.tokenUrl, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-		body: params.toString(),
-	});
-
-	const body = await response.json();
-
-	if (!response.ok || isAuthorizationErrorResponse(body)) {
+	if (response.statusCode < 200 || response.statusCode >= 300 || isAuthorizationErrorResponse(body)) {
 		const errorBody = body as { error?: string; error_description?: string };
-		throw new Error(`Token exchange failed: ${errorBody.error_description || errorBody.error || response.statusText}`);
+		throw new Error(`Token exchange failed: ${errorBody.error_description || errorBody.error || response.statusCode || 'unknown error'}`);
 	}
 
 	if (!isAuthorizationTokenResponse(body)) {
@@ -158,29 +194,45 @@ async function exchangeCodeForTokens(
 }
 
 async function refreshAccessToken(
+	channel: IChannel,
 	config: IVSCloneOAuthProviderConfig,
 	refreshToken: string
 ): Promise<IAuthorizationTokenResponse> {
-	const params = new URLSearchParams();
-	params.set('grant_type', 'refresh_token');
-	params.set('refresh_token', refreshToken);
-	params.set('client_id', config.clientId);
+	let requestBody: string;
+	let contentType: string;
 
-	if (config.clientSecret) {
-		params.set('client_secret', config.clientSecret);
+	if (config.vendor === 'anthropic') {
+		requestBody = JSON.stringify({
+			grant_type: 'refresh_token',
+			refresh_token: refreshToken,
+			client_id: config.clientId,
+			scope: config.scopes.join(' '),
+		});
+		contentType = 'application/json';
+	} else {
+		const params = new URLSearchParams();
+		params.set('grant_type', 'refresh_token');
+		params.set('refresh_token', refreshToken);
+		params.set('client_id', config.clientId);
+
+		if (config.clientSecret) {
+			params.set('client_secret', config.clientSecret);
+		}
+
+		requestBody = params.toString();
+		contentType = 'application/x-www-form-urlencoded';
 	}
 
-	const response = await fetch(config.tokenUrl, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-		body: params.toString(),
-	});
+	// Proxy through the main process via IPC to avoid renderer-side CORS failures.
+	const response = await channel.call<IVSCloneOAuthTokenExchangeResponse>(
+		VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE,
+		{ url: config.tokenUrl, body: requestBody, contentType }
+	);
+	const body = parseOAuthResponseBody(response.body);
 
-	const body = await response.json();
-
-	if (!response.ok || isAuthorizationErrorResponse(body)) {
+	if (response.statusCode < 200 || response.statusCode >= 300 || isAuthorizationErrorResponse(body)) {
 		const errorBody = body as { error?: string; error_description?: string };
-		throw new Error(`Token refresh failed: ${errorBody.error_description || errorBody.error || response.statusText}`);
+		throw new Error(`Token refresh failed: ${errorBody.error_description || errorBody.error || response.statusCode || 'unknown error'}`);
 	}
 
 	if (!isAuthorizationTokenResponse(body)) {
@@ -342,7 +394,6 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	constructor(
 		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
 		@ILogService private readonly logService: ILogService,
-		@IOpenerService private readonly openerService: IOpenerService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
 		@IMainProcessService private readonly mainProcessService: IMainProcessService,
@@ -437,7 +488,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 			const { code, redirectUri } = authorization;
 
 			// Exchange code for tokens
-			const tokenResponse = await exchangeCodeForTokens(config, code, redirectUri, codeVerifier);
+			const tokenResponse = await exchangeCodeForTokens(this._getLoopbackChannel()!, config, code, redirectUri, codeVerifier, state);
 
 			// Extract metadata
 			const { userDisplayName, providerMetadata } = extractMetadata(vendor, tokenResponse);
@@ -488,7 +539,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	): Promise<{ code: string; redirectUri: string } | undefined> {
 		const redirectUri = config.redirectUriTemplate;
 		const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
-		await this.openerService.open(URI.parse(authUrl));
+		await this._getLoopbackChannel()!.call(VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL, authUrl);
 
 		const code = await this._promptForAuthorizationCode(vendor, config, expectedState);
 		if (!code) {
@@ -525,7 +576,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 
 				redirectUri = startResponse.redirectUri;
 				const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
-				await this.openerService.open(URI.parse(authUrl));
+				await this._getLoopbackChannel()!.call(VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL, authUrl);
 				browserOpened = true;
 
 				const callback = await loopbackChannel.call<IVSCloneOAuthLoopbackWaitResponse>(
@@ -551,7 +602,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		// Fallback path preserves the previous manual copy/paste behavior.
 		if (!browserOpened) {
 			const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
-			await this.openerService.open(URI.parse(authUrl));
+			await this._getLoopbackChannel()!.call(VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL, authUrl);
 		}
 
 		const code = await this._promptForAuthorizationCode(vendor, config, expectedState);
@@ -796,7 +847,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		this._setProviderStatus(vendor, 'refreshing');
 
 		try {
-			const tokenResponse = await refreshAccessToken(config, tokenSet.refreshToken);
+			const tokenResponse = await refreshAccessToken(this._getLoopbackChannel()!, config, tokenSet.refreshToken);
 			const { userDisplayName, providerMetadata } = extractMetadata(vendor, tokenResponse);
 
 			const newTokenSet: IVSCloneOAuthTokenSet = {

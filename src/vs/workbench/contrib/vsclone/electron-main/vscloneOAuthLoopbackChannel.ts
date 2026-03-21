@@ -15,11 +15,17 @@ import {
 	IVSCloneOAuthLoopbackStopRequest,
 	IVSCloneOAuthLoopbackWaitRequest,
 	IVSCloneOAuthLoopbackWaitResponse,
+	IVSCloneOAuthTokenExchangeRequest,
+	IVSCloneOAuthTokenExchangeResponse,
+	VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL,
 	VSCLONE_OAUTH_COMMAND_START_LOOPBACK,
 	VSCLONE_OAUTH_COMMAND_STOP_LOOPBACK,
+	VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE,
 	VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK,
 } from '../common/vscloneOAuthIpc.js';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
+import { request as httpsRequest } from 'https';
+import { shell } from 'electron';
 
 const LOOPBACK_PORT_PLACEHOLDER = '{port}';
 const DEFAULT_WAIT_TIMEOUT_MS = 180_000;
@@ -125,6 +131,11 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 			case VSCLONE_OAUTH_COMMAND_STOP_LOOPBACK:
 				await this.stopLoopback((arg as IVSCloneOAuthLoopbackStopRequest).sessionId, false);
 				return undefined as T;
+			case VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE:
+				return await this.tokenExchange(arg as IVSCloneOAuthTokenExchangeRequest) as T;
+			case VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL:
+				await shell.openExternal(arg as string);
+				return undefined as T;
 			default:
 				throw new Error(`Call not found: ${command}`);
 		}
@@ -135,6 +146,38 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 			void this.stopLoopback(sessionId, true);
 		}
 		super.dispose();
+	}
+
+	private async tokenExchange(req: IVSCloneOAuthTokenExchangeRequest): Promise<IVSCloneOAuthTokenExchangeResponse> {
+		const parsed = new URL(req.url);
+		return new Promise<IVSCloneOAuthTokenExchangeResponse>((resolve, reject) => {
+			const outgoing = httpsRequest(
+				{
+					hostname: parsed.hostname,
+					port: parsed.port || 443,
+					path: parsed.pathname + parsed.search,
+					method: 'POST',
+					headers: {
+						'Content-Type': req.contentType,
+						'Accept': 'application/json',
+						'Content-Length': Buffer.byteLength(req.body),
+					},
+				},
+				(res) => {
+					const chunks: Buffer[] = [];
+					res.on('data', (chunk: Buffer) => chunks.push(chunk));
+					res.on('end', () => {
+						resolve({
+							statusCode: res.statusCode ?? 0,
+							body: Buffer.concat(chunks).toString('utf8'),
+						});
+					});
+				}
+			);
+			outgoing.on('error', (err) => reject(err));
+			outgoing.write(req.body);
+			outgoing.end();
+		});
 	}
 
 	private async startLoopback(request: IVSCloneOAuthLoopbackStartRequest): Promise<IVSCloneOAuthLoopbackStartResponse> {

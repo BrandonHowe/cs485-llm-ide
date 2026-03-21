@@ -7,6 +7,7 @@ import { fromNow } from '../../../../../base/common/date.js';
 import { hash } from '../../../../../base/common/hash.js';
 import type { IVSCloneChatHistoryQuery, IVSCloneChatHistorySnapshot, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../vscloneChatHistoryTypes.js';
 import { allVSCloneChatLocations, type IVSCloneChatLocation, type IVSCloneModelSelection, type IVSCloneUnifiedChatSelectionState } from '../vscloneModelSelectionTypes.js';
+import { type IVSCloneUnifiedChatPlanModeState, isVSCloneChatMode, type VSCloneChatMode } from '../vsclonePlanModeTypes.js';
 
 export function deriveThreadId(sessionResource: string): string {
 	// Use a stable hash of the session resource so VSClone IDs stay deterministic without native chat URI helpers.
@@ -18,6 +19,7 @@ export class VSCloneChatHistoryModel {
 	private readonly turnsByThreadId = new Map<string, readonly IVSCloneChatHistoryTurn[]>();
 	private readonly threadIdsBySessionResource = new Map<string, string>();
 	private readonly searchTextByThreadId = new Map<string, string>();
+	private readonly modeByThread = new Map<string, VSCloneChatMode>();
 	private readonly selectedByThread = new Map<string, IVSCloneModelSelection>();
 	private readonly selectedByLocation = new Map<IVSCloneChatLocation, IVSCloneModelSelection>();
 	private recentModelIdentifiers: string[] = [];
@@ -27,6 +29,7 @@ export class VSCloneChatHistoryModel {
 		this.turnsByThreadId.clear();
 		this.threadIdsBySessionResource.clear();
 		this.searchTextByThreadId.clear();
+		this.modeByThread.clear();
 		this.selectedByThread.clear();
 		this.selectedByLocation.clear();
 		this.recentModelIdentifiers = [...snapshot.recentModelIdentifiers];
@@ -37,6 +40,12 @@ export class VSCloneChatHistoryModel {
 			this.threadIdsBySessionResource.set(thread.sessionResource, thread.threadId);
 			this.turnsByThreadId.set(thread.threadId, turns);
 			this.updateSearchText(thread, turns);
+		}
+
+		for (const [threadId, mode] of Object.entries(snapshot.modeByThread)) {
+			if (isVSCloneChatMode(mode)) {
+				this.modeByThread.set(threadId, mode);
+			}
 		}
 
 		for (const [threadId, selection] of Object.entries(snapshot.selectedByThread)) {
@@ -65,6 +74,11 @@ export class VSCloneChatHistoryModel {
 			turnsByThreadId[threadId] = turns;
 		}
 
+		const modeByThread: Record<string, VSCloneChatMode> = {};
+		for (const [threadId, mode] of this.modeByThread) {
+			modeByThread[threadId] = mode;
+		}
+
 		const selectedByThread: Record<string, IVSCloneModelSelection> = {};
 		for (const [threadId, selection] of this.selectedByThread) {
 			selectedByThread[threadId] = { ...selection, threadId: undefined };
@@ -79,6 +93,7 @@ export class VSCloneChatHistoryModel {
 			updatedAt,
 			threads,
 			turnsByThreadId,
+			modeByThread,
 			selectedByThread,
 			selectedByLocation,
 			recentModelIdentifiers: [...this.recentModelIdentifiers],
@@ -141,6 +156,7 @@ export class VSCloneChatHistoryModel {
 		this.turnsByThreadId.delete(threadId);
 		this.threadIdsBySessionResource.delete(thread.sessionResource);
 		this.searchTextByThreadId.delete(threadId);
+		this.modeByThread.delete(threadId);
 		this.selectedByThread.delete(threadId);
 		return thread;
 	}
@@ -150,6 +166,7 @@ export class VSCloneChatHistoryModel {
 		this.turnsByThreadId.clear();
 		this.threadIdsBySessionResource.clear();
 		this.searchTextByThreadId.clear();
+		this.modeByThread.clear();
 		this.selectedByThread.clear();
 		this.selectedByLocation.clear();
 		this.recentModelIdentifiers = [];
@@ -256,6 +273,28 @@ export class VSCloneChatHistoryModel {
 			selectedByLocation,
 			recentModelIdentifiers: [...this.recentModelIdentifiers],
 		};
+	}
+
+	getPlanModeState(): IVSCloneUnifiedChatPlanModeState {
+		const modeByThread: Record<string, VSCloneChatMode> = {};
+		for (const [threadId, mode] of this.modeByThread) {
+			modeByThread[threadId] = mode;
+		}
+
+		return { modeByThread };
+	}
+
+	/**
+	 * Thread mode is replaced atomically for the same reason as model selection: persisted composer
+	 * defaults should not drift away from the exact thread ids restored from the backend snapshot.
+	 */
+	replacePlanModeState(state: IVSCloneUnifiedChatPlanModeState): void {
+		this.modeByThread.clear();
+		for (const [threadId, mode] of Object.entries(state.modeByThread)) {
+			if (isVSCloneChatMode(mode)) {
+				this.modeByThread.set(threadId, mode);
+			}
+		}
 	}
 
 	/**

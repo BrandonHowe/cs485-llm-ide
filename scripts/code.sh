@@ -16,6 +16,18 @@ fi
 function code() {
 	cd "$ROOT"
 
+	# Load repo-local OAuth credentials before prelaunch or app startup so the
+	# VSClone provider config can read them from process environment without
+	# requiring every shell session to manually source a file first.
+	for ENV_FILE in "$ROOT/.env.vsclone" "$ROOT/.env.local" "$ROOT/.env"; do
+		if [[ -f "$ENV_FILE" ]]; then
+			set -a
+			# shellcheck source=/dev/null
+			. "$ENV_FILE"
+			set +a
+		fi
+	done
+
 	if [[ "$OSTYPE" == "darwin"* ]]; then
 		NAME=`node -p "require('./product.json').nameLong"`
 		EXE_NAME=`node -p "require('./product.json').nameShort"`

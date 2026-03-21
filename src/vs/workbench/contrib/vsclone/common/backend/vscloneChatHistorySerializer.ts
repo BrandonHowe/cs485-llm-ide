@@ -5,6 +5,7 @@
 
 import type { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../vscloneChatHistoryTypes.js';
 import { allVSCloneChatLocations, type IVSCloneChatLocation, type IVSCloneModelSelection } from '../vscloneModelSelectionTypes.js';
+import { isVSCloneChatMode, type VSCloneChatMode } from '../vsclonePlanModeTypes.js';
 
 const threadStatuses = new Set<IVSCloneChatHistoryThread['status']>(['active', 'completed', 'failed', 'archived']);
 const turnStatuses = new Set<IVSCloneChatHistoryTurn['status']>(['pending', 'streaming', 'completed', 'failed', 'cancelled']);
@@ -14,6 +15,7 @@ export interface IVSCloneChatHistoryIndexPayload {
 	workspaceId: string;
 	updatedAt: number;
 	threads: IVSCloneChatHistoryThread[];
+	modeByThread?: Record<string, VSCloneChatMode>;
 	selectedByLocation: Partial<Record<IVSCloneChatLocation, IVSCloneModelSelection>>;
 	recentModelIdentifiers: string[];
 }
@@ -55,6 +57,7 @@ function isTurn(value: unknown): value is IVSCloneChatHistoryTurn {
 	return typeof value.turnId === 'string'
 		&& typeof value.threadId === 'string'
 		&& typeof value.sequence === 'number'
+		&& (value.executionMode === undefined || isVSCloneChatMode(value.executionMode))
 		&& (value.modelIdentifier === undefined || typeof value.modelIdentifier === 'string')
 		&& (value.providerId === undefined || typeof value.providerId === 'string')
 		&& typeof value.promptText === 'string'
@@ -78,6 +81,14 @@ function isSelection(value: unknown): value is IVSCloneModelSelection {
 		&& typeof value.modelName === 'string'
 		&& (value.reasoningEffort === undefined || typeof value.reasoningEffort === 'string')
 		&& typeof value.selectedAt === 'number';
+}
+
+function isPlanModeState(value: unknown): value is Record<string, VSCloneChatMode> {
+	if (!isObject(value)) {
+		return false;
+	}
+
+	return Object.values(value).every(entry => isVSCloneChatMode(entry));
 }
 
 function sortRecentModelIdentifiers(recentModelIdentifiers: readonly string[]): string[] {
@@ -116,6 +127,7 @@ export class VSCloneChatHistorySerializer {
 		workspaceId: string,
 		updatedAt: number,
 		threads: readonly IVSCloneChatHistoryThread[],
+		modeByThread: Record<string, VSCloneChatMode>,
 		selectedByLocation: Partial<Record<IVSCloneChatLocation, IVSCloneModelSelection>>,
 		recentModelIdentifiers: readonly string[],
 	): string {
@@ -124,6 +136,7 @@ export class VSCloneChatHistorySerializer {
 			workspaceId,
 			updatedAt,
 			threads: sortThreads(threads),
+			modeByThread,
 			selectedByLocation,
 			recentModelIdentifiers: sortRecentModelIdentifiers(recentModelIdentifiers),
 		};
@@ -160,6 +173,7 @@ export class VSCloneChatHistorySerializer {
 			typeof parsed.workspaceId !== 'string'
 			|| typeof parsed.updatedAt !== 'number'
 			|| !Array.isArray(parsed.threads)
+			|| (parsed.modeByThread !== undefined && !isPlanModeState(parsed.modeByThread))
 			|| !isObject(parsed.selectedByLocation)
 			|| !Array.isArray(parsed.recentModelIdentifiers)
 		) {
@@ -182,6 +196,7 @@ export class VSCloneChatHistorySerializer {
 			workspaceId: parsed.workspaceId,
 			updatedAt: parsed.updatedAt,
 			threads: sortThreads(parsed.threads),
+			modeByThread: parsed.modeByThread ?? {},
 			selectedByLocation: parsed.selectedByLocation,
 			recentModelIdentifiers: sortRecentModelIdentifiers(parsed.recentModelIdentifiers),
 		};
