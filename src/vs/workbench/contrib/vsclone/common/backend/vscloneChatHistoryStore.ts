@@ -111,6 +111,7 @@ export class VSCloneChatHistoryStore extends Disposable {
 			this.workspaceContextService.getWorkspace().id,
 			snapshot.updatedAt,
 			threads,
+			{ ...snapshot.modeByThread },
 			Object.fromEntries(Object.entries(snapshot.selectedByLocation).map(([location, selection]) => [location, selection ? cloneSelection(selection) : undefined])),
 			snapshot.recentModelIdentifiers,
 		);
@@ -176,6 +177,7 @@ export class VSCloneChatHistoryStore extends Disposable {
 			updatedAt: index.updatedAt,
 			threads,
 			turnsByThreadId,
+			modeByThread: { ...index.modeByThread },
 			selectedByThread,
 			selectedByLocation: Object.fromEntries(Object.entries(index.selectedByLocation).map(([location, selection]) => [location, selection ? cloneSelection(selection) : undefined])),
 			recentModelIdentifiers: [...index.recentModelIdentifiers],
@@ -209,6 +211,7 @@ function createEmptySnapshot(): IVSCloneChatHistorySnapshot {
 		updatedAt: Date.now(),
 		threads: [],
 		turnsByThreadId: {},
+		modeByThread: {},
 		selectedByThread: {},
 		selectedByLocation: {},
 		recentModelIdentifiers: [],

@@ -11,6 +11,7 @@ import { IVSCloneApiRequestHandle, IVSCloneChatApiService } from './vscloneChatA
 import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import type { VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
+import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
 import { formatToolResult } from '../common/vscloneToolDefinitions.js';
 import { parseToolCalls } from '../common/vscloneToolCallParser.js';
 import { IVSCloneToolExecutionService } from './vscloneToolExecutionService.js';
@@ -31,6 +32,7 @@ export interface IVSCloneAgentLoopOptions {
 	readonly sequence: number;
 	readonly sessionResource: string;
 	readonly promptText: string;
+	readonly mode: VSCloneChatMode;
 	readonly vendor: VSCloneModelVendor;
 	readonly modelId: string;
 	readonly modelIdentifier: string;
@@ -113,6 +115,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'prompt',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
 		});
@@ -144,11 +147,13 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			if (parsedCalls.toolCalls.length === 0) {
 				if (this.shouldRepromptForToolUse(options.promptText, iterationResult.responseText, toolUsageRepromptCount)) {
 					toolUsageRepromptCount += 1;
-					const reprompt = this.createToolUsageReprompt();
+					const reprompt = this.createToolUsageReprompt(options.mode);
 					this.emitAgentTrace(
 						options,
 						'thinking',
-						'I already have workspace tool access, so I will proceed by calling tools instead of asking the user for file access.',
+						options.mode === 'plan'
+							? 'I already have read-only workspace tool access, so I will inspect the codebase instead of asking the user for files.'
+							: 'I already have workspace tool access, so I will proceed by calling tools instead of asking the user for file access.',
 					);
 					this.logTrace('warn', 'Model responded without tool calls for a file-operation prompt; sending corrective tool-usage reprompt.');
 					messages.push({ role: 'assistant', content: iterationResult.responseText });
@@ -166,14 +171,14 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 					return;
 				}
 
-				const thinkingTrace = this.describeToolThinkingTrace(toolCall.name, toolCall.params);
+				const thinkingTrace = this.describeToolThinkingTrace(toolCall.name, toolCall.params, options.mode);
 				if (thinkingTrace) {
 					this.emitAgentTrace(options, 'thinking', thinkingTrace);
 				}
 				const toolAttemptTrace = this.describeToolAttemptTrace(toolCall.name, toolCall.params);
 				this.emitAgentTrace(options, 'tool', toolAttemptTrace, 'start');
 				this.logTrace('info', `[Tool Attempt] ${toolAttemptTrace}`);
-				const toolResult = await this.toolExecutionService.executeTool(toolCall.name, toolCall.params);
+				const toolResult = await this.toolExecutionService.executeTool(toolCall.name, toolCall.params, options.mode);
 				const formattedToolResult = formatToolResult(toolCall.name, toolResult);
 				toolResults.push(formattedToolResult);
 				const toolResultTrace = this.describeToolResultTrace(toolCall.name, toolResult.success);
@@ -257,6 +262,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'stream',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
 			responsePlainTextDelta: delta,
@@ -278,6 +284,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'complete',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
 		});
@@ -297,6 +304,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'error',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			errorCode: 'api_error',
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
@@ -319,6 +327,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'cancel',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			executionMode: options.mode,
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
 		});
@@ -339,7 +348,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 		this.appendAssistantDelta(options, `\n${tracePayload}\n`);
 	}
 
-	private describeToolThinkingTrace(toolName: string, params: Record<string, string>): string {
+	private describeToolThinkingTrace(toolName: string, params: Record<string, string>, mode: VSCloneChatMode): string {
 		switch (toolName) {
 			case 'read_file':
 				return `I will inspect ${formatPathForTrace(params.path)} before making changes.`;
@@ -352,7 +361,9 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			case 'create_file':
 				return `I will create ${formatPathForTrace(params.path)} with the requested content.`;
 			case 'attempt_completion':
-				return 'I have enough context and will finalize the task summary.';
+				return mode === 'plan'
+					? 'I have enough context and will finalize the implementation plan summary.'
+					: 'I have enough context and will finalize the task summary.';
 			default:
 				return `I will run ${toolName} to continue.`;
 		}
@@ -399,7 +410,19 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 		return requiresWorkspaceMutation || (requiresWorkspaceInspection && requestsManualAccess);
 	}
 
-	private createToolUsageReprompt(): string {
+	private createToolUsageReprompt(mode: VSCloneChatMode): string {
+		if (mode === 'plan') {
+			// Plan mode keeps the same corrective pressure as act mode, but redirects it toward
+			// read-only inspection so "please fix X" prompts still produce researched plans.
+			return [
+				'System reminder: you already have direct read-only workspace tool access.',
+				'Do not ask the user to open/share/provide files.',
+				'Use the available XML tools now (read_file, list_directory, search_files, attempt_completion).',
+				'Do not edit or create files in plan mode.',
+				'Inspect the codebase first, then call attempt_completion with your plan.',
+			].join(' ');
+		}
+
 		return [
 			'System reminder: you already have direct workspace tool access.',
 			'Do not ask the user to open/share/provide files.',

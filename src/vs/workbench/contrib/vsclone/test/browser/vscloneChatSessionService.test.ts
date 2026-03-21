@@ -18,6 +18,8 @@ import {
 	IVSCloneChatTurnUpdate,
 	VSCloneChatHistoryScope,
 } from '../../common/backend/vscloneChatHistoryService.js';
+import { IVSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
+import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
 import { IVSClonePromptAssemblyService } from '../../common/vsclonePromptAssemblyService.js';
 import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 
@@ -94,6 +96,36 @@ class TestSelectionService implements IVSCloneThreadModelSelectionService {
 	}
 }
 
+class TestPlanModeService implements IVSClonePlanModeService {
+	declare readonly _serviceBrand: undefined;
+	readonly onDidChangeMode = Event.None;
+	private readonly modeByThread = new Map<string, VSCloneChatMode>();
+	private composerMode: VSCloneChatMode = 'act';
+
+	async initialize(): Promise<void> { }
+
+	getModeForThread(threadId?: string): VSCloneChatMode {
+		if (!threadId) {
+			return this.composerMode;
+		}
+
+		return this.modeByThread.get(threadId) ?? 'act';
+	}
+
+	async setModeForThread(threadId: string | undefined, mode: VSCloneChatMode): Promise<void> {
+		if (!threadId) {
+			this.composerMode = mode;
+			return;
+		}
+
+		this.modeByThread.set(threadId, mode);
+	}
+
+	isToolAllowed(mode: VSCloneChatMode, toolName: string): boolean {
+		return mode === 'act' || toolName === 'read_file' || toolName === 'list_directory' || toolName === 'search_files' || toolName === 'attempt_completion';
+	}
+}
+
 function createModelSelection(): IVSCloneModelSelection {
 	return {
 		threadId: 'thread-1',
@@ -140,7 +172,7 @@ function createContextGatheringService(): IVSCloneContextGatheringService {
 function createPromptAssemblyService(): IVSClonePromptAssemblyService {
 	return {
 		_serviceBrand: undefined,
-		assembleSystemMessage: (_context, vendor) => `SYSTEM:${vendor}`,
+		assembleSystemMessage: (_context, vendor, mode) => `SYSTEM:${vendor}:${mode}`,
 	};
 }
 
@@ -154,11 +186,14 @@ suite('VSCloneChatSessionService', () => {
 
 		const agentLoopService = new TestAgentLoopService();
 		const selectionService = new TestSelectionService();
+		const planModeService = new TestPlanModeService();
 		await selectionService.setSelectionForThread('thread-1', createModelSelection());
+		await planModeService.setModeForThread('thread-1', 'plan');
 
 		const service = testDisposables.add(new VSCloneChatSessionService(
 			historyService,
 			selectionService,
+			planModeService,
 			new NullLogService(),
 			agentLoopService,
 			createContextGatheringService(),
@@ -173,9 +208,10 @@ suite('VSCloneChatSessionService', () => {
 
 		assert.ok(result);
 		assert.ok(agentLoopService.lastRunOptions);
+		assert.strictEqual(agentLoopService.lastRunOptions?.mode, 'plan');
 		assert.strictEqual(agentLoopService.lastRunOptions?.vendor, 'openai');
 		assert.strictEqual(agentLoopService.lastRunOptions?.modelIdentifier, 'openai/gpt-5.3-codex');
-		assert.strictEqual(agentLoopService.lastRunOptions?.systemMessage, 'SYSTEM:openai');
+		assert.strictEqual(agentLoopService.lastRunOptions?.systemMessage, 'SYSTEM:openai:plan');
 		assert.deepStrictEqual(agentLoopService.lastRunOptions?.previousTurns, [
 			{ role: 'user', content: 'Existing prompt' },
 			{ role: 'assistant', content: 'Existing response' },
@@ -189,10 +225,13 @@ suite('VSCloneChatSessionService', () => {
 		const historyService = new TestHistoryService();
 		const agentLoopService = new TestAgentLoopService();
 		const selectionService = new TestSelectionService();
+		const planModeService = new TestPlanModeService();
+		await planModeService.setModeForThread(undefined, 'plan');
 
 		const service = testDisposables.add(new VSCloneChatSessionService(
 			historyService,
 			selectionService,
+			planModeService,
 			new NullLogService(),
 			agentLoopService,
 			createContextGatheringService(),
@@ -204,6 +243,8 @@ suite('VSCloneChatSessionService', () => {
 		assert.ok(result);
 		assert.strictEqual(agentLoopService.lastRunOptions, undefined);
 		assert.deepStrictEqual(historyService.updates.map(update => update.phase), ['prompt', 'error']);
+		assert.strictEqual(historyService.updates[0]?.executionMode, 'plan');
+		assert.strictEqual(historyService.updates[1]?.executionMode, 'plan');
 		assert.strictEqual(historyService.updates[1]?.responsePlainTextReplace, 'Sign in to a provider and choose a model before sending messages through VSClone.');
 	});
 
@@ -212,11 +253,13 @@ suite('VSCloneChatSessionService', () => {
 		const historyService = new TestHistoryService();
 		const selectionService = new TestSelectionService();
 		const agentLoopService = new TestAgentLoopService();
+		const planModeService = new TestPlanModeService();
 		await selectionService.setSelectionForThread('thread-api', createModelSelection());
 
 		const service = testDisposables.add(new VSCloneChatSessionService(
 			historyService,
 			selectionService,
+			planModeService,
 			new NullLogService(),
 			agentLoopService,
 			createContextGatheringService(),

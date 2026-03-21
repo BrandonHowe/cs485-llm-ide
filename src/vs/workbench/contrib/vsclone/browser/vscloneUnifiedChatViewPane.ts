@@ -30,6 +30,8 @@ import { URI } from '../../../../base/common/uri.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
 import { IVSCloneChatHistoryQuery, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import { IVSCloneModelCatalogService, type VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
+import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
+import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
 import { IVSCloneChatLocation, IVSCloneThreadModelSelectionService, type IVSCloneModelSelection } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { parseToolCalls } from '../common/vscloneToolCallParser.js';
 import { VSCloneChatHistoryRail, VSCloneRailTab } from './vscloneChatHistoryRail.js';
@@ -151,6 +153,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private composerInput: HTMLTextAreaElement | undefined;
 	private composerSendButton: HTMLButtonElement | undefined;
 	private modelSwitcher: VSCloneModelSwitcherWidget | undefined;
+	private planModeContainer: HTMLElement | undefined;
+	private planModePlanButton: HTMLButtonElement | undefined;
+	private planModeActButton: HTMLButtonElement | undefined;
 	private reasoningEffortContainer: HTMLElement | undefined;
 	private reasoningEffortSelect: HTMLSelectElement | undefined;
 
@@ -185,6 +190,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
 		@IVSCloneChatSessionService private readonly sessionService: IVSCloneChatSessionService,
 		@IVSCloneThreadModelSelectionService private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
+		@IVSClonePlanModeService private readonly planModeService: IVSClonePlanModeService,
 		@IVSCloneModelCatalogService private readonly modelCatalogService: IVSCloneModelCatalogService,
 		@IVSCloneProviderConfigurationBridge private readonly providerConfigurationBridge: IVSCloneProviderConfigurationBridge,
 		@IClipboardService private readonly clipboardService: IClipboardService,
@@ -260,6 +266,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		this._register(this.modelSelectionService.onDidChangeSelection(() => {
 			this.refreshModelControls();
+		}));
+		this._register(this.planModeService.onDidChangeMode(() => {
+			this.refreshPlanModeControl();
+			this.updateComposerState();
 		}));
 		this._register(this.modelCatalogService.onDidChangeCatalog(() => {
 			this.refreshModelControls();
@@ -347,6 +357,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.activeThreadId = targetThreadId;
 		this.rail.setSelectedThread(targetThreadId);
 		this.railVisible = false;
+		this.refreshPlanModeControl();
 		this.refreshModelControls();
 		this.refreshConversation();
 		this.applyRailLayout();
@@ -487,6 +498,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const controls = document.createElement('div');
 		controls.className = 'vsclone-thread-composer-controls';
+		this.planModeContainer = undefined;
+		this.planModePlanButton = undefined;
+		this.planModeActButton = undefined;
 		this.reasoningEffortContainer = undefined;
 		this.reasoningEffortSelect = undefined;
 
@@ -519,6 +533,28 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.reasoningEffortContainer = reasoningEffortHost;
 			this.reasoningEffortSelect = reasoningEffortSelect;
 		}
+
+		// Keep execution mode explicit in the composer so users can swap between planning and acting
+		// without coupling that choice to provider/model switches for the same thread.
+		const planModeHost = document.createElement('div');
+		planModeHost.className = 'vsclone-plan-mode-toggle';
+		planModeHost.setAttribute('role', 'group');
+		planModeHost.setAttribute('aria-label', localize('vsclone.composer.mode', 'Chat mode'));
+		const planButton = document.createElement('button');
+		planButton.type = 'button';
+		planButton.className = 'vsclone-plan-mode-button';
+		planButton.textContent = localize('vsclone.composer.mode.plan', 'Plan');
+		const actButton = document.createElement('button');
+		actButton.type = 'button';
+		actButton.className = 'vsclone-plan-mode-button';
+		actButton.textContent = localize('vsclone.composer.mode.act', 'Act');
+		planModeHost.appendChild(planButton);
+		planModeHost.appendChild(actButton);
+		controls.appendChild(planModeHost);
+		this.planModeContainer = planModeHost;
+		this.planModePlanButton = planButton;
+		this.planModeActButton = actButton;
+
 		const hint = document.createElement('div');
 		hint.className = 'vsclone-thread-composer-hint';
 		hint.textContent = localize('vsclone.composer.hint', 'Press Enter to send, Shift+Enter for new line');
@@ -571,6 +607,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this._register(addDisposableListener(send, EventType.CLICK, () => {
 			void this.submitPrompt();
 		}));
+		if (this.planModePlanButton && this.planModeActButton) {
+			this._register(addDisposableListener(this.planModePlanButton, EventType.CLICK, () => {
+				void this.updatePlanModeSelection('plan');
+			}));
+			this._register(addDisposableListener(this.planModeActButton, EventType.CLICK, () => {
+				void this.updatePlanModeSelection('act');
+			}));
+		}
 		if (this.reasoningEffortSelect) {
 			this._register(addDisposableListener(this.reasoningEffortSelect, EventType.CHANGE, () => {
 				void this.updateReasoningEffortSelection();
@@ -582,6 +626,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		});
 		this.updateComposerMetrics();
 		this.updateComposerState();
+		this.refreshPlanModeControl();
 		this.refreshReasoningEffortControl();
 		if (this.modelSwitcher) {
 			void this.modelCatalogService.refreshCatalog();
@@ -666,6 +711,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.rail.setLoading();
 		try {
 			await this.historyService.initialize();
+			await this.planModeService.initialize();
 			this.historyReady = true;
 			this.refreshRailRows();
 			if (!this.activeThreadId) {
@@ -775,7 +821,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		item.appendChild(body);
 
-		if (turn.status === 'completed' && text.trim().length > 0 && this.editApplicationService.hasSearchReplaceBlocks(text)) {
+		// Plan-mode turns stay intentionally non-mutating even if the model emits executable-looking
+		// SEARCH/REPLACE blocks in plain text. That closes the last mutation path outside tool calls.
+		if (turn.executionMode !== 'plan' && turn.status === 'completed' && text.trim().length > 0 && this.editApplicationService.hasSearchReplaceBlocks(text)) {
 			const applyButton = document.createElement('button');
 			applyButton.type = 'button';
 			applyButton.className = 'vsclone-thread-message-apply';
@@ -1834,11 +1882,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			const reasoningControlHidden = this.reasoningEffortContainer?.classList.contains('hidden') ?? true;
 			this.reasoningEffortSelect.disabled = composerBusy || reasoningControlHidden;
 		}
+		this.refreshPlanModeControl(composerBusy);
 		if (this.composerInput.disabled) {
 			this.composerInput.placeholder = localize('vsclone.composer.waiting', 'Waiting for response...');
 		} else if (!hasSelectedModel) {
 			// VSClone always needs a concrete provider/model pair before it can send a prompt.
 			this.composerInput.placeholder = localize('vsclone.composer.signInRequired', 'Sign in to a provider and choose a model to start chatting...');
+		} else if (this.getCurrentComposerMode() === 'plan') {
+			this.composerInput.placeholder = localize('vsclone.composer.planPlaceholder', 'Describe what you want to plan...');
 		} else {
 			this.composerInput.placeholder = localize('vsclone.composer.placeholder', 'Ask a follow-up question...');
 		}
@@ -1908,7 +1959,40 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private refreshModelControls(): void {
 		this.modelSwitcher?.refresh();
+		this.refreshPlanModeControl();
 		this.refreshReasoningEffortControl();
+	}
+
+	private getCurrentComposerMode(): VSCloneChatMode {
+		return this.planModeService.getModeForThread(this.activeThreadId);
+	}
+
+	private refreshPlanModeControl(composerBusy?: boolean): void {
+		if (!this.planModeContainer || !this.planModePlanButton || !this.planModeActButton) {
+			return;
+		}
+
+		const busy = composerBusy ?? ((this.activeThreadId ? this.isThreadBusy(this.activeThreadId) : false) || this.submittingPrompt);
+		const mode = this.getCurrentComposerMode();
+		this.planModeContainer.classList.toggle('plan-active', mode === 'plan');
+		this.planModeContainer.classList.toggle('act-active', mode === 'act');
+		this.planModePlanButton.classList.toggle('active', mode === 'plan');
+		this.planModeActButton.classList.toggle('active', mode === 'act');
+		this.planModePlanButton.disabled = busy;
+		this.planModeActButton.disabled = busy;
+		this.planModePlanButton.setAttribute('aria-pressed', mode === 'plan' ? 'true' : 'false');
+		this.planModeActButton.setAttribute('aria-pressed', mode === 'act' ? 'true' : 'false');
+	}
+
+	private async updatePlanModeSelection(mode: VSCloneChatMode): Promise<void> {
+		const threadBusy = this.activeThreadId ? this.isThreadBusy(this.activeThreadId) : false;
+		if (threadBusy || this.submittingPrompt || this.getCurrentComposerMode() === mode) {
+			return;
+		}
+
+		await this.planModeService.setModeForThread(this.activeThreadId, mode);
+		this.refreshPlanModeControl();
+		this.updateComposerState();
 	}
 
 	private getCurrentComposerModelSelection(threadId: string | undefined): IVSCloneModelSelection | undefined {
@@ -2052,6 +2136,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private showComposerForNewChat(): void {
 		this.activeThreadId = undefined;
 		this.rail.setSelectedThread(undefined);
+		this.refreshPlanModeControl();
 		this.refreshModelControls();
 		this.refreshConversation();
 		this.railVisible = false;

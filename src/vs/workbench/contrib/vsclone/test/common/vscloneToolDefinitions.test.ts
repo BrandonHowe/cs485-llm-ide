@@ -11,7 +11,7 @@ suite('VSCloneToolDefinitions', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('formats tool definitions for the system prompt', () => {
-		const promptSection = formatToolDefinitionsForPrompt();
+		const promptSection = formatToolDefinitionsForPrompt('act');
 		assert.ok(promptSection.includes('## Available Tools'));
 		assert.ok(promptSection.includes('<tool_call>'));
 		for (const tool of VSCLONE_TOOL_DEFINITIONS) {
@@ -19,6 +19,15 @@ suite('VSCloneToolDefinitions', () => {
 		}
 		assert.ok(promptSection.includes('attempt_completion'));
 		assert.ok(promptSection.includes('Thinking:'));
+	});
+
+	test('filters mutating tools from the prompt in plan mode', () => {
+		const promptSection = formatToolDefinitionsForPrompt('plan');
+		assert.ok(promptSection.includes('read-only'));
+		assert.ok(promptSection.includes('### read_file'));
+		assert.ok(promptSection.includes('### attempt_completion'));
+		assert.ok(!promptSection.includes('### edit_file'));
+		assert.ok(!promptSection.includes('### create_file'));
 	});
 
 	test('formats tool results in xml wrapper', () => {

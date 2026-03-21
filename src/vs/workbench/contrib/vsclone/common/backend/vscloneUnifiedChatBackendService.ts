@@ -31,6 +31,7 @@ import {
 } from '../vscloneChatHistoryTypes.js';
 import { reduceThreadTurns } from './vscloneChatHistoryStateMachine.js';
 import type { IVSCloneUnifiedChatSelectionState } from '../vscloneModelSelectionTypes.js';
+import type { IVSCloneUnifiedChatPlanModeState } from '../vsclonePlanModeTypes.js';
 
 export const IVSCloneUnifiedChatBackendService = createDecorator<IVSCloneUnifiedChatBackendService>('vscloneUnifiedChatBackendService');
 
@@ -46,6 +47,8 @@ export interface IVSCloneUnifiedChatBackendService {
 	clearAll(scope: VSCloneChatHistoryScope): Promise<void>;
 	getSelectionState(): IVSCloneUnifiedChatSelectionState;
 	replaceSelectionState(state: IVSCloneUnifiedChatSelectionState): Promise<void>;
+	getPlanModeState(): IVSCloneUnifiedChatPlanModeState;
+	replacePlanModeState(state: IVSCloneUnifiedChatPlanModeState): Promise<void>;
 }
 
 function normalizeScope(scope: string | undefined): VSCloneChatHistoryScope {
@@ -67,11 +70,23 @@ function createEmptySelectionState(): IVSCloneUnifiedChatSelectionState {
 	};
 }
 
+function createEmptyPlanModeState(): IVSCloneUnifiedChatPlanModeState {
+	return {
+		modeByThread: {},
+	};
+}
+
 function cloneSelectionState(state: IVSCloneUnifiedChatSelectionState): IVSCloneUnifiedChatSelectionState {
 	return {
 		selectedByThread: Object.fromEntries(Object.entries(state.selectedByThread).map(([threadId, selection]) => [threadId, { ...selection, threadId: undefined }])),
 		selectedByLocation: Object.fromEntries(Object.entries(state.selectedByLocation).map(([location, selection]) => [location, selection ? { ...selection, threadId: undefined } : undefined])),
 		recentModelIdentifiers: [...state.recentModelIdentifiers],
+	};
+}
+
+function clonePlanModeState(state: IVSCloneUnifiedChatPlanModeState): IVSCloneUnifiedChatPlanModeState {
+	return {
+		modeByThread: { ...state.modeByThread },
 	};
 }
 
@@ -242,6 +257,14 @@ export class VSCloneUnifiedChatBackendService extends Disposable implements IVSC
 		return cloneSelectionState(this.model.getSelectionState());
 	}
 
+	getPlanModeState(): IVSCloneUnifiedChatPlanModeState {
+		if (!this.initialized || this.disabled || !this.enabled) {
+			return createEmptyPlanModeState();
+		}
+
+		return clonePlanModeState(this.model.getPlanModeState());
+	}
+
 	async replaceSelectionState(state: IVSCloneUnifiedChatSelectionState): Promise<void> {
 		if (!this.enabled || this.disabled) {
 			return;
@@ -253,6 +276,20 @@ export class VSCloneUnifiedChatBackendService extends Disposable implements IVSC
 		}
 
 		this.model.replaceSelectionState(cloneSelectionState(state));
+		await this.persistNow();
+	}
+
+	async replacePlanModeState(state: IVSCloneUnifiedChatPlanModeState): Promise<void> {
+		if (!this.enabled || this.disabled) {
+			return;
+		}
+
+		await this.initialize();
+		if (!this.initialized || this.disabled) {
+			return;
+		}
+
+		this.model.replacePlanModeState(clonePlanModeState(state));
 		await this.persistNow();
 	}
 

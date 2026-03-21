@@ -7,6 +7,7 @@ import { PlatformToString, platform } from '../../../../base/common/platform.js'
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { VSCloneModelVendor } from './vscloneOAuthTypes.js';
+import { type VSCloneChatMode } from './vsclonePlanModeTypes.js';
 import { formatToolDefinitionsForPrompt } from './vscloneToolDefinitions.js';
 
 const maxActiveFileChars = 8000;
@@ -33,13 +34,13 @@ export const IVSClonePromptAssemblyService = createDecorator<IVSClonePromptAssem
 
 export interface IVSClonePromptAssemblyService {
 	readonly _serviceBrand: undefined;
-	assembleSystemMessage(context: IVSClonePromptContext, vendor: VSCloneModelVendor): string;
+	assembleSystemMessage(context: IVSClonePromptContext, vendor: VSCloneModelVendor, mode: VSCloneChatMode): string;
 }
 
 export class VSClonePromptAssemblyService implements IVSClonePromptAssemblyService {
 	declare readonly _serviceBrand: undefined;
 
-	assembleSystemMessage(context: IVSClonePromptContext, vendor: VSCloneModelVendor): string {
+	assembleSystemMessage(context: IVSClonePromptContext, vendor: VSCloneModelVendor, mode: VSCloneChatMode): string {
 		const workspaceNames = context.workspaceFolders.map(folder => folder.name).join(', ') || '(none)';
 		const openFilesSection = context.openFiles.length > 0
 			? context.openFiles.map(uri => `- ${uri.toString()}`).join('\n')
@@ -49,9 +50,31 @@ export class VSClonePromptAssemblyService implements IVSClonePromptAssemblyServi
 			: '- (none)';
 
 		const activeFileSection = this.formatActiveFileSection(context.activeFile);
+		const instructionsSection = mode === 'plan'
+			? [
+				'## Instructions',
+				'You are in PLAN MODE for this turn.',
+				'Inspect the workspace, reason about the requested change, and then propose a concrete plan.',
+				'Do not produce SEARCH/REPLACE execution blocks or otherwise attempt to modify files.',
+				'When you are done researching, finish with attempt_completion and summarize the implementation plan.',
+			]
+			: [
+				'## Instructions',
+				'When suggesting code changes, use SEARCH/REPLACE blocks with exact SEARCH matches.',
+				'Use this exact shape:',
+				'File: <path>',
+				'<<<<<<< SEARCH',
+				'<exact existing code>',
+				'=======',
+				'<replacement code>',
+				'>>>>>>> REPLACE',
+				'For new files, keep SEARCH empty and put full content in REPLACE.',
+			];
 		const message = [
 			'You are VSClone, an AI coding assistant integrated into a code editor.',
-			'You have direct tool access to read/search/list/edit/create files inside the workspace.',
+			mode === 'plan'
+				? 'You have direct tool access to read, search, and list files inside the workspace for this read-only turn.'
+				: 'You have direct tool access to read/search/list/edit/create files inside the workspace.',
 			'Never ask the user to open, share, or paste files when a tool can fetch that information.',
 			'',
 			'## System Information',
@@ -60,7 +83,7 @@ export class VSClonePromptAssemblyService implements IVSClonePromptAssemblyServi
 			`- Workspace: ${workspaceNames}`,
 			'',
 			// Tool instructions are intentionally near the top so they survive context truncation.
-			formatToolDefinitionsForPrompt(),
+			formatToolDefinitionsForPrompt(mode),
 			'',
 			'## Active File',
 			activeFileSection,
@@ -74,16 +97,7 @@ export class VSClonePromptAssemblyService implements IVSClonePromptAssemblyServi
 			'## Diagnostics',
 			diagnosticsSection,
 			'',
-			'## Instructions',
-			'When suggesting code changes, use SEARCH/REPLACE blocks with exact SEARCH matches.',
-			'Use this exact shape:',
-			'File: <path>',
-			'<<<<<<< SEARCH',
-			'<exact existing code>',
-			'=======',
-			'<replacement code>',
-			'>>>>>>> REPLACE',
-			'For new files, keep SEARCH empty and put full content in REPLACE.',
+			...instructionsSection,
 		].join('\n');
 
 		return this.truncateSystemMessage(message);

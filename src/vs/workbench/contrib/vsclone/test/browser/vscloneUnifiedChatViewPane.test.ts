@@ -10,6 +10,7 @@ import { IContextMenuService } from '../../../../../platform/contextview/browser
 import { VSCloneChatHistoryRail } from '../../browser/vscloneChatHistoryRail.js';
 import type { IVSCloneChatSubmitOptions } from '../../browser/vscloneChatSessionService.js';
 import { VSCloneUnifiedChatViewPane, toVSCloneHistoryQuery } from '../../browser/vscloneUnifiedChatViewPane.js';
+import type { IVSCloneChatHistoryTurn } from '../../common/backend/vscloneChatHistoryService.js';
 import { formatToolResultWithDiff } from '../../common/vscloneToolResultDiff.js';
 
 interface ITestPaneTarget {
@@ -45,6 +46,11 @@ interface ISubmitPromptTarget {
 interface IRenderToolAwareAssistantTarget {
 	[key: string]: unknown;
 	renderToolAwareAssistantText: (container: HTMLElement, text: string, streaming: boolean) => void;
+}
+
+interface IRenderAssistantMessageTarget {
+	[key: string]: unknown;
+	renderAssistantMessage: (turn: IVSCloneChatHistoryTurn) => HTMLElement;
 }
 
 suite('VSCloneUnifiedChatViewPane', () => {
@@ -335,11 +341,19 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		target.providerConfigurationBridge = {
 			openManageProvidersPicker: async () => undefined,
 		};
+		target.planModeService = {
+			onDidChangeMode: Event.None,
+			initialize: async () => undefined,
+			getModeForThread: () => 'plan',
+			setModeForThread: async () => undefined,
+			isToolAllowed: () => true,
+		};
 
 		const parent = document.createElement('div');
 		target.renderConversationSurface(parent);
 		assert.ok(parent.querySelector('.vsclone-thread-model-switcher'));
 		assert.ok(parent.querySelector('.vsclone-thread-reasoning-level-select'));
+		assert.strictEqual(parent.querySelectorAll('.vsclone-plan-mode-button').length, 2);
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-button') as HTMLButtonElement).getAttribute('aria-label'), 'Show chat history');
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-overflow') as HTMLButtonElement).textContent, '\u22ef');
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-overflow') as HTMLButtonElement).getAttribute('aria-haspopup'), 'menu');
@@ -477,6 +491,39 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.ok(container.querySelector('.vsclone-tool-diff-line.removed'));
 		assert.ok(container.textContent?.includes('TS src/app.ts'));
 		assert.strictEqual((container.querySelector('.vsclone-tool-diff-title-line') as HTMLElement | null)?.textContent, 'Ln 12');
+	});
+
+	test('plan-mode assistant turns do not render apply changes buttons', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderAssistantMessageTarget;
+		target.editApplicationService = {
+			hasSearchReplaceBlocks: () => true,
+		};
+
+		const baseTurn: IVSCloneChatHistoryTurn = {
+			turnId: 'turn-1',
+			threadId: 'thread-1',
+			sequence: 1,
+			promptText: 'Prompt',
+			responseMarkdown: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			responsePlainText: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			startedAt: 1,
+			completedAt: 2,
+			status: 'completed',
+		};
+
+		const planRendered = target.renderAssistantMessage({
+			...baseTurn,
+			executionMode: 'plan',
+		});
+		const actRendered = target.renderAssistantMessage({
+			...baseTurn,
+			turnId: 'turn-2',
+			executionMode: 'act',
+		});
+
+		assert.strictEqual(planRendered.querySelector('.vsclone-thread-message-apply'), null);
+		assert.ok(actRendered.querySelector('.vsclone-thread-message-apply'));
 	});
 
 	test('tool-aware renderer opens the file at the rendered diff line', () => {

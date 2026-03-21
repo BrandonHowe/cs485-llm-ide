@@ -92,6 +92,7 @@ export function reduceThreadTurns(
 			turnId: update.turnId,
 			threadId: update.threadId,
 			sequence: update.sequence,
+			executionMode: update.executionMode,
 			modelIdentifier: update.modelIdentifier,
 			providerId: update.providerId,
 			promptText: update.promptText ?? '',
@@ -131,6 +132,7 @@ export function reduceThreadTurns(
 	let nextTurn: IVSCloneChatHistoryTurn = {
 		...existingTurn,
 		sequence: update.sequence,
+		executionMode: update.executionMode ?? existingTurn.executionMode,
 		modelIdentifier: update.modelIdentifier ?? existingTurn.modelIdentifier,
 		providerId: update.providerId ?? existingTurn.providerId,
 		lastEventAt: Math.max(lastEventAt, update.occurredAt),

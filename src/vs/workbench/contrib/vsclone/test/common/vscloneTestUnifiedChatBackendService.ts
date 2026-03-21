@@ -7,6 +7,7 @@ import { Event } from '../../../../../base/common/event.js';
 import type { IVSCloneUnifiedChatBackendService } from '../../common/backend/vscloneUnifiedChatBackendService.js';
 import type { IVSCloneChatHistoryQuery, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatTurnUpdate, VSCloneChatHistoryScope } from '../../common/backend/vscloneChatHistoryService.js';
 import type { IVSCloneUnifiedChatSelectionState } from '../../common/vscloneModelSelectionTypes.js';
+import type { IVSCloneUnifiedChatPlanModeState } from '../../common/vsclonePlanModeTypes.js';
 
 function cloneSelectionState(state: IVSCloneUnifiedChatSelectionState): IVSCloneUnifiedChatSelectionState {
 	return {
@@ -22,6 +23,7 @@ export class TestVSCloneUnifiedChatBackendService implements IVSCloneUnifiedChat
 	readonly onDidChange = Event.None;
 	readonly threads: IVSCloneChatHistoryThread[] = [];
 	readonly turnsByThread = new Map<string, readonly IVSCloneChatHistoryTurn[]>();
+	private planModeState: IVSCloneUnifiedChatPlanModeState = { modeByThread: {} };
 	private selectionState: IVSCloneUnifiedChatSelectionState = {
 		selectedByThread: {},
 		selectedByLocation: {},
@@ -43,10 +45,12 @@ export class TestVSCloneUnifiedChatBackendService implements IVSCloneUnifiedChat
 	async archiveThread(_threadId: string, _archived: boolean): Promise<void> { }
 
 	async deleteThread(threadId: string): Promise<void> {
+		delete this.planModeState.modeByThread[threadId];
 		delete this.selectionState.selectedByThread[threadId];
 	}
 
 	async clearAll(_scope: VSCloneChatHistoryScope): Promise<void> {
+		this.planModeState = { modeByThread: {} };
 		this.selectionState = {
 			selectedByThread: {},
 			selectedByLocation: {},
@@ -60,5 +64,17 @@ export class TestVSCloneUnifiedChatBackendService implements IVSCloneUnifiedChat
 
 	async replaceSelectionState(state: IVSCloneUnifiedChatSelectionState): Promise<void> {
 		this.selectionState = cloneSelectionState(state);
+	}
+
+	getPlanModeState(): IVSCloneUnifiedChatPlanModeState {
+		return {
+			modeByThread: { ...this.planModeState.modeByThread },
+		};
+	}
+
+	async replacePlanModeState(state: IVSCloneUnifiedChatPlanModeState): Promise<void> {
+		this.planModeState = {
+			modeByThread: { ...state.modeByThread },
+		};
 	}
 }

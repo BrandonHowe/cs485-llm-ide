@@ -30,18 +30,20 @@ suite('VSCloneChatHistoryStateMachine', () => {
 		let thread: IVSCloneChatHistoryThread | undefined;
 		let turns: readonly IVSCloneChatHistoryTurn[] | undefined;
 
-		({ thread, turns } = reduceThreadTurns(thread, turns, update({ phase: 'prompt', occurredAt: 1, promptText: 'Hello world' }), { sessionResource, maxTurnsPerThread: 100 }));
+		({ thread, turns } = reduceThreadTurns(thread, turns, update({ phase: 'prompt', occurredAt: 1, promptText: 'Hello world', executionMode: 'plan' }), { sessionResource, maxTurnsPerThread: 100 }));
 		assert.strictEqual(turns.length, 1);
 		assert.strictEqual(turns[0].status, 'pending');
+		assert.strictEqual(turns[0].executionMode, 'plan');
 		assert.strictEqual(thread.status, 'active');
 
-		({ thread, turns } = reduceThreadTurns(thread, turns, update({ phase: 'stream', occurredAt: 2, responsePlainTextDelta: 'Hi' }), { sessionResource, maxTurnsPerThread: 100 }));
+		({ thread, turns } = reduceThreadTurns(thread, turns, update({ phase: 'stream', occurredAt: 2, executionMode: 'plan', responsePlainTextDelta: 'Hi' }), { sessionResource, maxTurnsPerThread: 100 }));
 		assert.strictEqual(turns[0].status, 'streaming');
 		assert.strictEqual(turns[0].responsePlainText, 'Hi');
 
-		({ thread, turns } = reduceThreadTurns(thread, turns, update({ phase: 'complete', occurredAt: 3, responsePlainTextDelta: ' there' }), { sessionResource, maxTurnsPerThread: 100 }));
+		({ thread, turns } = reduceThreadTurns(thread, turns, update({ phase: 'complete', occurredAt: 3, executionMode: 'plan', responsePlainTextDelta: ' there' }), { sessionResource, maxTurnsPerThread: 100 }));
 		assert.strictEqual(turns[0].status, 'completed');
 		assert.strictEqual(turns[0].responsePlainText, 'Hi there');
+		assert.strictEqual(turns[0].executionMode, 'plan');
 		assert.strictEqual(thread.status, 'completed');
 	});
 

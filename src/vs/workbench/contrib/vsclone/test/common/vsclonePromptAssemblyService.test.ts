@@ -35,7 +35,7 @@ suite('VSClonePromptAssemblyService', () => {
 	}
 
 	test('assembles system message sections with project context', () => {
-		const message = service.assembleSystemMessage(createBaseContext(), 'openai');
+		const message = service.assembleSystemMessage(createBaseContext(), 'openai', 'act');
 		assert.ok(message.includes('## System Information'));
 		assert.ok(message.includes('- Vendor: openai'));
 		assert.ok(message.includes('## Active File'));
@@ -60,7 +60,7 @@ suite('VSClonePromptAssemblyService', () => {
 				selection: selected,
 				selectionRange: { startLine: 1, endLine: 1 },
 			},
-		}), 'anthropic');
+		}), 'anthropic', 'act');
 
 		assert.ok(message.includes(selected));
 		assert.ok(message.includes('... [truncated'));
@@ -69,10 +69,18 @@ suite('VSClonePromptAssemblyService', () => {
 
 	test('enforces overall context budget for very large trees', () => {
 		const hugeTree = 'x'.repeat(120000);
-		const message = service.assembleSystemMessage(createBaseContext({ directoryTree: hugeTree }), 'google');
+		const message = service.assembleSystemMessage(createBaseContext({ directoryTree: hugeTree }), 'google', 'act');
 		assert.ok(message.length <= 80000);
 		assert.ok(message.includes('[system context truncated to stay within budget]'));
 		assert.ok(message.includes('## Available Tools'));
 		assert.ok(message.includes('- Vendor: google'));
+	});
+
+	test('swaps to read-only instructions in plan mode', () => {
+		const message = service.assembleSystemMessage(createBaseContext(), 'openai', 'plan');
+		assert.ok(message.includes('PLAN MODE'));
+		assert.ok(message.includes('read-only turn'));
+		assert.ok(!message.includes('<<<<<<< SEARCH'));
+		assert.ok(!message.includes('### edit_file'));
 	});
 });

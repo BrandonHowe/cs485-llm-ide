@@ -26,8 +26,10 @@ What it does not do:
 Chat Execution is one top-level module because the system has one supported send path. Internally, it uses a small set of cooperating classes so transport, session control, agent execution, and live event handling stay understandable and testable:
 
 - a session service that accepts send requests and resolves the selected model
+- a plan-mode service that resolves and persists the effective read-only vs act mode for the thread
 - an API service that performs transport-level provider execution
 - an agent-loop service for multi-step execution
+- a tool-execution service that enforces mode-specific workspace tool access
 - a runtime service and session bridge that convert live provider events into normalized updates
 
 This design keeps the public architecture simple without collapsing all execution behavior into one oversized class.
@@ -37,14 +39,19 @@ Why this is defensible to a senior architect:
 - one module owns the full lifecycle from send to normalized update
 - internal seams remain available for unit and integration testing
 - request transport remains separate from thread-state ownership
+- read-only planning is enforced by execution services instead of relying on model obedience
 - execution can evolve without destabilizing storage semantics
 
 ```mermaid
 flowchart TD
   Caller["Composer / Command"] --> Session["VSCloneChatSessionService"]
   Session --> Selection["Model Selection"]
+  Session --> PlanMode["VSClonePlanModeService"]
   Session --> Api["VSCloneChatApiService"]
   Session --> Agent["VSCloneAgentLoopService"]
+  Agent --> PlanMode
+  Agent --> Tools["VSCloneToolExecutionService"]
+  Tools --> PlanMode
   Agent --> Api
   Api --> Providers["Provider APIs"]
   Api --> Runtime["VSCloneChatRuntimeService"]
@@ -62,6 +69,7 @@ Primary abstractions:
 - `ExecutionHandle`
 - `RuntimeRequestState`
 - `NormalizedTurnUpdate`
+- `ExecutionModeSnapshot`
 
 Abstraction function:
 
@@ -69,11 +77,13 @@ Abstraction function:
 - an execution handle represents control over the in-flight request
 - runtime request state represents transient progress while the request is active
 - a normalized turn update represents the durable semantic output that Thread History can safely persist
+- an execution-mode snapshot represents the thread's effective `plan` or `act` mode captured at submit time
 
 Representation invariant:
 
 - every execution request is bound to exactly one thread
 - every normalized turn update refers to one existing thread identifier and turn identifier
+- every tool execution within a turn uses the same snapshotted execution mode that prompt assembly used
 - stream events are reduced in sequence order for a given request
 - terminal states are exclusive: completed, failed, or cancelled
 
@@ -99,7 +109,9 @@ This module does not own tables of its own. It writes durable effects into Threa
 - `threads`
   - used to keep active model, timestamps, and summary state current
 - `turns`
-  - used to persist prompt text, streamed assistant output, status, and error information
+  - used to persist prompt text, streamed assistant output, status, error information, and per-turn execution mode
+- `thread_modes`
+  - used to persist the current Plan/Act mode for each thread so the composer restores it on reopen
 
 Module-local transient state is not persisted separately.
 
@@ -113,6 +125,12 @@ Operations exposed by Chat Execution:
   - resolves thread and model, starts execution, and returns a submission result
 - `cancelThread(threadId)`
   - cancels the active request for the given thread
+- `getModeForThread(threadId)`
+  - resolves the current persisted Plan/Act mode for a thread or unsaved composer
+- `setModeForThread(threadId, mode)`
+  - persists the Plan/Act mode for a thread or the unsaved composer
+- `isToolAllowed(mode, toolName)`
+  - determines whether a workspace tool is allowed for the snapshotted turn mode
 - `submitApiPrompt(options)`
   - dispatches a direct provider request
 - `submitApiPromptForAgentLoop(options, observer)`
@@ -130,12 +148,20 @@ Externally visible classes:
   - methods: `submitPrompt`, `cancelThread`
   - fields: none exposed publicly beyond service registration
 
+- `VSClonePlanModeService`
+  - methods: `initialize`, `getModeForThread`, `setModeForThread`, `isToolAllowed`
+  - fields: none exposed publicly beyond service registration
+
 - `VSCloneChatApiService`
   - methods: `submitApiPrompt`, `submitApiPromptForAgentLoop`
   - fields: none exposed publicly beyond service registration
 
 - `VSCloneAgentLoopService`
   - methods: `runAgentLoop`
+  - fields: none exposed publicly beyond service registration
+
+- `VSCloneToolExecutionService`
+  - methods: `executeTool`
   - fields: none exposed publicly beyond service registration
 
 - `VSCloneChatRuntimeService`
@@ -160,6 +186,7 @@ Private methods across the module:
 - `applyComplete`
 - `applyError`
 - `applyCancel`
+- `createToolUsageReprompt`
 - `injectRejectedTurn`
 - `getApiVendor`
 
@@ -184,6 +211,13 @@ classDiagram
     -getApiVendor(selection)
   }
 
+  class VSClonePlanModeService {
+    +initialize()
+    +getModeForThread(threadId)
+    +setModeForThread(threadId, mode)
+    +isToolAllowed(mode, toolName)
+  }
+
   class VSCloneChatApiService {
     -pendingRequests
     +submitApiPrompt(options)
@@ -201,6 +235,10 @@ classDiagram
     -applyComplete(options, state)
     -applyError(options, state, message)
     -applyCancel(options, state)
+  }
+
+  class VSCloneToolExecutionService {
+    +executeTool(toolName, params, mode)
   }
 
   class VSCloneChatRuntimeService {
@@ -221,8 +259,12 @@ classDiagram
     -emitResponseSnapshot(request)
   }
 
+  VSCloneChatSessionService --> VSClonePlanModeService
   VSCloneChatSessionService --> VSCloneChatApiService
   VSCloneChatSessionService --> VSCloneAgentLoopService
+  VSCloneAgentLoopService --> VSClonePlanModeService
+  VSCloneAgentLoopService --> VSCloneToolExecutionService
+  VSCloneToolExecutionService --> VSClonePlanModeService
   VSCloneChatApiService --> VSCloneChatRuntimeService
   VSCloneChatRuntimeService --> VSCloneChatSessionBridge
 ```
