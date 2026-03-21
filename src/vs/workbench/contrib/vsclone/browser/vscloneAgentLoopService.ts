@@ -12,6 +12,7 @@ import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistory
 import type { VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
 import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
+import { sanitizeAgentModelOutput } from '../common/vscloneAgentTranscriptSanitizer.js';
 import { formatToolResult } from '../common/vscloneToolDefinitions.js';
 import { parseToolCalls } from '../common/vscloneToolCallParser.js';
 import { IVSCloneToolExecutionService } from './vscloneToolExecutionService.js';
@@ -133,6 +134,10 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 				this.appendAssistantDelta(options, `\n\n---\n[Agent iteration ${iteration}]\n`);
 			}
 
+			// Each model iteration streams raw text into the turn before we know whether the model
+			// obeyed the tool protocol. Capture the transcript prefix now so we can replace only this
+			// iteration's segment with a sanitized version once the model finishes.
+			const responsePrefix = this.getCurrentTurnResponseText(options.threadId, options.turnId);
 			const iterationResult = await this.runModelIteration(options, messages, state);
 			if (iterationResult.errorMessage) {
 				this.applyError(options, state, iterationResult.errorMessage);
@@ -143,9 +148,22 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 				return;
 			}
 
-			const parsedCalls = parseToolCalls(iterationResult.responseText);
+			const sanitizedIteration = sanitizeAgentModelOutput(iterationResult.responseText);
+			if (sanitizedIteration.sanitizedText !== iterationResult.responseText) {
+				this.replaceCurrentIterationTranscript(options, responsePrefix, sanitizedIteration.sanitizedText);
+				const sanitizerEffects: string[] = [];
+				if (sanitizedIteration.removedFakeToolResults) {
+					sanitizerEffects.push('removed fabricated tool_result blocks');
+				}
+				if (sanitizedIteration.truncatedAfterAttemptCompletion) {
+					sanitizerEffects.push('dropped prose after attempt_completion');
+				}
+				this.logTrace('warn', `Sanitized invalid model tool transcript for thread ${options.threadId}: ${sanitizerEffects.join(', ')}`);
+			}
+
+			const parsedCalls = parseToolCalls(sanitizedIteration.sanitizedText);
 			if (parsedCalls.toolCalls.length === 0) {
-				if (this.shouldRepromptForToolUse(options.promptText, iterationResult.responseText, toolUsageRepromptCount)) {
+				if (this.shouldRepromptForToolUse(options.promptText, sanitizedIteration.sanitizedText, toolUsageRepromptCount)) {
 					toolUsageRepromptCount += 1;
 					const reprompt = this.createToolUsageReprompt(options.mode);
 					this.emitAgentTrace(
@@ -156,7 +174,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 							: 'I already have workspace tool access, so I will proceed by calling tools instead of asking the user for file access.',
 					);
 					this.logTrace('warn', 'Model responded without tool calls for a file-operation prompt; sending corrective tool-usage reprompt.');
-					messages.push({ role: 'assistant', content: iterationResult.responseText });
+					messages.push({ role: 'assistant', content: sanitizedIteration.sanitizedText });
 					messages.push({ role: 'user', content: reprompt });
 					continue;
 				}
@@ -192,7 +210,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 				}
 			}
 
-			messages.push({ role: 'assistant', content: iterationResult.responseText });
+			messages.push({ role: 'assistant', content: sanitizedIteration.sanitizedText });
 			messages.push({ role: 'user', content: toolResults.join('\n\n') });
 		}
 
@@ -268,6 +286,34 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			responsePlainTextDelta: delta,
 			responseMarkdownDelta: delta,
 		});
+	}
+
+	/**
+	 * The history reducer stores one flat assistant transcript per turn, so post-iteration cleanup
+	 * has to rewrite the whole transcript rather than patching a substring in place. We rebuild the
+	 * current response from the stable prefix plus the sanitized iteration text before any canonical
+	 * trace/result records for the next step are appended.
+	 */
+	private replaceCurrentIterationTranscript(options: IVSCloneAgentLoopOptions, responsePrefix: string, sanitizedIterationText: string): void {
+		this.historyService.applyTurnUpdate({
+			threadId: options.threadId,
+			turnId: options.turnId,
+			sequence: options.sequence,
+			sessionResource: options.sessionResource,
+			phase: 'stream',
+			occurredAt: Date.now(),
+			promptText: options.promptText,
+			executionMode: options.mode,
+			modelIdentifier: options.modelIdentifier,
+			providerId: options.vendor,
+			responsePlainTextReplace: `${responsePrefix}${sanitizedIterationText}`,
+			responseMarkdownReplace: `${responsePrefix}${sanitizedIterationText}`,
+		});
+	}
+
+	private getCurrentTurnResponseText(threadId: string, turnId: string): string {
+		const currentTurn = this.historyService.getTurns(threadId).find(turn => turn.turnId === turnId);
+		return currentTurn ? (currentTurn.responsePlainText || currentTurn.responseMarkdown) : '';
 	}
 
 	private applyComplete(options: IVSCloneAgentLoopOptions, state: ILoopState): void {
@@ -384,7 +430,8 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			case 'create_file':
 				return `Created ${formatPathForTrace(params.path)}`;
 			case 'attempt_completion':
-				return `Attempted completion: ${truncateTraceMessage(params.result ?? 'Task complete')}`;
+				// The structured tool_result already carries the full completion markdown for the UI.
+				return 'Attempted completion';
 			default:
 				return `Executed ${toolName}`;
 		}
@@ -452,14 +499,6 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 				break;
 		}
 	}
-}
-
-function truncateTraceMessage(value: string): string {
-	const maxTraceChars = 120;
-	if (value.length <= maxTraceChars) {
-		return value;
-	}
-	return `${value.slice(0, maxTraceChars)}...`;
 }
 
 function formatPathForTrace(value: string | undefined): string {

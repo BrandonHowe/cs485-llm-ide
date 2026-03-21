@@ -131,7 +131,15 @@ export function formatToolDefinitionsForPrompt(mode: VSCloneChatMode = 'act'): s
 		lines.push('- Read a file before editing it.');
 		lines.push('- Use search_files and list_directory to explore unfamiliar areas.');
 	}
+	// Keep follow-up reads grounded in observed evidence rather than guessed starter files.
+	lines.push('- Only call read_file for paths you directly observed in list_directory/search_files results, the active file, or the open-files list.');
+	lines.push('- If list_directory returns no entries, treat the directory as empty and do not infer framework starter files.');
 	lines.push('- Before each tool call, include one short planning sentence prefixed with "Thinking:".');
+	lines.push('- The "Thinking:" sentence must be a standalone line immediately followed by a single <tool_call> block; do not append user-facing prose to that line.');
+	lines.push('- After emitting a <tool_call> block, stop and wait for the tool result.');
+	lines.push('- Never invent or emit <tool_result> blocks yourself. Tool results are provided only by the runtime.');
+	lines.push('- Never pretend a tool succeeded, never fabricate directory listings/file contents/search matches, and never continue the task as if the tool already ran.');
+	lines.push('- For attempt_completion, put the entire user-facing summary inside <result> and do not repeat that summary after the tool call.');
 	lines.push('- Do not ask the user to open/share/paste file contents; use tools instead.');
 	lines.push('- Call one tool at a time.');
 	lines.push('- Always finish with attempt_completion when the task is done.');

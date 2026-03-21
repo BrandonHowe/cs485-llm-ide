@@ -80,6 +80,7 @@ suite('VSClonePromptAssemblyService', () => {
 		const message = service.assembleSystemMessage(createBaseContext(), 'openai', 'plan');
 		assert.ok(message.includes('PLAN MODE'));
 		assert.ok(message.includes('read-only turn'));
+		assert.ok(message.includes('Do not invent tool results or continue past a tool call.'));
 		assert.ok(!message.includes('<<<<<<< SEARCH'));
 		assert.ok(!message.includes('### edit_file'));
 	});

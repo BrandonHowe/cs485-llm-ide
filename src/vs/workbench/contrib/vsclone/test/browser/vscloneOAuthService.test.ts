@@ -11,11 +11,10 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { IMainProcessService } from '../../../../../platform/ipc/common/mainProcessService.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
-import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { IQuickInputService } from '../../../../../platform/quickinput/common/quickInput.js';
 import { TestSecretStorageService } from '../../../../../platform/secrets/test/common/testSecretStorageService.js';
 import { VSCloneOAuthService } from '../../browser/vscloneOAuthService.js';
-import { IVSCloneOAuthTokenSet, oauthSecretKey } from '../../common/vscloneOAuthTypes.js';
+import { defaultOAuthProviderConfig, IVSCloneOAuthTokenSet, oauthSecretKey } from '../../common/vscloneOAuthTypes.js';
 
 function createMainProcessService(): IMainProcessService {
 	const channel: IChannel = {
@@ -28,10 +27,6 @@ function createMainProcessService(): IMainProcessService {
 		getChannel: (_channelName: string) => channel,
 		registerChannel: (_channelName: string) => undefined,
 	};
-}
-
-function createOpenerService(): IOpenerService {
-	return {} as unknown as IOpenerService;
 }
 
 function createNotificationService(): INotificationService {
@@ -58,6 +53,25 @@ function createTokenSet(overrides: Partial<IVSCloneOAuthTokenSet> = {}): IVSClon
 suite('VSCloneOAuthService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
+	test('anthropic provider config matches the current Claude Code OAuth endpoints', () => {
+		assert.deepStrictEqual(
+			{
+				authUrl: defaultOAuthProviderConfig.anthropic.authUrl,
+				tokenUrl: defaultOAuthProviderConfig.anthropic.tokenUrl,
+				redirectUriTemplate: defaultOAuthProviderConfig.anthropic.redirectUriTemplate,
+				scopes: defaultOAuthProviderConfig.anthropic.scopes,
+				extraAuthorizeParams: defaultOAuthProviderConfig.anthropic.extraAuthorizeParams,
+			},
+			{
+				authUrl: 'https://claude.ai/oauth/authorize',
+				tokenUrl: 'https://platform.claude.com/v1/oauth/token',
+				redirectUriTemplate: 'http://localhost:{port}/callback',
+				scopes: ['org:create_api_key', 'user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers', 'user:file_upload'],
+				extraAuthorizeParams: { code: 'true' },
+			}
+		);
+	});
+
 	test('initialize restores a persisted token and marks the provider ready', async () => {
 		const testDisposables = store.add(new DisposableStore());
 		const secretStorageService = testDisposables.add(new TestSecretStorageService());
@@ -68,7 +82,6 @@ suite('VSCloneOAuthService', () => {
 		const service = testDisposables.add(new VSCloneOAuthService(
 			secretStorageService,
 			new NullLogService(),
-			createOpenerService(),
 			createNotificationService(),
 			createQuickInputService(),
 			createMainProcessService(),
@@ -89,7 +102,6 @@ suite('VSCloneOAuthService', () => {
 		const service = testDisposables.add(new VSCloneOAuthService(
 			secretStorageService,
 			new NullLogService(),
-			createOpenerService(),
 			createNotificationService(),
 			createQuickInputService(),
 			createMainProcessService(),
@@ -113,7 +125,6 @@ suite('VSCloneOAuthService', () => {
 		const service = testDisposables.add(new VSCloneOAuthService(
 			secretStorageService,
 			new NullLogService(),
-			createOpenerService(),
 			createNotificationService(),
 			createQuickInputService(),
 			createMainProcessService(),

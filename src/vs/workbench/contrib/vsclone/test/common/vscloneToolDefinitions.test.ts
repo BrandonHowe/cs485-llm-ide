@@ -19,6 +19,12 @@ suite('VSCloneToolDefinitions', () => {
 		}
 		assert.ok(promptSection.includes('attempt_completion'));
 		assert.ok(promptSection.includes('Thinking:'));
+		assert.ok(promptSection.includes('Only call read_file for paths you directly observed'));
+		assert.ok(promptSection.includes('If list_directory returns no entries, treat the directory as empty'));
+		assert.ok(promptSection.includes('After emitting a <tool_call> block, stop and wait for the tool result.'));
+		assert.ok(promptSection.includes('standalone line immediately followed by a single <tool_call> block'));
+		assert.ok(promptSection.includes('Never invent or emit <tool_result> blocks yourself.'));
+		assert.ok(promptSection.includes('For attempt_completion, put the entire user-facing summary inside <result>'));
 	});
 
 	test('filters mutating tools from the prompt in plan mode', () => {

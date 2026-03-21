@@ -11,7 +11,7 @@ import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderP
 import { IVSCloneModelSelection, VSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { TestVSCloneOAuthService } from './vscloneTestOAuthService.js';
-import { TestVSCloneUnifiedChatBackendService } from './backend/vscloneTestUnifiedChatBackendService.js';
+import { TestVSCloneUnifiedChatBackendService } from './vscloneTestUnifiedChatBackendService.js';
 
 suite('VSCloneThreadModelSelectionService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();

@@ -178,6 +178,10 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		const lines: string[] = [`Directory listing for ${target.uri.toString()}:`];
 		const state = { count: 0, truncated: false };
 		await this.appendDirectoryListing(root.resource, '', recursive, lines, state);
+		// A blank listing is ambiguous to the model, so emit an explicit marker for truly empty folders.
+		if (state.count === 0) {
+			lines.push('(empty directory)');
+		}
 		if (state.truncated) {
 			lines.push(`[truncated after ${maxDirectoryEntries} entries]`);
 		}

@@ -64,7 +64,7 @@ suite('VSCloneChatHistorySerializer', () => {
 		}, ['openai/gpt-5.3-codex']));
 		assert.strictEqual(index.threads.length, 2);
 		assert.strictEqual(index.threads[0].threadId, 'b');
-		assert.strictEqual(index.modeByThread.a, 'plan');
+		assert.strictEqual(index.modeByThread?.a, 'plan');
 		assert.strictEqual(index.selectedByLocation.chat?.modelIdentifier, 'openai/gpt-5.3-codex');
 		assert.deepStrictEqual(index.recentModelIdentifiers, ['openai/gpt-5.3-codex']);
 

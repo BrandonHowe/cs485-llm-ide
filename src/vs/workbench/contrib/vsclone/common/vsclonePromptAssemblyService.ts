@@ -56,6 +56,7 @@ export class VSClonePromptAssemblyService implements IVSClonePromptAssemblyServi
 				'You are in PLAN MODE for this turn.',
 				'Inspect the workspace, reason about the requested change, and then propose a concrete plan.',
 				'Do not produce SEARCH/REPLACE execution blocks or otherwise attempt to modify files.',
+				'Do not invent tool results or continue past a tool call. The runtime will execute tools and provide the real results.',
 				'When you are done researching, finish with attempt_completion and summarize the implementation plan.',
 			]
 			: [
@@ -69,6 +70,7 @@ export class VSClonePromptAssemblyService implements IVSClonePromptAssemblyServi
 				'<replacement code>',
 				'>>>>>>> REPLACE',
 				'For new files, keep SEARCH empty and put full content in REPLACE.',
+				'Do not invent tool results or continue past a tool call. The runtime will execute tools and provide the real results.',
 			];
 		const message = [
 			'You are VSClone, an AI coding assistant integrated into a code editor.',

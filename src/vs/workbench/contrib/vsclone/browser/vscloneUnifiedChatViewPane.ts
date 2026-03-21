@@ -4,12 +4,21 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/vscloneUnifiedChatViewPane.css';
-import { addDisposableListener, EventType, getWindow } from '../../../../base/browser/dom.js';
+import {
+	addDisposableListener,
+	EventType,
+	getWindow,
+} from '../../../../base/browser/dom.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Action } from '../../../../base/common/actions.js';
 import { fromNow } from '../../../../base/common/date.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
-import { MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { MarkdownString } from '../../../../base/common/htmlContent.js';
+import {
+	DisposableStore,
+	MutableDisposable,
+	toDisposable,
+} from '../../../../base/common/lifecycle.js';
 import { splitLines } from '../../../../base/common/strings.js';
 import { localize } from '../../../../nls.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
@@ -22,19 +31,38 @@ import { IKeybindingService } from '../../../../platform/keybinding/common/keybi
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
+import { IMarkdownRendererService } from '../../../../platform/markdown/browser/markdownRenderer.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
-import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
+import {
+	IViewPaneOptions,
+	ViewPane,
+} from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
-import { IVSCloneChatHistoryQuery, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
-import { IVSCloneModelCatalogService, type VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
+import {
+	IVSCloneChatHistoryQuery,
+	IVSCloneChatHistoryThread,
+	IVSCloneChatHistoryTurn,
+	IVSCloneChatHistoryService,
+} from '../common/backend/vscloneChatHistoryService.js';
+import {
+	IVSCloneModelCatalogService,
+	type VSCloneReasoningEffortLevel,
+} from '../common/vscloneModelCatalogService.js';
 import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
 import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
-import { IVSCloneChatLocation, IVSCloneThreadModelSelectionService, type IVSCloneModelSelection } from '../common/backend/vscloneThreadModelSelectionService.js';
+import {
+	IVSCloneChatLocation,
+	IVSCloneThreadModelSelectionService,
+	type IVSCloneModelSelection,
+} from '../common/backend/vscloneThreadModelSelectionService.js';
 import { parseToolCalls } from '../common/vscloneToolCallParser.js';
-import { VSCloneChatHistoryRail, VSCloneRailTab } from './vscloneChatHistoryRail.js';
+import {
+	VSCloneChatHistoryRail,
+	VSCloneRailTab,
+} from './vscloneChatHistoryRail.js';
 import { IVSCloneChatSessionService } from './vscloneChatSessionService.js';
 import { VSCloneModelSwitcherWidget } from './vscloneModelSwitcherWidget.js';
 import { IVSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
@@ -48,7 +76,10 @@ const railMinWidth = 220;
 const railMaxWidth = 520;
 const compactRailBreakpoint = 900;
 
-export function toVSCloneHistoryQuery(query: string, tab: VSCloneRailTab): IVSCloneChatHistoryQuery {
+export function toVSCloneHistoryQuery(
+	query: string,
+	tab: VSCloneRailTab,
+): IVSCloneChatHistoryQuery {
 	return {
 		text: query,
 		tab,
@@ -98,9 +129,12 @@ interface ILegacyDiffHunk {
 	readonly lines: readonly string[];
 }
 
-function parseToolResultBlocks(text: string): readonly IParsedToolResultBlock[] {
+function parseToolResultBlocks(
+	text: string,
+): readonly IParsedToolResultBlock[] {
 	const blocks: IParsedToolResultBlock[] = [];
-	const pattern = /<tool_result\s+tool_name="([^"]+)"\s+success="(true|false)">([\s\S]*?)<\/tool_result>/g;
+	const pattern =
+		/<tool_result\s+tool_name="([^"]+)"\s+success="(true|false)">([\s\S]*?)<\/tool_result>/g;
 	let match: RegExpExecArray | null;
 	while ((match = pattern.exec(text)) !== null) {
 		blocks.push({
@@ -115,9 +149,12 @@ function parseToolResultBlocks(text: string): readonly IParsedToolResultBlock[] 
 	return blocks;
 }
 
-function parseAgentTraceBlocks(text: string): readonly IParsedAgentTraceBlock[] {
+function parseAgentTraceBlocks(
+	text: string,
+): readonly IParsedAgentTraceBlock[] {
 	const blocks: IParsedAgentTraceBlock[] = [];
-	const pattern = /<agent_trace\s+type="([^"]+)"(?:\s+status="([^"]+)")?>([\s\S]*?)<\/agent_trace>/g;
+	const pattern =
+		/<agent_trace\s+type="([^"]+)"(?:\s+status="([^"]+)")?>([\s\S]*?)<\/agent_trace>/g;
 	let match: RegExpExecArray | null;
 	while ((match = pattern.exec(text)) !== null) {
 		blocks.push({
@@ -142,7 +179,12 @@ function decodeXmlText(value: string): string {
 }
 
 export class VSCloneUnifiedChatViewPane extends ViewPane {
-	private readonly composerFocusDisposable = this._register(new MutableDisposable());
+	private readonly composerFocusDisposable = this._register(
+		new MutableDisposable(),
+	);
+	private readonly renderedMarkdownDisposables = this._register(
+		new DisposableStore(),
+	);
 
 	private rootContainer: HTMLElement | undefined;
 	private railContainer: HTMLElement | undefined;
@@ -159,14 +201,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private reasoningEffortContainer: HTMLElement | undefined;
 	private reasoningEffortSelect: HTMLSelectElement | undefined;
 
-	private readonly rail = this._register(this.instantiationService.createInstance(VSCloneChatHistoryRail));
+	private readonly rail = this._register(
+		this.instantiationService.createInstance(VSCloneChatHistoryRail),
+	);
 	private readonly threadsById = new Map<string, IVSCloneChatHistoryThread>();
-	private readonly refreshRailScheduler = this._register(new RunOnceScheduler(() => {
-		this.refreshRailRows();
-	}, 90));
-	private readonly refreshConversationScheduler = this._register(new RunOnceScheduler(() => {
-		this.refreshConversation();
-	}, 34));
+	private readonly refreshRailScheduler = this._register(
+		new RunOnceScheduler(() => {
+			this.refreshRailRows();
+		}, 90),
+	);
+	private readonly refreshConversationScheduler = this._register(
+		new RunOnceScheduler(() => {
+			this.refreshConversation();
+		}, 34),
+	);
 
 	private railVisible = false;
 	private railWidth = 320;
@@ -187,93 +235,144 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IOpenerService openerService: IOpenerService,
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
-		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
-		@IVSCloneChatSessionService private readonly sessionService: IVSCloneChatSessionService,
-		@IVSCloneThreadModelSelectionService private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
-		@IVSClonePlanModeService private readonly planModeService: IVSClonePlanModeService,
-		@IVSCloneModelCatalogService private readonly modelCatalogService: IVSCloneModelCatalogService,
-		@IVSCloneProviderConfigurationBridge private readonly providerConfigurationBridge: IVSCloneProviderConfigurationBridge,
+		@IVSCloneChatHistoryService
+		private readonly historyService: IVSCloneChatHistoryService,
+		@IVSCloneChatSessionService
+		private readonly sessionService: IVSCloneChatSessionService,
+		@IVSCloneThreadModelSelectionService
+		private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
+		@IVSClonePlanModeService
+		private readonly planModeService: IVSClonePlanModeService,
+		@IVSCloneModelCatalogService
+		private readonly modelCatalogService: IVSCloneModelCatalogService,
+		@IVSCloneProviderConfigurationBridge
+		private readonly providerConfigurationBridge: IVSCloneProviderConfigurationBridge,
 		@IClipboardService private readonly clipboardService: IClipboardService,
-		@IVSCloneEditApplicationService private readonly editApplicationService: IVSCloneEditApplicationService,
-		@INotificationService private readonly notificationService: INotificationService,
+		@IVSCloneEditApplicationService
+		private readonly editApplicationService: IVSCloneEditApplicationService,
+		@INotificationService
+		private readonly notificationService: INotificationService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IModelService private readonly modelService: IModelService,
 		@IFileService private readonly fileService: IFileService,
+		@IMarkdownRendererService
+		private readonly markdownRendererService: IMarkdownRendererService,
 	) {
-		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+		super(
+			options,
+			keybindingService,
+			contextMenuService,
+			configurationService,
+			contextKeyService,
+			viewDescriptorService,
+			instantiationService,
+			openerService,
+			themeService,
+			hoverService,
+		);
 
-		this.railWidth = Math.min(railMaxWidth, Math.max(railMinWidth, this.configurationService.getValue<number>(railWidthSetting) ?? 320));
+		this.railWidth = Math.min(
+			railMaxWidth,
+			Math.max(
+				railMinWidth,
+				this.configurationService.getValue<number>(railWidthSetting) ?? 320,
+			),
+		);
 
-		this._register(this.rail.onDidSelectThread(threadId => {
-			void this.openSession(threadId);
-		}));
-		this._register(this.rail.onDidRequestRetry(() => {
-			void this.reloadHistory();
-		}));
-		this._register(this.rail.onDidRequestNewChat(() => {
-			this.showComposerForNewChat();
-		}));
-		this._register(this.rail.onDidRequestClose(() => {
-			this.railVisible = false;
-			this.applyRailLayout();
-			this.focusInput();
-		}));
-		this._register(this.rail.onDidChangeFilterState(() => {
-			this.refreshRailRows();
-		}));
-		this._register(this.rail.onDidRequestAction(event => {
-			switch (event.action) {
-				case 'open':
-					void this.openSession(event.threadId);
-					break;
-				case 'copyPrompt':
-					void this.copyPrompt(event.threadId);
-					break;
-				case 'copyResponse':
-					void this.copyResponse(event.threadId);
-					break;
-				case 'reusePrompt':
-					this.reusePrompt(event.threadId);
-					break;
-				case 'delete':
-					void this.deleteThread(event.threadId);
-					break;
-				case 'toggleArchive':
-					void this.historyService.archiveThread(event.threadId, !!event.archived);
-					break;
-			}
-		}));
-
-		this._register(this.historyService.onDidChange(event => {
-			if (!this.historyReady) {
-				return;
-			}
-
-			const affectsActiveThread = !this.activeThreadId || event.threadIds.includes(this.activeThreadId);
-			if (event.reason === 'turnUpdate') {
-				if (affectsActiveThread) {
-					this.refreshConversationScheduler.schedule(24);
+		this._register(
+			this.rail.onDidSelectThread((threadId) => {
+				void this.openSession(threadId);
+			}),
+		);
+		this._register(
+			this.rail.onDidRequestRetry(() => {
+				void this.reloadHistory();
+			}),
+		);
+		this._register(
+			this.rail.onDidRequestNewChat(() => {
+				this.showComposerForNewChat();
+			}),
+		);
+		this._register(
+			this.rail.onDidRequestClose(() => {
+				this.railVisible = false;
+				this.applyRailLayout();
+				this.focusInput();
+			}),
+		);
+		this._register(
+			this.rail.onDidChangeFilterState(() => {
+				this.refreshRailRows();
+			}),
+		);
+		this._register(
+			this.rail.onDidRequestAction((event) => {
+				switch (event.action) {
+					case 'open':
+						void this.openSession(event.threadId);
+						break;
+					case 'copyPrompt':
+						void this.copyPrompt(event.threadId);
+						break;
+					case 'copyResponse':
+						void this.copyResponse(event.threadId);
+						break;
+					case 'reusePrompt':
+						this.reusePrompt(event.threadId);
+						break;
+					case 'delete':
+						void this.deleteThread(event.threadId);
+						break;
+					case 'toggleArchive':
+						void this.historyService.archiveThread(
+							event.threadId,
+							!!event.archived,
+						);
+						break;
 				}
-				this.refreshRailScheduler.schedule();
-				return;
-			}
+			}),
+		);
 
-			if (affectsActiveThread || event.reason === 'clear') {
-				this.refreshConversationScheduler.schedule(0);
-			}
-			this.refreshRailScheduler.schedule(0);
-		}));
+		this._register(
+			this.historyService.onDidChange((event) => {
+				if (!this.historyReady) {
+					return;
+				}
 
-		this._register(this.modelSelectionService.onDidChangeSelection(() => {
-			this.refreshModelControls();
-		}));
-		this._register(this.planModeService.onDidChangeMode(() => {
-			this.refreshPlanModeControl();
-			this.updateComposerState();
-		}));
-		this._register(this.modelCatalogService.onDidChangeCatalog(() => {
-			this.refreshModelControls();
-		}));
+				const affectsActiveThread =
+					!this.activeThreadId || event.threadIds.includes(this.activeThreadId);
+				if (event.reason === 'turnUpdate') {
+					if (affectsActiveThread) {
+						this.refreshConversationScheduler.schedule(24);
+					}
+					this.refreshRailScheduler.schedule();
+					return;
+				}
+
+				if (affectsActiveThread || event.reason === 'clear') {
+					this.refreshConversationScheduler.schedule(0);
+				}
+				this.refreshRailScheduler.schedule(0);
+			}),
+		);
+
+		this._register(
+			this.modelSelectionService.onDidChangeSelection(() => {
+				this.refreshModelControls();
+			}),
+		);
+		this._register(
+			this.planModeService.onDidChangeMode(() => {
+				this.refreshPlanModeControl();
+				this.updateComposerState();
+			}),
+		);
+		this._register(
+			this.modelCatalogService.onDidChangeCatalog(() => {
+				this.refreshModelControls();
+			}),
+		);
 
 		void this.modelSelectionService.initialize();
 	}
@@ -333,18 +432,24 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (!this.activeThreadId) {
 			return;
 		}
-		await this.modelSelectionService.resetSelectionForThread(this.activeThreadId);
+		await this.modelSelectionService.resetSelectionForThread(
+			this.activeThreadId,
+		);
 		this.refreshModelControls();
 	}
 
 	async switchToNextModel(): Promise<void> {
 		const context = this.getModelSwitcherContext();
-		await this.modelSelectionService.switchToNextModel(context.threadId, context.location);
+		await this.modelSelectionService.switchToNextModel(
+			context.threadId,
+			context.location,
+		);
 		this.refreshModelControls();
 	}
 
 	async openSession(threadId?: string): Promise<void> {
-		const targetThreadId = threadId ?? this.activeThreadId ?? this.rail.getSelectedThread();
+		const targetThreadId =
+			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread();
 		if (!targetThreadId) {
 			this.showComposerForNewChat();
 			return;
@@ -384,7 +489,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (!latestTurn) {
 			return;
 		}
-		await this.clipboardService.writeText(latestTurn.responsePlainText || latestTurn.responseMarkdown);
+		await this.clipboardService.writeText(
+			latestTurn.responsePlainText || latestTurn.responseMarkdown,
+		);
 	}
 
 	reusePrompt(threadId?: string): void {
@@ -449,9 +556,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const historyButton = document.createElement('button');
 		historyButton.type = 'button';
 		historyButton.className = 'vsclone-thread-action-button';
-		historyButton.textContent = localize('vsclone.thread.actions.history', 'Chat History');
+		historyButton.textContent = localize(
+			'vsclone.thread.actions.history',
+			'Chat History',
+		);
 		// Mirror tooltip text into an accessible name so screen readers announce this icon-like action clearly.
-		const historyButtonLabel = localize('vsclone.thread.actions.history.tooltip', 'Show chat history');
+		const historyButtonLabel = localize(
+			'vsclone.thread.actions.history.tooltip',
+			'Show chat history',
+		);
 		historyButton.title = historyButtonLabel;
 		historyButton.setAttribute('aria-label', historyButtonLabel);
 		actions.appendChild(historyButton);
@@ -460,7 +573,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		overflowButton.type = 'button';
 		overflowButton.className = 'vsclone-thread-action-overflow';
 		overflowButton.textContent = '\u22ef';
-		const overflowButtonLabel = localize('vsclone.thread.actions.more', 'More actions');
+		const overflowButtonLabel = localize(
+			'vsclone.thread.actions.more',
+			'More actions',
+		);
 		overflowButton.title = overflowButtonLabel;
 		overflowButton.setAttribute('aria-label', overflowButtonLabel);
 		overflowButton.setAttribute('aria-haspopup', 'menu');
@@ -472,12 +588,18 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		messages.setAttribute('role', 'log');
 		messages.setAttribute('aria-live', 'polite');
 		messages.setAttribute('aria-relevant', 'additions text');
-		messages.setAttribute('aria-label', localize('vsclone.thread.messages', 'Conversation messages'));
+		messages.setAttribute(
+			'aria-label',
+			localize('vsclone.thread.messages', 'Conversation messages'),
+		);
 		this.conversationList = messages;
 
 		const emptyState = document.createElement('div');
 		emptyState.className = 'vsclone-thread-empty-state';
-		emptyState.textContent = localize('vsclone.thread.empty', 'Start a new chat from the composer below.');
+		emptyState.textContent = localize(
+			'vsclone.thread.empty',
+			'Start a new chat from the composer below.',
+		);
 		this.conversationEmptyState = emptyState;
 
 		const composer = document.createElement('div');
@@ -486,8 +608,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const input = document.createElement('textarea');
 		input.className = 'vsclone-thread-composer-input';
 		input.rows = 1;
-		input.placeholder = localize('vsclone.composer.placeholder', 'Ask a follow-up question...');
-		input.setAttribute('aria-label', localize('vsclone.composer.inputLabel', 'Chat message'));
+		input.placeholder = localize(
+			'vsclone.composer.placeholder',
+			'Ask a follow-up question...',
+		);
+		input.setAttribute(
+			'aria-label',
+			localize('vsclone.composer.inputLabel', 'Chat message'),
+		);
 		this.composerInput = input;
 
 		const send = document.createElement('button');
@@ -504,18 +632,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.reasoningEffortContainer = undefined;
 		this.reasoningEffortSelect = undefined;
 
-		const modelSwitcherEnabled = this.configurationService.getValue<boolean>(modelSwitcherEnabledSetting) ?? true;
+		const modelSwitcherEnabled =
+			this.configurationService.getValue<boolean>(
+				modelSwitcherEnabledSetting,
+			) ?? true;
 		if (modelSwitcherEnabled) {
 			const modelSwitcherHost = document.createElement('div');
 			modelSwitcherHost.className = 'vsclone-thread-model-switcher';
 			controls.appendChild(modelSwitcherHost);
 			try {
-				this.modelSwitcher = this._register(new VSCloneModelSwitcherWidget(
-					this.modelCatalogService,
-					this.modelSelectionService,
-					this.providerConfigurationBridge,
-					() => this.getModelSwitcherContext(),
-				));
+				this.modelSwitcher = this._register(
+					new VSCloneModelSwitcherWidget(
+						this.modelCatalogService,
+						this.modelSelectionService,
+						this.providerConfigurationBridge,
+						() => this.getModelSwitcherContext(),
+					),
+				);
 				this.modelSwitcher.render(modelSwitcherHost);
 			} catch (error) {
 				onUnexpectedError(error);
@@ -527,7 +660,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			reasoningEffortHost.className = 'vsclone-thread-reasoning-level hidden';
 			const reasoningEffortSelect = document.createElement('select');
 			reasoningEffortSelect.className = 'vsclone-thread-reasoning-level-select';
-			reasoningEffortSelect.setAttribute('aria-label', localize('vsclone.composer.reasoningEffort', 'Reasoning level'));
+			reasoningEffortSelect.setAttribute(
+				'aria-label',
+				localize('vsclone.composer.reasoningEffort', 'Reasoning level'),
+			);
 			reasoningEffortHost.appendChild(reasoningEffortSelect);
 			controls.appendChild(reasoningEffortHost);
 			this.reasoningEffortContainer = reasoningEffortHost;
@@ -539,7 +675,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const planModeHost = document.createElement('div');
 		planModeHost.className = 'vsclone-plan-mode-toggle';
 		planModeHost.setAttribute('role', 'group');
-		planModeHost.setAttribute('aria-label', localize('vsclone.composer.mode', 'Chat mode'));
+		planModeHost.setAttribute(
+			'aria-label',
+			localize('vsclone.composer.mode', 'Chat mode'),
+		);
 		const planButton = document.createElement('button');
 		planButton.type = 'button';
 		planButton.className = 'vsclone-plan-mode-button';
@@ -557,7 +696,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const hint = document.createElement('div');
 		hint.className = 'vsclone-thread-composer-hint';
-		hint.textContent = localize('vsclone.composer.hint', 'Press Enter to send, Shift+Enter for new line');
+		hint.textContent = localize(
+			'vsclone.composer.hint',
+			'Press Enter to send, Shift+Enter for new line',
+		);
 		// Associate keyboard-help text to the composer so instructions are available to assistive technology.
 		hint.id = `${this.id}-composer-hint`;
 		input.setAttribute('aria-describedby', hint.id);
@@ -572,53 +714,117 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		parent.appendChild(emptyState);
 		parent.appendChild(composer);
 
-		this._register(addDisposableListener(historyButton, EventType.CLICK, () => {
-			this.railVisible = true;
-			this.applyRailLayout();
-			this.rail.focusSearch();
-		}));
+		this._register(
+			addDisposableListener(historyButton, EventType.CLICK, () => {
+				this.railVisible = true;
+				this.applyRailLayout();
+				this.rail.focusSearch();
+			}),
+		);
 
-		this._register(addDisposableListener(overflowButton, EventType.CLICK, (event: MouseEvent) => {
-			event.stopPropagation();
-			this.contextMenuService.showContextMenu({
-				getAnchor: () => ({ x: event.clientX, y: event.clientY }),
-				getActions: () => [
-					new Action('vsclone.chatHistory.copyPrompt', localize('vsclone.thread.actions.copyPrompt', 'Copy Prompt'), undefined, true, () => this.copyPrompt()),
-					new Action('vsclone.chatHistory.copyResponse', localize('vsclone.thread.actions.copyResponse', 'Copy Response'), undefined, true, () => this.copyResponse()),
-					new Action('vsclone.chatHistory.reusePrompt', localize('vsclone.thread.actions.reusePrompt', 'Reuse Prompt'), undefined, true, () => this.reusePrompt()),
-					new Action('vsclone.chatHistory.deleteThread', localize('vsclone.thread.actions.deleteThread', 'Delete Thread'), undefined, true, () => this.deleteActiveThread()),
-				],
-			});
-		}));
+		this._register(
+			addDisposableListener(
+				overflowButton,
+				EventType.CLICK,
+				(event: MouseEvent) => {
+					event.stopPropagation();
+					this.contextMenuService.showContextMenu({
+						getAnchor: () => ({ x: event.clientX, y: event.clientY }),
+						getActions: () => [
+							new Action(
+								'vsclone.chatHistory.copyPrompt',
+								localize('vsclone.thread.actions.copyPrompt', 'Copy Prompt'),
+								undefined,
+								true,
+								() => this.copyPrompt(),
+							),
+							new Action(
+								'vsclone.chatHistory.copyResponse',
+								localize(
+									'vsclone.thread.actions.copyResponse',
+									'Copy Response',
+								),
+								undefined,
+								true,
+								() => this.copyResponse(),
+							),
+							new Action(
+								'vsclone.chatHistory.reusePrompt',
+								localize('vsclone.thread.actions.reusePrompt', 'Reuse Prompt'),
+								undefined,
+								true,
+								() => this.reusePrompt(),
+							),
+							new Action(
+								'vsclone.chatHistory.deleteThread',
+								localize(
+									'vsclone.thread.actions.deleteThread',
+									'Delete Thread',
+								),
+								undefined,
+								true,
+								() => this.deleteActiveThread(),
+							),
+						],
+					});
+				},
+			),
+		);
 
-		this._register(addDisposableListener(input, EventType.INPUT, () => {
-			this.updateComposerMetrics();
-			this.updateComposerState();
-		}));
+		this._register(
+			addDisposableListener(input, EventType.INPUT, () => {
+				this.updateComposerMetrics();
+				this.updateComposerState();
+			}),
+		);
 
-		this._register(addDisposableListener(input, EventType.KEY_DOWN, (event: KeyboardEvent) => {
-			if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) {
-				return;
-			}
-			event.preventDefault();
-			void this.submitPrompt();
-		}));
+		this._register(
+			addDisposableListener(
+				input,
+				EventType.KEY_DOWN,
+				(event: KeyboardEvent) => {
+					if (
+						event.key !== 'Enter' ||
+						event.shiftKey ||
+						event.altKey ||
+						event.ctrlKey ||
+						event.metaKey
+					) {
+						return;
+					}
+					event.preventDefault();
+					void this.submitPrompt();
+				},
+			),
+		);
 
-		this._register(addDisposableListener(send, EventType.CLICK, () => {
-			void this.submitPrompt();
-		}));
+		this._register(
+			addDisposableListener(send, EventType.CLICK, () => {
+				void this.submitPrompt();
+			}),
+		);
 		if (this.planModePlanButton && this.planModeActButton) {
-			this._register(addDisposableListener(this.planModePlanButton, EventType.CLICK, () => {
-				void this.updatePlanModeSelection('plan');
-			}));
-			this._register(addDisposableListener(this.planModeActButton, EventType.CLICK, () => {
-				void this.updatePlanModeSelection('act');
-			}));
+			this._register(
+				addDisposableListener(this.planModePlanButton, EventType.CLICK, () => {
+					void this.updatePlanModeSelection('plan');
+				}),
+			);
+			this._register(
+				addDisposableListener(this.planModeActButton, EventType.CLICK, () => {
+					void this.updatePlanModeSelection('act');
+				}),
+			);
 		}
 		if (this.reasoningEffortSelect) {
-			this._register(addDisposableListener(this.reasoningEffortSelect, EventType.CHANGE, () => {
-				void this.updateReasoningEffortSelection();
-			}));
+			this._register(
+				addDisposableListener(
+					this.reasoningEffortSelect,
+					EventType.CHANGE,
+					() => {
+						void this.updateReasoningEffortSelection();
+					},
+				),
+			);
 		}
 
 		this.composerFocusDisposable.value = toDisposable(() => {
@@ -638,7 +844,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const fallback = document.createElement('div');
 		fallback.className = 'vsclone-thread-empty-state';
-		fallback.textContent = localize('vsclone.thread.renderError', 'Failed to render the chat UI. Reload the window and try again.');
+		fallback.textContent = localize(
+			'vsclone.thread.renderError',
+			'Failed to render the chat UI. Reload the window and try again.',
+		);
 		parent.appendChild(fallback);
 	}
 
@@ -660,7 +869,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const selectedModel = this.getCurrentComposerModelSelection(activeThreadId);
-		const existingThread = activeThreadId ? this.resolveThreadById(activeThreadId) : undefined;
+		const existingThread = activeThreadId
+			? this.resolveThreadById(activeThreadId)
+			: undefined;
 		this.submittingPrompt = true;
 		this.updateComposerState();
 
@@ -675,12 +886,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}
 
 			if (!activeThreadId && selectedModel) {
-				await this.modelSelectionService.setSelectionForThread(submission.threadId, {
-					...selectedModel,
-					threadId: submission.threadId,
-					location: 'chat',
-					selectedAt: Date.now(),
-				});
+				await this.modelSelectionService.setSelectionForThread(
+					submission.threadId,
+					{
+						...selectedModel,
+						threadId: submission.threadId,
+						location: 'chat',
+						selectedAt: Date.now(),
+					},
+				);
 			}
 
 			this.activeThreadId = submission.threadId;
@@ -722,7 +936,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.refreshConversation();
 		} catch {
 			this.historyReady = false;
-			this.rail.setError(localize('vsclone.rail.load.error', 'Failed to load chat history. Please try again.'));
+			this.rail.setError(
+				localize(
+					'vsclone.rail.load.error',
+					'Failed to load chat history. Please try again.',
+				),
+			);
 		}
 	}
 
@@ -732,7 +951,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const filterState = this.rail.getFilterState();
-		const threads = this.historyService.getThreads(toVSCloneHistoryQuery(filterState.query, filterState.tab));
+		const threads = this.historyService.getThreads(
+			toVSCloneHistoryQuery(filterState.query, filterState.tab),
+		);
 		this.threadsById.clear();
 		for (const thread of threads) {
 			this.threadsById.set(thread.threadId, thread);
@@ -742,7 +963,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.activeThreadId = undefined;
 		}
 
-		const rows = toVSCloneRailRows(threads, this.activeThreadId, timestamp => fromNow(timestamp, true));
+		const rows = toVSCloneRailRows(threads, this.activeThreadId, (timestamp) =>
+			fromNow(timestamp, true),
+		);
 		this.rail.setRows(rows);
 		if (!this.activeThreadId) {
 			this.rail.setSelectedThread(undefined);
@@ -756,8 +979,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
-		const turns = this.activeThreadId ? this.historyService.getTurns(this.activeThreadId) : [];
+		const turns = this.activeThreadId
+			? this.historyService.getTurns(this.activeThreadId)
+			: [];
 		const hasTurns = turns.length > 0;
+		// Refresh rebuilds the transcript DOM from scratch, so dispose markdown renderers from
+		// the previous pass before replacing nodes to avoid leaking listeners.
+		this.renderedMarkdownDisposables.clear();
 		this.conversationList.replaceChildren();
 		this.conversationEmptyState.classList.toggle('hidden', hasTurns);
 
@@ -806,28 +1034,57 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		body.className = 'vsclone-thread-message-body';
 		const text = turn.responsePlainText || turn.responseMarkdown;
 		if (text.trim().length > 0) {
-			if (text.includes('<tool_call>') || text.includes('<tool_result') || text.includes('<agent_trace')) {
-				this.renderToolAwareAssistantText(body, text, turn.status === 'streaming');
+			if (
+				text.includes('<tool_call>') ||
+				text.includes('<tool_result') ||
+				text.includes('<agent_trace')
+			) {
+				this.renderToolAwareAssistantText(
+					body,
+					text,
+					turn.status === 'streaming',
+				);
 			} else {
-				body.textContent = text;
+				this.appendMarkdownSegment(
+					body,
+					text,
+					'vsclone-thread-message-text-segment',
+				);
 			}
 		} else if (turn.status === 'pending' || turn.status === 'streaming') {
-			body.textContent = localize('vsclone.thread.assistant.pending', 'Thinking...');
+			body.textContent = localize(
+				'vsclone.thread.assistant.pending',
+				'Thinking...',
+			);
 			item.classList.add('streaming');
 		} else if (turn.status === 'cancelled') {
-			body.textContent = localize('vsclone.thread.assistant.cancelled', 'Response generation was cancelled.');
+			body.textContent = localize(
+				'vsclone.thread.assistant.cancelled',
+				'Response generation was cancelled.',
+			);
 		} else if (turn.status === 'failed') {
-			body.textContent = localize('vsclone.thread.assistant.failed', 'Something went wrong while generating the response.');
+			body.textContent = localize(
+				'vsclone.thread.assistant.failed',
+				'Something went wrong while generating the response.',
+			);
 		}
 		item.appendChild(body);
 
 		// Plan-mode turns stay intentionally non-mutating even if the model emits executable-looking
 		// SEARCH/REPLACE blocks in plain text. That closes the last mutation path outside tool calls.
-		if (turn.executionMode !== 'plan' && turn.status === 'completed' && text.trim().length > 0 && this.editApplicationService.hasSearchReplaceBlocks(text)) {
+		if (
+			turn.executionMode !== 'plan' &&
+			turn.status === 'completed' &&
+			text.trim().length > 0 &&
+			this.editApplicationService.hasSearchReplaceBlocks(text)
+		) {
 			const applyButton = document.createElement('button');
 			applyButton.type = 'button';
 			applyButton.className = 'vsclone-thread-message-apply';
-			applyButton.textContent = localize('vsclone.thread.assistant.apply', 'Apply Changes');
+			applyButton.textContent = localize(
+				'vsclone.thread.assistant.apply',
+				'Apply Changes',
+			);
 			applyButton.addEventListener(EventType.CLICK, () => {
 				void this.applyAssistantEdits(turn, applyButton);
 			});
@@ -837,7 +1094,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return item;
 	}
 
-	private renderToolAwareAssistantText(container: HTMLElement, text: string, streaming: boolean): void {
+	private renderToolAwareAssistantText(
+		container: HTMLElement,
+		text: string,
+		streaming: boolean,
+	): void {
 		type ParsedBlock = {
 			readonly kind: 'tool_call' | 'tool_result' | 'trace';
 			readonly startOffset: number;
@@ -851,66 +1112,121 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			readonly traceMessage?: string;
 		};
 
-		const callBlocks = parseToolCalls(text).toolCalls.map<ParsedBlock>(call => ({
-			kind: 'tool_call',
-			startOffset: call.startOffset,
-			endOffset: call.endOffset,
-			rawXml: call.rawXml,
-			toolName: call.name,
-		}));
-		const resultBlocks = parseToolResultBlocks(text).map<ParsedBlock>(result => ({
-			kind: 'tool_result',
-			startOffset: result.startOffset,
-			endOffset: result.endOffset,
-			rawXml: result.rawXml,
-			toolName: result.toolName,
-			success: result.success,
-			output: result.output,
-		}));
-		const traceBlocks = parseAgentTraceBlocks(text).map<ParsedBlock>(trace => ({
-			kind: 'trace',
-			startOffset: trace.startOffset,
-			endOffset: trace.endOffset,
-			rawXml: trace.rawXml,
-			toolName: '',
-			traceType: trace.type,
-			traceStatus: trace.status,
-			traceMessage: trace.message,
-		}));
+		const callBlocks = parseToolCalls(text).toolCalls.map<ParsedBlock>(
+			(call) => ({
+				kind: 'tool_call',
+				startOffset: call.startOffset,
+				endOffset: call.endOffset,
+				rawXml: call.rawXml,
+				toolName: call.name,
+			}),
+		);
+		const resultBlocks = parseToolResultBlocks(text).map<ParsedBlock>(
+			(result) => ({
+				kind: 'tool_result',
+				startOffset: result.startOffset,
+				endOffset: result.endOffset,
+				rawXml: result.rawXml,
+				toolName: result.toolName,
+				success: result.success,
+				output: result.output,
+			}),
+		);
+		const traceBlocks = parseAgentTraceBlocks(text).map<ParsedBlock>(
+			(trace) => ({
+				kind: 'trace',
+				startOffset: trace.startOffset,
+				endOffset: trace.endOffset,
+				rawXml: trace.rawXml,
+				toolName: '',
+				traceType: trace.type,
+				traceStatus: trace.status,
+				traceMessage: trace.message,
+			}),
+		);
 		const hasTraceBlocks = traceBlocks.length > 0;
+		// The attempt_completion tool result is the canonical final summary for a tool-driven turn.
+		// Some models still emit the same prose before the exploratory tool call, which makes
+		// restored transcripts look duplicated and out of order once the tool card is inserted
+		// between both copies. We keep the structured completion copy and suppress the earlier
+		// provisional text only when it is materially the same long-form content.
+		const completionSummaries = resultBlocks
+			.filter((result) => result.toolName === 'attempt_completion')
+			.map((result) =>
+				this.normalizeTranscriptComparisonText(result.output ?? ''),
+			)
+			.filter((value): value is string => value.length > 0);
+		const firstCompletionStartOffset = resultBlocks
+			.filter((result) => result.toolName === 'attempt_completion')
+			.reduce<
+				number | undefined
+			>((earliest, result) => (earliest === undefined ? result.startOffset : Math.min(earliest, result.startOffset)), undefined);
 
-		const blocks = [...callBlocks, ...resultBlocks, ...traceBlocks].sort((left, right) => left.startOffset - right.startOffset);
+		const blocks = [...callBlocks, ...resultBlocks, ...traceBlocks].sort(
+			(left, right) => left.startOffset - right.startOffset,
+		);
 		if (blocks.length === 0) {
 			container.textContent = text;
 			return;
 		}
 
-		// Group consecutive thinking traces into collapsible sections and pair tool traces
-		// with their results into unified cards.
+		// Collect consecutive tool calls and thinking traces into activity groups
+		// that render as a single collapsible block instead of individual cards.
+		type ActivityItem =
+			| { readonly kind: 'thinking'; readonly message: string }
+			| {
+				readonly kind: 'tool';
+				readonly toolName: string;
+				readonly displayMessage: string;
+				readonly status: 'running' | 'complete' | 'success' | 'error';
+				readonly output?: string;
+				readonly diffCard?: HTMLElement;
+			};
+
 		let cursor = 0;
-		let pendingThinkingMessages: string[] = [];
+		let pendingActivity: ActivityItem[] = [];
 		let pendingToolTraceName: string | undefined;
 		let pendingToolTraceMessage: string | undefined;
 
-		const flushThinking = () => {
-			if (pendingThinkingMessages.length > 0) {
-				container.appendChild(this.renderCollapsibleThinkingBlock(pendingThinkingMessages, streaming));
-				pendingThinkingMessages = [];
-			}
+		const addTool = (
+			toolName: string,
+			displayMessage: string,
+			status: 'running' | 'complete' | 'success' | 'error',
+			output?: string,
+			diffCard?: HTMLElement,
+		) => {
+			pendingActivity.push({
+				kind: 'tool',
+				toolName,
+				displayMessage,
+				status,
+				output,
+				diffCard,
+			});
 		};
 
 		const flushPendingTool = () => {
-			if (pendingToolTraceName !== undefined) {
-				// Tool trace without a result yet: render it as an in-progress card.
-				container.appendChild(this.renderToolCard(
+			if (
+				pendingToolTraceName !== undefined &&
+				pendingToolTraceName !== '\x00completion'
+			) {
+				addTool(
 					pendingToolTraceName,
 					pendingToolTraceMessage ?? pendingToolTraceName,
 					streaming ? 'running' : 'complete',
-					undefined,
-					undefined,
-				));
+				);
 				pendingToolTraceName = undefined;
 				pendingToolTraceMessage = undefined;
+			}
+		};
+
+		const flushActivity = () => {
+			flushPendingTool();
+			if (pendingActivity.length > 0) {
+				container.appendChild(
+					this.renderActivityGroup(pendingActivity, streaming),
+				);
+				pendingActivity = [];
 			}
 		};
 
@@ -918,154 +1234,345 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			if (block.startOffset > cursor) {
 				const segment = text.slice(cursor, block.startOffset);
 				if (segment.trim().length > 0) {
-					flushThinking();
-					flushPendingTool();
-					this.appendPlainAssistantTextSegment(container, segment);
+					flushActivity();
+					if (
+						!this.shouldSuppressProvisionalCompletionSegment(
+							segment,
+							block.startOffset,
+							firstCompletionStartOffset,
+							completionSummaries,
+						)
+					) {
+						this.appendPlainAssistantTextSegment(container, segment);
+					}
 				}
 			}
 
 			if (block.kind === 'tool_call') {
 				if (!hasTraceBlocks) {
-					flushThinking();
 					flushPendingTool();
-					container.appendChild(this.renderToolCard(
+					addTool(
 						block.toolName,
 						block.toolName,
 						streaming ? 'running' : 'complete',
-						undefined,
-						undefined,
-					));
+					);
 				}
 			} else if (block.kind === 'tool_result') {
-				const diffCard = (block.success && block.output)
-					? this.renderToolResultDiffCard(block.toolName, block.output)
-					: undefined;
+				const diffCard =
+					block.success && block.output
+						? this.renderToolResultDiffCard(block.toolName, block.output)
+						: undefined;
 
-				if (hasTraceBlocks && pendingToolTraceName !== undefined) {
-					// Pair this result with the pending tool trace into a single card
-					flushThinking();
-					container.appendChild(this.renderToolCard(
+				if (
+					block.toolName === 'attempt_completion' ||
+					pendingToolTraceName === '\x00completion'
+				) {
+					flushActivity();
+					this.appendMarkdownSegment(
+						container,
+						block.output ?? '',
+						'vsclone-thread-message-text-segment',
+					);
+					pendingToolTraceName = undefined;
+					pendingToolTraceMessage = undefined;
+				} else if (hasTraceBlocks && pendingToolTraceName !== undefined) {
+					addTool(
 						pendingToolTraceName,
 						pendingToolTraceMessage ?? pendingToolTraceName,
 						block.success ? 'success' : 'error',
 						block.output,
 						diffCard ?? undefined,
-					));
+					);
 					pendingToolTraceName = undefined;
 					pendingToolTraceMessage = undefined;
 				} else {
-					flushThinking();
 					flushPendingTool();
 					if (diffCard) {
-						container.appendChild(diffCard);
-					}
-					if (!hasTraceBlocks && !diffCard) {
-						container.appendChild(this.renderToolResultStatusLine(block.toolName, !!block.success));
+						addTool(
+							block.toolName,
+							block.toolName,
+							block.success ? 'success' : 'error',
+							block.output,
+							diffCard,
+						);
+					} else if (!hasTraceBlocks && block.output?.trim()) {
+						addTool(
+							block.toolName,
+							block.toolName,
+							block.success ? 'success' : 'error',
+							block.output,
+						);
+					} else if (!hasTraceBlocks) {
+						addTool(
+							block.toolName,
+							block.toolName,
+							block.success ? 'success' : 'error',
+						);
 					}
 				}
 			} else {
 				// Agent trace block
 				if (block.traceType === 'thinking') {
 					flushPendingTool();
-					pendingThinkingMessages.push(block.traceMessage ?? '');
+					pendingActivity.push({
+						kind: 'thinking',
+						message: block.traceMessage ?? '',
+					});
 				} else if (block.traceType === 'tool') {
 					const msg = block.traceMessage ?? '';
-					const isCompletion = msg.toLowerCase().includes('attempt') && msg.toLowerCase().includes('completion');
+					const isCompletion =
+						msg.toLowerCase().includes('attempt') &&
+						msg.toLowerCase().includes('completion');
 					if (isCompletion) {
-						// attempt_completion is not a real tool action: render its
-						// summary as plain text instead of a tool card.
-						flushThinking();
 						flushPendingTool();
-						// Extract the summary after "Attempted completion: "
-						const colonIdx = msg.indexOf(':');
-						const summary = colonIdx >= 0 ? msg.slice(colonIdx + 1).trim() : msg;
-						if (summary) {
-							this.appendPlainAssistantTextSegment(container, summary);
-						}
-						// Mark so the following tool_result trace is also suppressed
 						pendingToolTraceName = '\x00completion';
 						pendingToolTraceMessage = undefined;
 					} else {
-						flushThinking();
 						flushPendingTool();
 						pendingToolTraceName = msg;
 						pendingToolTraceMessage = block.traceMessage;
 					}
 				} else if (block.traceType === 'tool_result') {
-					// Tool result trace without structured tool_result XML: render a paired card.
-					flushThinking();
 					if (pendingToolTraceName === '\x00completion') {
-						// Suppress the tool_result for attempt_completion
 						pendingToolTraceName = undefined;
 						pendingToolTraceMessage = undefined;
 					} else if (pendingToolTraceName !== undefined) {
-						container.appendChild(this.renderToolCard(
+						addTool(
 							pendingToolTraceName,
 							pendingToolTraceMessage ?? pendingToolTraceName,
-							block.traceStatus === 'success' ? 'success' : (block.traceStatus === 'error' ? 'error' : 'complete'),
+							block.traceStatus === 'success'
+								? 'success'
+								: block.traceStatus === 'error'
+									? 'error'
+									: 'complete',
 							block.traceMessage,
-							undefined,
-						));
+						);
 						pendingToolTraceName = undefined;
 						pendingToolTraceMessage = undefined;
 					} else {
-						container.appendChild(this.renderAgentTraceBlock(block.traceType, block.traceMessage ?? '', block.traceStatus));
+						// Orphan tool_result trace - its tool was already paired via a
+						// structured <tool_result> block. Silently discard the duplicate.
 					}
 				} else {
-					flushThinking();
 					flushPendingTool();
-					container.appendChild(this.renderAgentTraceBlock(block.traceType ?? '', block.traceMessage ?? '', block.traceStatus));
+					pendingActivity.push({
+						kind: 'thinking',
+						message: block.traceMessage ?? '',
+					});
 				}
 			}
 			cursor = block.endOffset;
 		}
 
-		flushThinking();
-		flushPendingTool();
+		flushActivity();
 
 		if (cursor < text.length) {
 			this.appendPlainAssistantTextSegment(container, text.slice(cursor));
 		}
 	}
 
-	private appendPlainAssistantTextSegment(container: HTMLElement, text: string): void {
+	/**
+	 * Turns transcript text into a whitespace-insensitive comparison key so restored summaries can
+	 * be matched even when markdown serialization changed line wrapping between iterations.
+	 */
+	private normalizeTranscriptComparisonText(value: string): string {
+		return value.replace(/\s+/g, ' ').trim().toLowerCase();
+	}
+
+	/**
+	 * The prompt asks the model to emit a single short "Thinking:" line immediately before each
+	 * tool call, but streamed output still sometimes collapses multiple thinking lines and trailing
+	 * prose into one run. We recover that structure here so the UI remains stable even when the
+	 * model omits the expected newlines.
+	 */
+	private extractPlainAssistantSegments(text: string): ReadonlyArray<{
+		readonly kind: 'thinking' | 'text';
+		readonly value: string;
+	}> {
+		const segments: { kind: 'thinking' | 'text'; value: string }[] = [];
+		let cursor = 0;
+		let searchOffset = 0;
+
+		const pushSegment = (kind: 'thinking' | 'text', value: string) => {
+			if (!value.trim()) {
+				return;
+			}
+
+			const previous =
+				segments.length > 0 ? segments[segments.length - 1] : undefined;
+			if (kind === 'text' && previous?.kind === kind) {
+				previous.value = `${previous.value}\n${value.trim()}`;
+				return;
+			}
+
+			segments.push({ kind, value: value.trim() });
+		};
+
+		while (true) {
+			const markerOffset = this.findNextPlainThinkingMarker(text, searchOffset);
+			if (markerOffset < 0) {
+				break;
+			}
+
+			pushSegment('text', text.slice(cursor, markerOffset));
+
+			const messageStartOffset = markerOffset + 'Thinking:'.length;
+			const nextMarkerOffset = this.findNextPlainThinkingMarker(
+				text,
+				messageStartOffset,
+			);
+			const messageEndOffset =
+				nextMarkerOffset >= 0 ? nextMarkerOffset : text.length;
+			const { message, trailingText } =
+				this.splitThinkingMessageAndTrailingText(
+					text.slice(messageStartOffset, messageEndOffset),
+				);
+			pushSegment('thinking', message);
+			pushSegment('text', trailingText);
+
+			cursor = messageEndOffset;
+			searchOffset = messageEndOffset;
+		}
+
+		pushSegment('text', text.slice(cursor));
+		return segments;
+	}
+
+	/**
+	 * Plain-text thinking markers are only considered structural when they start a new sentence or
+	 * line. This prevents normal prose like `The label "Thinking:"` from being misclassified.
+	 */
+	private findNextPlainThinkingMarker(
+		text: string,
+		fromOffset: number,
+	): number {
+		let searchOffset = fromOffset;
+		while (true) {
+			const markerOffset = text.indexOf('Thinking:', searchOffset);
+			if (markerOffset < 0) {
+				return -1;
+			}
+
+			if (
+				markerOffset === 0 ||
+				/[\s.!?;:)\]}"'`>-]/.test(text[markerOffset - 1])
+			) {
+				return markerOffset;
+			}
+
+			searchOffset = markerOffset + 'Thinking:'.length;
+		}
+	}
+
+	/**
+	 * Recover user-facing prose that the model occasionally appends to the same line as a thinking
+	 * sentence. Because the prompt contract is "one short sentence", the first clear sentence break
+	 * is the safest place to split the planning note from the visible answer text.
+	 */
+	private splitThinkingMessageAndTrailingText(value: string): {
+		readonly message: string;
+		readonly trailingText: string;
+	} {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return { message: '', trailingText: '' };
+		}
+
+		const proseBoundary = /([.!?]["')\]]*)(\s*)(?=[A-Z0-9"'`([{])/;
+		const boundaryMatch = proseBoundary.exec(trimmed);
+		if (!boundaryMatch) {
+			return { message: trimmed, trailingText: '' };
+		}
+
+		const messageEndOffset = boundaryMatch.index + boundaryMatch[1].length;
+		return {
+			message: trimmed.slice(0, messageEndOffset).trim(),
+			trailingText: trimmed
+				.slice(boundaryMatch.index + boundaryMatch[0].length)
+				.trim(),
+		};
+	}
+
+	/**
+	 * The model occasionally emits a draft summary before exploratory tool calls and then repeats
+	 * the same content through attempt_completion once it has finished. Keeping both copies makes a
+	 * restored thread look like the final summary rendered before the tool card. We only suppress
+	 * long duplicate prose that occurs before the first completion result so short shared phrases
+	 * such as "Task complete" are never hidden accidentally.
+	 */
+	private shouldSuppressProvisionalCompletionSegment(
+		segment: string,
+		segmentEndOffset: number,
+		firstCompletionStartOffset: number | undefined,
+		completionSummaries: readonly string[],
+	): boolean {
+		if (
+			firstCompletionStartOffset === undefined ||
+			segmentEndOffset > firstCompletionStartOffset ||
+			completionSummaries.length === 0
+		) {
+			return false;
+		}
+
+		const normalizedSegment = this.normalizeTranscriptComparisonText(segment);
+		if (normalizedSegment.length < 40) {
+			return false;
+		}
+
+		return completionSummaries.some(
+			(summary) =>
+				summary === normalizedSegment ||
+				summary.includes(normalizedSegment) ||
+				normalizedSegment.includes(summary),
+		);
+	}
+
+	private appendPlainAssistantTextSegment(
+		container: HTMLElement,
+		text: string,
+	): void {
 		if (!text || text.trim().length === 0) {
 			return;
 		}
 
-		// Split plain text into thinking lines vs normal text so "Thinking: ..."
-		// lines that aren't wrapped in <agent_trace> still render as collapsible blocks.
-		const lines = text.split('\n');
 		let normalLines: string[] = [];
 		let thinkingMessages: string[] = [];
 
 		const flushNormal = () => {
 			const joined = normalLines.join('\n').trim();
 			if (joined) {
-				const segment = document.createElement('div');
-				segment.className = 'vsclone-thread-message-text-segment';
-				segment.textContent = joined;
-				container.appendChild(segment);
+				this.appendMarkdownSegment(
+					container,
+					joined,
+					'vsclone-thread-message-text-segment',
+				);
 			}
 			normalLines = [];
 		};
 
 		const flushThinking = () => {
 			if (thinkingMessages.length > 0) {
-				container.appendChild(this.renderCollapsibleThinkingBlock(thinkingMessages, false));
+				container.appendChild(
+					this.renderCollapsibleThinkingBlock(thinkingMessages, false),
+				);
 				thinkingMessages = [];
 			}
 		};
 
-		for (const line of lines) {
-			const trimmed = line.trim();
-			const thinkingMatch = /^Thinking:\s*(.+)/i.exec(trimmed);
-			if (thinkingMatch) {
+		for (const segment of this.extractPlainAssistantSegments(text)) {
+			if (segment.kind === 'thinking') {
 				flushNormal();
-				thinkingMessages.push(thinkingMatch[1]);
-			} else if (/^\[Agent iteration \d+\]$/.test(trimmed) || trimmed === '---') {
-				// Internal agent loop markers: suppress them from the UI.
-			} else {
+				thinkingMessages.push(segment.value);
+				continue;
+			}
+
+			for (const line of segment.value.split('\n')) {
+				const trimmed = line.trim();
+				if (/^\[Agent iteration \d+\]$/.test(trimmed) || trimmed === '---') {
+					// Internal agent loop markers: suppress them from the UI.
+					continue;
+				}
+
 				flushThinking();
 				normalLines.push(line);
 			}
@@ -1079,7 +1586,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	 * Renders consecutive thinking traces as a collapsible disclosure block.
 	 * While streaming, the block is expanded; once complete, it collapses to a single summary line.
 	 */
-	private renderCollapsibleThinkingBlock(messages: string[], streaming: boolean): HTMLElement {
+	private renderCollapsibleThinkingBlock(
+		messages: string[],
+		streaming: boolean,
+	): HTMLElement {
 		const details = document.createElement('details');
 		details.className = 'vsclone-thinking-block';
 		if (streaming) {
@@ -1096,7 +1606,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const label = document.createElement('span');
 		label.textContent = streaming
 			? localize('vsclone.thread.thinking.active', 'Thinking...')
-			: localize('vsclone.thread.thinking.label', 'Thinking ({0} steps)', messages.length.toString());
+			: localize(
+				'vsclone.thread.thinking.label',
+				'Thinking ({0} steps)',
+				messages.length.toString(),
+			);
 		summary.appendChild(label);
 
 		details.appendChild(summary);
@@ -1114,6 +1628,169 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		details.appendChild(content);
 
 		return details;
+	}
+
+	/**
+	 * Renders a group of consecutive activity items (tool calls and thinking traces)
+	 * as a single collapsible block instead of individual cards.
+	 */
+	private renderActivityGroup(
+		items: ReadonlyArray<
+			| { readonly kind: 'thinking'; readonly message: string }
+			| {
+				readonly kind: 'tool';
+				readonly toolName: string;
+				readonly displayMessage: string;
+				readonly status: 'running' | 'complete' | 'success' | 'error';
+				readonly output?: string;
+				readonly diffCard?: HTMLElement;
+			}
+		>,
+		streaming: boolean,
+	): HTMLElement {
+		const toolItems = items.filter(
+			(i): i is Extract<typeof i, { kind: 'tool' }> => i.kind === 'tool',
+		);
+		const thinkingItems = items.filter(
+			(i): i is Extract<typeof i, { kind: 'thinking' }> =>
+				i.kind === 'thinking',
+		);
+		const hasDiffCards = toolItems.some((t) => t.diffCard);
+
+		// Single tool with no thinking -> keep the existing card presentation so a lone tool call
+		// does not get wrapped in a heavier grouped container.
+		if (toolItems.length === 1 && thinkingItems.length === 0) {
+			const t = toolItems[0];
+			return this.renderToolCard(
+				t.toolName,
+				t.displayMessage,
+				t.status,
+				t.output,
+				t.diffCard,
+			);
+		}
+
+		// Thinking-only output should continue using the dedicated collapsible block because
+		// that presentation already matches the intent of streamed reasoning content.
+		if (toolItems.length === 0 && thinkingItems.length > 0) {
+			return this.renderCollapsibleThinkingBlock(
+				thinkingItems.map((t) => t.message),
+				streaming,
+			);
+		}
+
+		// Mixed or multi-item activity is grouped so the transcript stays compact while still
+		// making the detailed timeline available on demand.
+		const details = document.createElement('details');
+		details.className = 'vsclone-activity-group';
+		if (streaming || hasDiffCards) {
+			details.open = true;
+		}
+
+		const summaryEl = document.createElement('summary');
+		summaryEl.className = 'vsclone-activity-summary';
+
+		const icon = document.createElement('span');
+		icon.className = 'codicon codicon-tools vsclone-activity-icon';
+		summaryEl.appendChild(icon);
+
+		const label = document.createElement('span');
+		const isRunning =
+			streaming && toolItems.some((t) => t.status === 'running');
+		if (isRunning) {
+			label.textContent = localize(
+				'vsclone.activity.running',
+				'Running tools...',
+			);
+		} else {
+			label.textContent =
+				toolItems.length === 1
+					? localize('vsclone.activity.single', 'Used 1 tool')
+					: localize(
+						'vsclone.activity.count',
+						'Used {0} tools',
+						toolItems.length.toString(),
+					);
+		}
+		summaryEl.appendChild(label);
+
+		details.appendChild(summaryEl);
+
+		const content = document.createElement('div');
+		content.className = 'vsclone-activity-content';
+
+		// Render thinking as a nested collapsible if present
+		if (thinkingItems.length > 0) {
+			content.appendChild(
+				this.renderCollapsibleThinkingBlock(
+					thinkingItems.map((t) => t.message),
+					streaming,
+				),
+			);
+		}
+
+		// Render compact tool rows
+		for (const tool of toolItems) {
+			content.appendChild(
+				this.renderCompactToolRow(
+					tool.toolName,
+					tool.displayMessage,
+					tool.status,
+				),
+			);
+			if (tool.diffCard) {
+				content.appendChild(tool.diffCard);
+			}
+		}
+
+		details.appendChild(content);
+		return details;
+	}
+
+	/**
+	 * Renders a single tool call as a compact one-line row with status icon, tool icon, and label.
+	 */
+	private renderCompactToolRow(
+		toolName: string,
+		displayMessage: string,
+		status: 'running' | 'complete' | 'success' | 'error',
+	): HTMLElement {
+		const row = document.createElement('div');
+		row.className = 'vsclone-activity-row';
+		row.classList.add(`status-${status}`);
+
+		const statusIcon = document.createElement('span');
+		statusIcon.className = 'vsclone-activity-row-status';
+		switch (status) {
+			case 'running':
+				statusIcon.classList.add(
+					'codicon',
+					'codicon-loading',
+					'codicon-modifier-spin',
+				);
+				break;
+			case 'success':
+				statusIcon.classList.add('codicon', 'codicon-check');
+				break;
+			case 'error':
+				statusIcon.classList.add('codicon', 'codicon-error');
+				break;
+			default:
+				statusIcon.classList.add('codicon', 'codicon-check');
+				break;
+		}
+		row.appendChild(statusIcon);
+
+		const toolIcon = document.createElement('span');
+		toolIcon.className = `codicon vsclone-activity-row-icon ${this.getToolIconClass(toolName)}`;
+		row.appendChild(toolIcon);
+
+		const labelEl = document.createElement('span');
+		labelEl.className = 'vsclone-activity-row-label';
+		labelEl.textContent = displayMessage;
+		row.appendChild(labelEl);
+
+		return row;
 	}
 
 	/**
@@ -1147,7 +1824,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		statusBadge.className = 'vsclone-tool-card-status';
 		switch (status) {
 			case 'running':
-				statusBadge.classList.add('codicon', 'codicon-loading', 'codicon-modifier-spin');
+				statusBadge.classList.add(
+					'codicon',
+					'codicon-loading',
+					'codicon-modifier-spin',
+				);
 				break;
 			case 'success':
 				statusBadge.classList.add('codicon', 'codicon-check');
@@ -1166,9 +1847,48 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		// Attach diff card if present
 		if (diffCard) {
 			card.appendChild(diffCard);
+		} else if (output?.trim()) {
+			// Tool output is frequently the only evidence that a read/list/search step behaved
+			// correctly, so render it inline instead of collapsing it to a status-only card.
+			this.appendMarkdownSegment(card, output, 'vsclone-tool-card-output');
 		}
 
 		return card;
+	}
+
+	/**
+	 * Route transcript markdown through the shared renderer so summaries and tool outputs retain
+	 * lists, code fences, and links instead of flattening into raw text.
+	 */
+	private appendMarkdownSegment(
+		container: HTMLElement,
+		markdownText: string,
+		className: string,
+	): void {
+		if (!markdownText.trim()) {
+			return;
+		}
+
+		const segment = document.createElement('div');
+		segment.className = className;
+		container.appendChild(segment);
+
+		if (!this.markdownRendererService) {
+			segment.textContent = markdownText;
+			return;
+		}
+
+		const rendered = this.markdownRendererService.render(
+			new MarkdownString(markdownText),
+			{
+				markedOptions: {
+					breaks: true,
+					gfm: true,
+				},
+			},
+			segment,
+		);
+		this.renderedMarkdownDisposables.add(rendered);
 	}
 
 	private getToolIconClass(toolName: string): string {
@@ -1176,16 +1896,30 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (lower.includes('read') || lower.includes('Read')) {
 			return 'codicon-file';
 		}
-		if (lower.includes('edit') || lower.includes('Edit') || lower.includes('write') || lower.includes('Write')) {
+		if (
+			lower.includes('edit') ||
+			lower.includes('Edit') ||
+			lower.includes('write') ||
+			lower.includes('Write')
+		) {
 			return 'codicon-edit';
 		}
 		if (lower.includes('create') || lower.includes('Create')) {
 			return 'codicon-new-file';
 		}
-		if (lower.includes('run') || lower.includes('exec') || lower.includes('command') || lower.includes('terminal')) {
+		if (
+			lower.includes('run') ||
+			lower.includes('exec') ||
+			lower.includes('command') ||
+			lower.includes('terminal')
+		) {
 			return 'codicon-terminal';
 		}
-		if (lower.includes('search') || lower.includes('grep') || lower.includes('find')) {
+		if (
+			lower.includes('search') ||
+			lower.includes('grep') ||
+			lower.includes('find')
+		) {
 			return 'codicon-search';
 		}
 		if (lower.includes('completion') || lower.includes('attempt')) {
@@ -1198,27 +1932,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return 'codicon-list-tree';
 		}
 		return 'codicon-tools';
-	}
-
-	private renderToolResultStatusLine(toolName: string, success: boolean): HTMLElement {
-		const line = document.createElement('div');
-		line.className = 'vsclone-agent-trace-line';
-		line.classList.add('type-tool_result', success ? 'status-success' : 'status-error');
-		line.textContent = success
-			? localize('vsclone.thread.toolResult.success', 'Tool result: {0} (success)', toolName)
-			: localize('vsclone.thread.toolResult.failure', 'Tool result: {0} (failed)', toolName);
-		return line;
-	}
-
-	private renderAgentTraceBlock(type: string, message: string, status: string | undefined): HTMLElement {
-		const line = document.createElement('div');
-		line.className = 'vsclone-agent-trace-line';
-		line.classList.add(type ? `type-${type}` : 'type-unknown');
-		if (status) {
-			line.classList.add(`status-${status}`);
-		}
-		line.textContent = message || localize('vsclone.thread.trace.empty', '(trace event)');
-		return line;
 	}
 
 	/**
@@ -1241,11 +1954,35 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private getLanguageLabelFromFilename(filename: string): string {
 		const ext = filename.split('.').pop()?.toLowerCase() ?? '';
 		const languageMap: Record<string, string> = {
-			ts: 'TS', tsx: 'TSX', js: 'JS', jsx: 'JSX', css: 'CSS', scss: 'SCSS',
-			html: 'HTML', json: 'JSON', md: 'MD', py: 'PY', rs: 'RS', go: 'GO',
-			java: 'JAVA', c: 'C', cpp: 'C++', h: 'H', cs: 'C#', rb: 'RB',
-			yaml: 'YAML', yml: 'YAML', toml: 'TOML', xml: 'XML', svg: 'SVG',
-			sh: 'SH', bash: 'SH', zsh: 'SH', sql: 'SQL', vue: 'VUE', svelte: 'SVELTE',
+			ts: 'TS',
+			tsx: 'TSX',
+			js: 'JS',
+			jsx: 'JSX',
+			css: 'CSS',
+			scss: 'SCSS',
+			html: 'HTML',
+			json: 'JSON',
+			md: 'MD',
+			py: 'PY',
+			rs: 'RS',
+			go: 'GO',
+			java: 'JAVA',
+			c: 'C',
+			cpp: 'C++',
+			h: 'H',
+			cs: 'C#',
+			rb: 'RB',
+			yaml: 'YAML',
+			yml: 'YAML',
+			toml: 'TOML',
+			xml: 'XML',
+			svg: 'SVG',
+			sh: 'SH',
+			bash: 'SH',
+			zsh: 'SH',
+			sql: 'SQL',
+			vue: 'VUE',
+			svelte: 'SVELTE',
 		};
 		return languageMap[ext] ?? ext.toUpperCase();
 	}
@@ -1278,22 +2015,45 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			{ pattern: /\/\/.*$/gm, tokenClass: 'vsclone-token-comment' },
 			{ pattern: /\/\*[\s\S]*?\*\//g, tokenClass: 'vsclone-token-comment' },
 			{ pattern: /#.*$/gm, tokenClass: 'vsclone-token-comment' },
-			{ pattern: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, tokenClass: 'vsclone-token-string' },
-			{ pattern: /\b(?:import|export|from|const|let|var|function|return|if|else|for|while|class|extends|interface|type|enum|async|await|new|this|super|typeof|instanceof|in|of|try|catch|throw|finally|switch|case|default|break|continue|yield|do|void|delete|with|as|is|readonly|declare|abstract|implements|namespace|module|require|public|private|protected|static|get|set|constructor)\b/g, tokenClass: 'vsclone-token-keyword' },
-			{ pattern: /\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g, tokenClass: 'vsclone-token-number' },
-			{ pattern: /\b(?:true|false|null|undefined|NaN|Infinity)\b/g, tokenClass: 'vsclone-token-keyword' },
+			{
+				pattern: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g,
+				tokenClass: 'vsclone-token-string',
+			},
+			{
+				pattern:
+					/\b(?:import|export|from|const|let|var|function|return|if|else|for|while|class|extends|interface|type|enum|async|await|new|this|super|typeof|instanceof|in|of|try|catch|throw|finally|switch|case|default|break|continue|yield|do|void|delete|with|as|is|readonly|declare|abstract|implements|namespace|module|require|public|private|protected|static|get|set|constructor)\b/g,
+				tokenClass: 'vsclone-token-keyword',
+			},
+			{
+				pattern: /\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g,
+				tokenClass: 'vsclone-token-number',
+			},
+			{
+				pattern: /\b(?:true|false|null|undefined|NaN|Infinity)\b/g,
+				tokenClass: 'vsclone-token-keyword',
+			},
 			{ pattern: /[{}()[\];,.:]/g, tokenClass: 'vsclone-token-punctuation' },
 			{ pattern: /[+\-*/%=<>!&|^~?@]/g, tokenClass: 'vsclone-token-operator' },
 		];
 
 		// Build a combined regex that captures each token type
-		type TokenMatch = { index: number; length: number; text: string; tokenClass: string };
+		type TokenMatch = {
+			index: number;
+			length: number;
+			text: string;
+			tokenClass: string;
+		};
 		const matches: TokenMatch[] = [];
 		for (const rule of tokenRules) {
 			const regex = new RegExp(rule.pattern.source, rule.pattern.flags);
 			let match: RegExpExecArray | null;
 			while ((match = regex.exec(strippedCode)) !== null) {
-				matches.push({ index: match.index, length: match[0].length, text: match[0], tokenClass: rule.tokenClass });
+				matches.push({
+					index: match.index,
+					length: match[0].length,
+					text: match[0],
+					tokenClass: rule.tokenClass,
+				});
 			}
 		}
 
@@ -1312,7 +2072,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		let cursor = 0;
 		for (const m of filtered) {
 			if (m.index > cursor) {
-				container.appendChild(document.createTextNode(strippedCode.slice(cursor, m.index)));
+				container.appendChild(
+					document.createTextNode(strippedCode.slice(cursor, m.index)),
+				);
 			}
 			const tokenSpan = document.createElement('span');
 			tokenSpan.className = m.tokenClass;
@@ -1321,7 +2083,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			cursor = m.index + m.length;
 		}
 		if (cursor < strippedCode.length) {
-			container.appendChild(document.createTextNode(strippedCode.slice(cursor)));
+			container.appendChild(
+				document.createTextNode(strippedCode.slice(cursor)),
+			);
 		}
 
 		return container;
@@ -1346,8 +2110,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	 * both display and navigation. If the tool output predates that metadata, we skip line UI
 	 * instead of guessing and sending the user to the wrong place.
 	 */
-	private parseUnifiedDiffHunkHeader(line: string): IUnifiedDiffHunkHeader | undefined {
-		const match = /^@@\s*-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s*@@/.exec(line);
+	private parseUnifiedDiffHunkHeader(
+		line: string,
+	): IUnifiedDiffHunkHeader | undefined {
+		const match = /^@@\s*-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s*@@/.exec(
+			line,
+		);
 		if (!match) {
 			return undefined;
 		}
@@ -1365,25 +2133,37 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	 * visible rows back to the modified file. Removed rows intentionally point at the nearest
 	 * surviving modified line because that is where the user lands after the edit has applied.
 	 */
-	private buildRenderedDiffLines(diff: string): { readonly lines: readonly IRenderedToolDiffLine[]; readonly titleNavigation: IDiffLineNavigationState } {
+	private buildRenderedDiffLines(diff: string): {
+		readonly lines: readonly IRenderedToolDiffLine[];
+		readonly titleNavigation: IDiffLineNavigationState;
+	} {
 		const renderedLines: IRenderedToolDiffLine[] = [];
 		let originalLineNumber: number | undefined;
 		let modifiedLineNumber: number | undefined;
 		const titleNavigation: IDiffLineNavigationState = {};
 		const diffLines = diff.split('\n');
 
-		for (let sourceLineIndex = 0; sourceLineIndex < diffLines.length; sourceLineIndex++) {
+		for (
+			let sourceLineIndex = 0;
+			sourceLineIndex < diffLines.length;
+			sourceLineIndex++
+		) {
 			const rawLine = diffLines[sourceLineIndex];
 			if (rawLine.startsWith('@@')) {
 				const hunkHeader = this.parseUnifiedDiffHunkHeader(rawLine);
 				originalLineNumber = hunkHeader?.originalStartLineNumber;
 				modifiedLineNumber = hunkHeader?.modifiedStartLineNumber;
 				if (hunkHeader) {
-					titleNavigation.startLineNumber ??= hunkHeader.modifiedStartLineNumber;
-					const hunkEndLineNumber = hunkHeader.modifiedStartLineNumber + Math.max(1, hunkHeader.modifiedLineCount) - 1;
-					titleNavigation.endLineNumber = titleNavigation.endLineNumber !== undefined
-						? Math.max(titleNavigation.endLineNumber, hunkEndLineNumber)
-						: hunkEndLineNumber;
+					titleNavigation.startLineNumber ??=
+						hunkHeader.modifiedStartLineNumber;
+					const hunkEndLineNumber =
+						hunkHeader.modifiedStartLineNumber +
+						Math.max(1, hunkHeader.modifiedLineCount) -
+						1;
+					titleNavigation.endLineNumber =
+						titleNavigation.endLineNumber !== undefined
+							? Math.max(titleNavigation.endLineNumber, hunkEndLineNumber)
+							: hunkEndLineNumber;
 				}
 				renderedLines.push({
 					sourceLineIndex,
@@ -1403,11 +2183,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				const navigationLineNumber = modifiedLineNumber;
 				titleNavigation.startLineNumber ??= navigationLineNumber;
 				if (navigationLineNumber !== undefined) {
-					titleNavigation.endLineNumber = titleNavigation.endLineNumber !== undefined
-						? Math.max(titleNavigation.endLineNumber, navigationLineNumber)
-						: navigationLineNumber;
+					titleNavigation.endLineNumber =
+						titleNavigation.endLineNumber !== undefined
+							? Math.max(titleNavigation.endLineNumber, navigationLineNumber)
+							: navigationLineNumber;
 				}
-				renderedLines.push({ sourceLineIndex, rawText: rawLine, kind: 'added', navigationLineNumber });
+				renderedLines.push({
+					sourceLineIndex,
+					rawText: rawLine,
+					kind: 'added',
+					navigationLineNumber,
+				});
 				if (modifiedLineNumber !== undefined) {
 					modifiedLineNumber += 1;
 				}
@@ -1430,11 +2216,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			const navigationLineNumber = modifiedLineNumber;
 			titleNavigation.startLineNumber ??= navigationLineNumber;
 			if (navigationLineNumber !== undefined) {
-				titleNavigation.endLineNumber = titleNavigation.endLineNumber !== undefined
-					? Math.max(titleNavigation.endLineNumber, navigationLineNumber)
-					: navigationLineNumber;
+				titleNavigation.endLineNumber =
+					titleNavigation.endLineNumber !== undefined
+						? Math.max(titleNavigation.endLineNumber, navigationLineNumber)
+						: navigationLineNumber;
 			}
-			renderedLines.push({ sourceLineIndex, rawText: rawLine, kind: 'context', navigationLineNumber });
+			renderedLines.push({
+				sourceLineIndex,
+				rawText: rawLine,
+				kind: 'context',
+				navigationLineNumber,
+			});
 			if (originalLineNumber !== undefined) {
 				originalLineNumber += 1;
 			}
@@ -1452,7 +2244,16 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	 * renderer rehydrates a best-effort line mapping by matching the modified hunk text against
 	 * the current file contents.
 	 */
-	private async resolveLegacyDiffNavigation(fileUri: string, diff: string): Promise<{ readonly titleNavigation: IDiffLineNavigationState; readonly lineNumbers: Map<number, number> } | undefined> {
+	private async resolveLegacyDiffNavigation(
+		fileUri: string,
+		diff: string,
+	): Promise<
+		| {
+			readonly titleNavigation: IDiffLineNavigationState;
+			readonly lineNumbers: Map<number, number>;
+		}
+		| undefined
+	> {
 		const diffLines = diff.split('\n');
 		const legacyHunks = this.parseLegacyDiffHunks(diffLines);
 		if (legacyHunks.length === 0) {
@@ -1464,16 +2265,22 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 
-		const fileLines = splitLines(content).map(line => line.replace(/\r$/, ''));
+		const fileLines = splitLines(content).map((line) =>
+			line.replace(/\r$/, ''),
+		);
 		const lineNumbers = new Map<number, number>();
 		const titleNavigation: IDiffLineNavigationState = {};
 		let searchStartIndex = 0;
 
 		for (const hunk of legacyHunks) {
 			const modifiedLines = hunk.lines
-				.filter(line => !line.startsWith('-'))
-				.map(line => this.stripDiffLinePrefix(line));
-			const startIndex = this.findLegacyDiffStartIndex(fileLines, modifiedLines, searchStartIndex);
+				.filter((line) => !line.startsWith('-'))
+				.map((line) => this.stripDiffLinePrefix(line));
+			const startIndex = this.findLegacyDiffStartIndex(
+				fileLines,
+				modifiedLines,
+				searchStartIndex,
+			);
 			if (startIndex === undefined) {
 				continue;
 			}
@@ -1484,9 +2291,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				const rawLine = hunk.lines[index];
 				lineNumbers.set(hunk.lineIndexes[index], currentLineNumber);
 				if (!rawLine.startsWith('-')) {
-					titleNavigation.endLineNumber = titleNavigation.endLineNumber !== undefined
-						? Math.max(titleNavigation.endLineNumber, currentLineNumber)
-						: currentLineNumber;
+					titleNavigation.endLineNumber =
+						titleNavigation.endLineNumber !== undefined
+							? Math.max(titleNavigation.endLineNumber, currentLineNumber)
+							: currentLineNumber;
 					currentLineNumber += 1;
 				}
 			}
@@ -1494,14 +2302,19 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			searchStartIndex = Math.max(searchStartIndex, currentLineNumber - 1);
 		}
 
-		if (titleNavigation.startLineNumber !== undefined && titleNavigation.endLineNumber === undefined) {
+		if (
+			titleNavigation.startLineNumber !== undefined &&
+			titleNavigation.endLineNumber === undefined
+		) {
 			titleNavigation.endLineNumber = titleNavigation.startLineNumber;
 		}
 
 		return lineNumbers.size > 0 ? { titleNavigation, lineNumbers } : undefined;
 	}
 
-	private parseLegacyDiffHunks(diffLines: readonly string[]): readonly ILegacyDiffHunk[] {
+	private parseLegacyDiffHunks(
+		diffLines: readonly string[],
+	): readonly ILegacyDiffHunk[] {
 		const hunks: ILegacyDiffHunk[] = [];
 		let currentLineIndexes: number[] | undefined;
 		let currentLines: string[] | undefined;
@@ -1545,7 +2358,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return hunks;
 	}
 
-	private async readDiffTargetContents(resource: URI): Promise<string | undefined> {
+	private async readDiffTargetContents(
+		resource: URI,
+	): Promise<string | undefined> {
 		const modelService = this.modelService as IModelService | undefined;
 		const fileService = this.fileService as IFileService | undefined;
 		const openModel = modelService?.getModel(resource);
@@ -1565,13 +2380,27 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 	}
 
-	private findLegacyDiffStartIndex(fileLines: readonly string[], modifiedLines: readonly string[], searchStartIndex: number): number | undefined {
-		const exactMatch = this.findLegacyDiffStartIndexWithComparator(fileLines, modifiedLines, searchStartIndex, (left, right) => left === right);
+	private findLegacyDiffStartIndex(
+		fileLines: readonly string[],
+		modifiedLines: readonly string[],
+		searchStartIndex: number,
+	): number | undefined {
+		const exactMatch = this.findLegacyDiffStartIndexWithComparator(
+			fileLines,
+			modifiedLines,
+			searchStartIndex,
+			(left, right) => left === right,
+		);
 		if (exactMatch !== undefined) {
 			return exactMatch;
 		}
 
-		return this.findLegacyDiffStartIndexWithComparator(fileLines, modifiedLines, searchStartIndex, (left, right) => left.trim() === right.trim());
+		return this.findLegacyDiffStartIndexWithComparator(
+			fileLines,
+			modifiedLines,
+			searchStartIndex,
+			(left, right) => left.trim() === right.trim(),
+		);
 	}
 
 	private findLegacyDiffStartIndexWithComparator(
@@ -1584,10 +2413,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 
-		for (let blockLength = modifiedLines.length; blockLength >= 1; blockLength--) {
-			for (let offset = 0; offset <= modifiedLines.length - blockLength; offset++) {
+		for (
+			let blockLength = modifiedLines.length;
+			blockLength >= 1;
+			blockLength--
+		) {
+			for (
+				let offset = 0;
+				offset <= modifiedLines.length - blockLength;
+				offset++
+			) {
 				const block = modifiedLines.slice(offset, offset + blockLength);
-				const matchIndex = this.findContiguousLineBlock(fileLines, block, searchStartIndex, equals);
+				const matchIndex = this.findContiguousLineBlock(
+					fileLines,
+					block,
+					searchStartIndex,
+					equals,
+				);
 				if (matchIndex !== undefined) {
 					return Math.max(searchStartIndex, matchIndex - offset);
 				}
@@ -1607,7 +2449,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 
-		for (let index = searchStartIndex; index <= fileLines.length - block.length; index++) {
+		for (
+			let index = searchStartIndex;
+			index <= fileLines.length - block.length;
+			index++
+		) {
 			let matches = true;
 			for (let blockIndex = 0; blockIndex < block.length; blockIndex++) {
 				if (!equals(fileLines[index + blockIndex], block[blockIndex])) {
@@ -1624,42 +2470,77 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private stripDiffLinePrefix(line: string): string {
-		if ((line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---')) || line.startsWith(' ')) {
+		if (
+			(line.startsWith('+') && !line.startsWith('+++')) ||
+			(line.startsWith('-') && !line.startsWith('---')) ||
+			line.startsWith(' ')
+		) {
 			return line.slice(1);
 		}
 
 		return line;
 	}
 
-	private formatDiffLineLabel(navigation: IDiffLineNavigationState): string | undefined {
+	private formatDiffLineLabel(
+		navigation: IDiffLineNavigationState,
+	): string | undefined {
 		if (navigation.startLineNumber === undefined) {
 			return undefined;
 		}
 
-		const endLineNumber = navigation.endLineNumber ?? navigation.startLineNumber;
+		const endLineNumber =
+			navigation.endLineNumber ?? navigation.startLineNumber;
 		return endLineNumber > navigation.startLineNumber
-			? localize('vsclone.thread.toolDiff.lineRange', 'Ln {0}-{1}', navigation.startLineNumber.toString(), endLineNumber.toString())
-			: localize('vsclone.thread.toolDiff.lineNumber', 'Ln {0}', navigation.startLineNumber.toString());
+			? localize(
+				'vsclone.thread.toolDiff.lineRange',
+				'Ln {0}-{1}',
+				navigation.startLineNumber.toString(),
+				endLineNumber.toString(),
+			)
+			: localize(
+				'vsclone.thread.toolDiff.lineNumber',
+				'Ln {0}',
+				navigation.startLineNumber.toString(),
+			);
 	}
 
-	private openDiffTarget(fileUri: string, navigation: IDiffLineNavigationState): void {
+	private openDiffTarget(
+		fileUri: string,
+		navigation: IDiffLineNavigationState,
+	): void {
 		const resource = URI.parse(fileUri);
-		const sanitizedStartLineNumber = navigation.startLineNumber !== undefined ? Math.max(1, navigation.startLineNumber) : undefined;
-		const sanitizedEndLineNumber = navigation.endLineNumber !== undefined ? Math.max(sanitizedStartLineNumber ?? 1, navigation.endLineNumber) : sanitizedStartLineNumber;
-		this.editorService.openEditor({
-			resource,
-			options: sanitizedStartLineNumber ? {
-				selection: {
-					startLineNumber: sanitizedStartLineNumber,
-					startColumn: 1,
-					endLineNumber: sanitizedEndLineNumber ?? sanitizedStartLineNumber,
-					endColumn: 1,
-				},
-			} : undefined,
-		}).catch(() => { /* ignore */ });
+		const sanitizedStartLineNumber =
+			navigation.startLineNumber !== undefined
+				? Math.max(1, navigation.startLineNumber)
+				: undefined;
+		const sanitizedEndLineNumber =
+			navigation.endLineNumber !== undefined
+				? Math.max(sanitizedStartLineNumber ?? 1, navigation.endLineNumber)
+				: sanitizedStartLineNumber;
+		this.editorService
+			.openEditor({
+				resource,
+				options: sanitizedStartLineNumber
+					? {
+						selection: {
+							startLineNumber: sanitizedStartLineNumber,
+							startColumn: 1,
+							endLineNumber:
+								sanitizedEndLineNumber ?? sanitizedStartLineNumber,
+							endColumn: 1,
+						},
+					}
+					: undefined,
+			})
+			.catch(() => {
+				/* ignore */
+			});
 	}
 
-	private renderToolResultDiffCard(toolName: string, output: string): HTMLElement | undefined {
+	private renderToolResultDiffCard(
+		toolName: string,
+		output: string,
+	): HTMLElement | undefined {
 		const parsedDiff = parseToolResultDiff(output);
 		if (!parsedDiff) {
 			return undefined;
@@ -1672,11 +2553,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		titleBar.className = 'vsclone-tool-diff-title';
 
 		const filename = this.extractFilenameFromDiff(parsedDiff.diff);
-		const fileUri = parsedDiff.summary ? this.extractFileUriFromSummary(parsedDiff.summary) : undefined;
+		const fileUri = parsedDiff.summary
+			? this.extractFileUriFromSummary(parsedDiff.summary)
+			: undefined;
 		const renderedDiff = this.buildRenderedDiffLines(parsedDiff.diff);
-		const titleNavigation: IDiffLineNavigationState = { ...renderedDiff.titleNavigation };
+		const titleNavigation: IDiffLineNavigationState = {
+			...renderedDiff.titleNavigation,
+		};
 		let lineBadge: HTMLAnchorElement | HTMLSpanElement | undefined;
-		const renderedLineEntries: Array<{ readonly sourceLineIndex: number; readonly state: IDiffLineNavigationState; readonly line: HTMLElement; readonly gutter?: HTMLElement }> = [];
+		const renderedLineEntries: Array<{
+			readonly sourceLineIndex: number;
+			readonly state: IDiffLineNavigationState;
+			readonly line: HTMLElement;
+			readonly gutter?: HTMLElement;
+		}> = [];
 
 		if (filename) {
 			const langLabel = this.getLanguageLabelFromFilename(filename);
@@ -1688,9 +2578,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			const fileLabel = document.createElement('a');
 			fileLabel.className = 'vsclone-tool-diff-title-filename';
 			fileLabel.textContent = `${langLabel} ${filename}`;
-			fileLabel.title = titleNavigation.startLineNumber !== undefined
-				? localize('vsclone.thread.toolDiff.openAtLineTitle', 'Open {0} at line {1}', filename, titleNavigation.startLineNumber.toString())
-				: (fileUri ?? filename);
+			fileLabel.title =
+				titleNavigation.startLineNumber !== undefined
+					? localize(
+						'vsclone.thread.toolDiff.openAtLineTitle',
+						'Open {0} at line {1}',
+						filename,
+						titleNavigation.startLineNumber.toString(),
+					)
+					: (fileUri ?? filename);
 			if (fileUri) {
 				fileLabel.href = '#';
 				fileLabel.addEventListener('click', (e) => {
@@ -1706,9 +2602,16 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				anchorLineBadge.className = 'vsclone-tool-diff-title-line';
 				const lineLabel = this.formatDiffLineLabel(titleNavigation);
 				anchorLineBadge.hidden = lineLabel === undefined;
-				if (lineLabel !== undefined && titleNavigation.startLineNumber !== undefined) {
+				if (
+					lineLabel !== undefined &&
+					titleNavigation.startLineNumber !== undefined
+				) {
 					anchorLineBadge.textContent = lineLabel;
-					anchorLineBadge.title = localize('vsclone.thread.toolDiff.openLineTitle', 'Open line {0}', titleNavigation.startLineNumber.toString());
+					anchorLineBadge.title = localize(
+						'vsclone.thread.toolDiff.openLineTitle',
+						'Open line {0}',
+						titleNavigation.startLineNumber.toString(),
+					);
 				}
 				anchorLineBadge.href = '#';
 				anchorLineBadge.addEventListener('click', (e) => {
@@ -1724,49 +2627,82 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				titleBar.appendChild(lineBadge);
 			}
 
-			if (fileUri && titleNavigation.startLineNumber === undefined && /^@@\s*change\s+\d+\s*@@/m.test(parsedDiff.diff)) {
-				void this.resolveLegacyDiffNavigation(fileUri, parsedDiff.diff).then(resolvedNavigation => {
-					if (!resolvedNavigation) {
-						return;
-					}
-
-					titleNavigation.startLineNumber = resolvedNavigation.titleNavigation.startLineNumber;
-					titleNavigation.endLineNumber = resolvedNavigation.titleNavigation.endLineNumber;
-					if (titleNavigation.startLineNumber !== undefined) {
-						fileLabel.title = localize('vsclone.thread.toolDiff.openAtLineTitle', 'Open {0} at line {1}', filename, titleNavigation.startLineNumber.toString());
-						if (lineBadge) {
-							lineBadge.hidden = false;
-							lineBadge.textContent = this.formatDiffLineLabel(titleNavigation) ?? '';
-							lineBadge.title = localize('vsclone.thread.toolDiff.openLineTitle', 'Open line {0}', titleNavigation.startLineNumber.toString());
+			if (
+				fileUri &&
+				titleNavigation.startLineNumber === undefined &&
+				/^@@\s*change\s+\d+\s*@@/m.test(parsedDiff.diff)
+			) {
+				void this.resolveLegacyDiffNavigation(fileUri, parsedDiff.diff).then(
+					(resolvedNavigation) => {
+						if (!resolvedNavigation) {
+							return;
 						}
-					}
 
-					for (const entry of renderedLineEntries) {
-						const resolvedLineNumber = resolvedNavigation.lineNumbers.get(entry.sourceLineIndex);
-						if (resolvedLineNumber !== undefined) {
-							entry.state.startLineNumber = resolvedLineNumber;
-							entry.state.endLineNumber = resolvedLineNumber;
-							if (entry.gutter) {
-								entry.gutter.textContent = resolvedLineNumber.toString();
+						titleNavigation.startLineNumber =
+							resolvedNavigation.titleNavigation.startLineNumber;
+						titleNavigation.endLineNumber =
+							resolvedNavigation.titleNavigation.endLineNumber;
+						if (titleNavigation.startLineNumber !== undefined) {
+							fileLabel.title = localize(
+								'vsclone.thread.toolDiff.openAtLineTitle',
+								'Open {0} at line {1}',
+								filename,
+								titleNavigation.startLineNumber.toString(),
+							);
+							if (lineBadge) {
+								lineBadge.hidden = false;
+								lineBadge.textContent =
+									this.formatDiffLineLabel(titleNavigation) ?? '';
+								lineBadge.title = localize(
+									'vsclone.thread.toolDiff.openLineTitle',
+									'Open line {0}',
+									titleNavigation.startLineNumber.toString(),
+								);
 							}
-							entry.line.classList.add('clickable');
-							entry.line.title = localize('vsclone.thread.toolDiff.openChangedLineTitle', 'Open changed line {0}', resolvedLineNumber.toString());
 						}
-					}
-				});
+
+						for (const entry of renderedLineEntries) {
+							const resolvedLineNumber = resolvedNavigation.lineNumbers.get(
+								entry.sourceLineIndex,
+							);
+							if (resolvedLineNumber !== undefined) {
+								entry.state.startLineNumber = resolvedLineNumber;
+								entry.state.endLineNumber = resolvedLineNumber;
+								if (entry.gutter) {
+									entry.gutter.textContent = resolvedLineNumber.toString();
+								}
+								entry.line.classList.add('clickable');
+								entry.line.title = localize(
+									'vsclone.thread.toolDiff.openChangedLineTitle',
+									'Open changed line {0}',
+									resolvedLineNumber.toString(),
+								);
+							}
+						}
+					},
+				);
 			}
 		} else {
 			const label = document.createElement('span');
 			label.className = 'vsclone-tool-diff-title-filename';
 			switch (toolName) {
 				case 'edit_file':
-					label.textContent = localize('vsclone.thread.toolDiff.editedTitle', 'Applied file edits');
+					label.textContent = localize(
+						'vsclone.thread.toolDiff.editedTitle',
+						'Applied file edits',
+					);
 					break;
 				case 'create_file':
-					label.textContent = localize('vsclone.thread.toolDiff.createdTitle', 'Created file');
+					label.textContent = localize(
+						'vsclone.thread.toolDiff.createdTitle',
+						'Created file',
+					);
 					break;
 				default:
-					label.textContent = localize('vsclone.thread.toolDiff.genericTitle', 'Applied workspace change');
+					label.textContent = localize(
+						'vsclone.thread.toolDiff.genericTitle',
+						'Applied workspace change',
+					);
 					break;
 			}
 			titleBar.appendChild(label);
@@ -1783,7 +2719,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				startLineNumber: diffLine.navigationLineNumber,
 				endLineNumber: diffLine.navigationLineNumber,
 			};
-			if (diffLine.kind === 'added' || diffLine.kind === 'removed' || diffLine.kind === 'hunk' || diffLine.kind === 'file') {
+			if (
+				diffLine.kind === 'added' ||
+				diffLine.kind === 'removed' ||
+				diffLine.kind === 'hunk' ||
+				diffLine.kind === 'file'
+			) {
 				line.classList.add(diffLine.kind);
 			}
 
@@ -1791,7 +2732,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			if (diffLine.kind !== 'file' && diffLine.kind !== 'hunk') {
 				gutter = document.createElement('span');
 				gutter.className = 'vsclone-tool-diff-gutter';
-				gutter.textContent = lineNavigation.startLineNumber !== undefined ? lineNavigation.startLineNumber.toString() : '';
+				gutter.textContent =
+					lineNavigation.startLineNumber !== undefined
+						? lineNavigation.startLineNumber.toString()
+						: '';
 				line.appendChild(gutter);
 			}
 
@@ -1803,7 +2747,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			if (fileUri && diffLine.kind !== 'hunk' && diffLine.kind !== 'file') {
 				if (lineNavigation.startLineNumber !== undefined) {
 					line.classList.add('clickable');
-					line.title = localize('vsclone.thread.toolDiff.openChangedLineTitle', 'Open changed line {0}', lineNavigation.startLineNumber.toString());
+					line.title = localize(
+						'vsclone.thread.toolDiff.openChangedLineTitle',
+						'Open changed line {0}',
+						lineNavigation.startLineNumber.toString(),
+					);
 				}
 				line.addEventListener('click', () => {
 					if (lineNavigation.startLineNumber !== undefined) {
@@ -1811,7 +2759,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					}
 				});
 			}
-			renderedLineEntries.push({ sourceLineIndex: diffLine.sourceLineIndex, state: lineNavigation, line, gutter });
+			renderedLineEntries.push({
+				sourceLineIndex: diffLine.sourceLineIndex,
+				state: lineNavigation,
+				line,
+				gutter,
+			});
 
 			body.appendChild(line);
 		}
@@ -1819,36 +2772,63 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return card;
 	}
 
-	private async applyAssistantEdits(turn: IVSCloneChatHistoryTurn, button: HTMLButtonElement): Promise<void> {
+	private async applyAssistantEdits(
+		turn: IVSCloneChatHistoryTurn,
+		button: HTMLButtonElement,
+	): Promise<void> {
 		const responseText = turn.responsePlainText || turn.responseMarkdown;
 		if (!responseText) {
 			return;
 		}
 
-		const defaultButtonLabel = localize('vsclone.thread.assistant.apply', 'Apply Changes');
+		const defaultButtonLabel = localize(
+			'vsclone.thread.assistant.apply',
+			'Apply Changes',
+		);
 		button.disabled = true;
-		button.textContent = localize('vsclone.thread.assistant.apply.pending', 'Applying...');
+		button.textContent = localize(
+			'vsclone.thread.assistant.apply.pending',
+			'Applying...',
+		);
 
 		try {
-			const applyResult = await this.editApplicationService.applySearchReplaceBlocks(responseText);
+			const applyResult =
+				await this.editApplicationService.applySearchReplaceBlocks(
+					responseText,
+				);
 			if (applyResult.appliedEdits > 0) {
-				this.notificationService.info(localize(
-					'vsclone.thread.assistant.apply.success',
-					'Applied {0} edit(s) across {1} file(s).',
-					applyResult.appliedEdits,
-					applyResult.modifiedFiles.length,
-				));
+				this.notificationService.info(
+					localize(
+						'vsclone.thread.assistant.apply.success',
+						'Applied {0} edit(s) across {1} file(s).',
+						applyResult.appliedEdits,
+						applyResult.modifiedFiles.length,
+					),
+				);
 			} else {
-				const failureDetails = applyResult.failures[0] ?? localize('vsclone.thread.assistant.apply.noChanges.reason', 'No matching SEARCH block was found.');
-				this.notificationService.warn(localize(
-					'vsclone.thread.assistant.apply.noChanges',
-					'No changes were applied. {0}',
-					failureDetails,
-				));
+				const failureDetails =
+					applyResult.failures[0] ??
+					localize(
+						'vsclone.thread.assistant.apply.noChanges.reason',
+						'No matching SEARCH block was found.',
+					);
+				this.notificationService.warn(
+					localize(
+						'vsclone.thread.assistant.apply.noChanges',
+						'No changes were applied. {0}',
+						failureDetails,
+					),
+				);
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.notificationService.error(localize('vsclone.thread.assistant.apply.error', 'Failed to apply suggested changes: {0}', message));
+			this.notificationService.error(
+				localize(
+					'vsclone.thread.assistant.apply.error',
+					'Failed to apply suggested changes: {0}',
+					message,
+				),
+			);
 		} finally {
 			button.disabled = false;
 			button.textContent = defaultButtonLabel;
@@ -1862,7 +2842,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		// Force auto height first so scrollHeight reflects the current value after deletions.
 		this.composerInput.style.height = '0px';
-		const nextHeight = Math.max(40, Math.min(132, this.composerInput.scrollHeight));
+		const nextHeight = Math.max(
+			40,
+			Math.min(132, this.composerInput.scrollHeight),
+		);
 		this.composerInput.style.height = `${nextHeight}px`;
 	}
 
@@ -1872,26 +2855,44 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const hasText = this.composerInput.value.trim().length > 0;
-		const threadBusy = this.activeThreadId ? this.isThreadBusy(this.activeThreadId) : false;
+		const threadBusy = this.activeThreadId
+			? this.isThreadBusy(this.activeThreadId)
+			: false;
 		const composerBusy = threadBusy || this.submittingPrompt;
-		const hasSelectedModel = !!this.getCurrentComposerModelSelection(this.activeThreadId);
+		const hasSelectedModel = !!this.getCurrentComposerModelSelection(
+			this.activeThreadId,
+		);
 		const disabled = !hasText || composerBusy || !hasSelectedModel;
 		this.composerSendButton.disabled = disabled;
 		this.composerInput.disabled = composerBusy;
 		if (this.reasoningEffortSelect) {
-			const reasoningControlHidden = this.reasoningEffortContainer?.classList.contains('hidden') ?? true;
-			this.reasoningEffortSelect.disabled = composerBusy || reasoningControlHidden;
+			const reasoningControlHidden =
+				this.reasoningEffortContainer?.classList.contains('hidden') ?? true;
+			this.reasoningEffortSelect.disabled =
+				composerBusy || reasoningControlHidden;
 		}
 		this.refreshPlanModeControl(composerBusy);
 		if (this.composerInput.disabled) {
-			this.composerInput.placeholder = localize('vsclone.composer.waiting', 'Waiting for response...');
+			this.composerInput.placeholder = localize(
+				'vsclone.composer.waiting',
+				'Waiting for response...',
+			);
 		} else if (!hasSelectedModel) {
 			// VSClone always needs a concrete provider/model pair before it can send a prompt.
-			this.composerInput.placeholder = localize('vsclone.composer.signInRequired', 'Sign in to a provider and choose a model to start chatting...');
+			this.composerInput.placeholder = localize(
+				'vsclone.composer.signInRequired',
+				'Sign in to a provider and choose a model to start chatting...',
+			);
 		} else if (this.getCurrentComposerMode() === 'plan') {
-			this.composerInput.placeholder = localize('vsclone.composer.planPlaceholder', 'Describe what you want to plan...');
+			this.composerInput.placeholder = localize(
+				'vsclone.composer.planPlaceholder',
+				'Describe what you want to plan...',
+			);
 		} else {
-			this.composerInput.placeholder = localize('vsclone.composer.placeholder', 'Ask a follow-up question...');
+			this.composerInput.placeholder = localize(
+				'vsclone.composer.placeholder',
+				'Ask a follow-up question...',
+			);
 		}
 	}
 
@@ -1909,7 +2910,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private isThreadBusy(threadId: string): boolean {
 		const latestTurn = this.historyService.getTurns(threadId).at(-1);
-		return latestTurn?.status === 'pending' || latestTurn?.status === 'streaming';
+		return (
+			latestTurn?.status === 'pending' || latestTurn?.status === 'streaming'
+		);
 	}
 
 	private applyRailLayout(): void {
@@ -1927,34 +2930,54 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private installRailResizer(handle: HTMLElement): void {
-		this._register(addDisposableListener(handle, EventType.MOUSE_DOWN, (startEvent: MouseEvent) => {
-			if (this.isCompactLayout) {
-				return;
-			}
+		this._register(
+			addDisposableListener(
+				handle,
+				EventType.MOUSE_DOWN,
+				(startEvent: MouseEvent) => {
+					if (this.isCompactLayout) {
+						return;
+					}
 
-			startEvent.preventDefault();
-			startEvent.stopPropagation();
+					startEvent.preventDefault();
+					startEvent.stopPropagation();
 
-			const startWidth = this.railWidth;
-			const startX = startEvent.clientX;
-			const targetWindow = getWindow(handle);
+					const startWidth = this.railWidth;
+					const startX = startEvent.clientX;
+					const targetWindow = getWindow(handle);
 
-			const moveDisposable = addDisposableListener(targetWindow.document, EventType.MOUSE_MOVE, (moveEvent: MouseEvent) => {
-				const delta = moveEvent.clientX - startX;
-				const width = Math.min(railMaxWidth, Math.max(railMinWidth, startWidth + delta));
-				if (width === this.railWidth) {
-					return;
-				}
-				this.railWidth = width;
-				this.applyRailLayout();
-			});
+					const moveDisposable = addDisposableListener(
+						targetWindow.document,
+						EventType.MOUSE_MOVE,
+						(moveEvent: MouseEvent) => {
+							const delta = moveEvent.clientX - startX;
+							const width = Math.min(
+								railMaxWidth,
+								Math.max(railMinWidth, startWidth + delta),
+							);
+							if (width === this.railWidth) {
+								return;
+							}
+							this.railWidth = width;
+							this.applyRailLayout();
+						},
+					);
 
-			const upDisposable = addDisposableListener(targetWindow.document, EventType.MOUSE_UP, () => {
-				moveDisposable.dispose();
-				upDisposable.dispose();
-				void this.configurationService.updateValue(railWidthSetting, this.railWidth);
-			});
-		}));
+					const upDisposable = addDisposableListener(
+						targetWindow.document,
+						EventType.MOUSE_UP,
+						() => {
+							moveDisposable.dispose();
+							upDisposable.dispose();
+							void this.configurationService.updateValue(
+								railWidthSetting,
+								this.railWidth,
+							);
+						},
+					);
+				},
+			),
+		);
 	}
 
 	private refreshModelControls(): void {
@@ -1968,11 +2991,18 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private refreshPlanModeControl(composerBusy?: boolean): void {
-		if (!this.planModeContainer || !this.planModePlanButton || !this.planModeActButton) {
+		if (
+			!this.planModeContainer ||
+			!this.planModePlanButton ||
+			!this.planModeActButton
+		) {
 			return;
 		}
 
-		const busy = composerBusy ?? ((this.activeThreadId ? this.isThreadBusy(this.activeThreadId) : false) || this.submittingPrompt);
+		const busy =
+			composerBusy ??
+			((this.activeThreadId ? this.isThreadBusy(this.activeThreadId) : false) ||
+				this.submittingPrompt);
 		const mode = this.getCurrentComposerMode();
 		this.planModeContainer.classList.toggle('plan-active', mode === 'plan');
 		this.planModeContainer.classList.toggle('act-active', mode === 'act');
@@ -1980,13 +3010,25 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.planModeActButton.classList.toggle('active', mode === 'act');
 		this.planModePlanButton.disabled = busy;
 		this.planModeActButton.disabled = busy;
-		this.planModePlanButton.setAttribute('aria-pressed', mode === 'plan' ? 'true' : 'false');
-		this.planModeActButton.setAttribute('aria-pressed', mode === 'act' ? 'true' : 'false');
+		this.planModePlanButton.setAttribute(
+			'aria-pressed',
+			mode === 'plan' ? 'true' : 'false',
+		);
+		this.planModeActButton.setAttribute(
+			'aria-pressed',
+			mode === 'act' ? 'true' : 'false',
+		);
 	}
 
 	private async updatePlanModeSelection(mode: VSCloneChatMode): Promise<void> {
-		const threadBusy = this.activeThreadId ? this.isThreadBusy(this.activeThreadId) : false;
-		if (threadBusy || this.submittingPrompt || this.getCurrentComposerMode() === mode) {
+		const threadBusy = this.activeThreadId
+			? this.isThreadBusy(this.activeThreadId)
+			: false;
+		if (
+			threadBusy ||
+			this.submittingPrompt ||
+			this.getCurrentComposerMode() === mode
+		) {
 			return;
 		}
 
@@ -1995,26 +3037,45 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.updateComposerState();
 	}
 
-	private getCurrentComposerModelSelection(threadId: string | undefined): IVSCloneModelSelection | undefined {
-		const selectedModel = this.modelSelectionService.getCurrentSelectionForThread(threadId ?? '', 'chat');
+	private getCurrentComposerModelSelection(
+		threadId: string | undefined,
+	): IVSCloneModelSelection | undefined {
+		const selectedModel =
+			this.modelSelectionService.getCurrentSelectionForThread(
+				threadId ?? '',
+				'chat',
+			);
 		if (!selectedModel) {
 			return undefined;
 		}
 
-		const selectedModelDescriptor = this.modelCatalogService.getModel(selectedModel.modelIdentifier);
-		const supportedReasoningLevels = selectedModelDescriptor?.reasoningEffortLevels;
+		const selectedModelDescriptor = this.modelCatalogService.getModel(
+			selectedModel.modelIdentifier,
+		);
+		const supportedReasoningLevels =
+			selectedModelDescriptor?.reasoningEffortLevels;
 		if (!supportedReasoningLevels || supportedReasoningLevels.length === 0) {
-			return { ...selectedModel, threadId: threadId ?? undefined, reasoningEffort: undefined };
+			return {
+				...selectedModel,
+				threadId: threadId ?? undefined,
+				reasoningEffort: undefined,
+			};
 		}
 
 		// Read directly from the visible select so a quick Send click right after changing the dropdown
 		// uses the new value even before storage/event propagation catches up.
-		const selectedFromControl = this.reasoningEffortSelect?.value as VSCloneReasoningEffortLevel | undefined;
-		const resolvedReasoningEffort = selectedFromControl && supportedReasoningLevels.includes(selectedFromControl)
-			? selectedFromControl
-			: selectedModel.reasoningEffort && supportedReasoningLevels.includes(selectedModel.reasoningEffort)
-				? selectedModel.reasoningEffort
-				: selectedModelDescriptor.defaultReasoningEffort ?? supportedReasoningLevels[0];
+		const selectedFromControl = this.reasoningEffortSelect?.value as
+			| VSCloneReasoningEffortLevel
+			| undefined;
+		const resolvedReasoningEffort =
+			selectedFromControl &&
+				supportedReasoningLevels.includes(selectedFromControl)
+				? selectedFromControl
+				: selectedModel.reasoningEffort &&
+					supportedReasoningLevels.includes(selectedModel.reasoningEffort)
+					? selectedModel.reasoningEffort
+					: (selectedModelDescriptor.defaultReasoningEffort ??
+						supportedReasoningLevels[0]);
 
 		return {
 			...selectedModel,
@@ -2028,22 +3089,36 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
-		const selectedModel = this.modelSelectionService.getCurrentSelectionForThread(this.activeThreadId ?? '', 'chat');
-		const selectedModelDescriptor = selectedModel ? this.modelCatalogService.getModel(selectedModel.modelIdentifier) : undefined;
-		const supportedReasoningLevels = selectedModelDescriptor?.reasoningEffortLevels;
-		if (!selectedModel || !supportedReasoningLevels || supportedReasoningLevels.length === 0) {
+		const selectedModel =
+			this.modelSelectionService.getCurrentSelectionForThread(
+				this.activeThreadId ?? '',
+				'chat',
+			);
+		const selectedModelDescriptor = selectedModel
+			? this.modelCatalogService.getModel(selectedModel.modelIdentifier)
+			: undefined;
+		const supportedReasoningLevels =
+			selectedModelDescriptor?.reasoningEffortLevels;
+		if (
+			!selectedModel ||
+			!supportedReasoningLevels ||
+			supportedReasoningLevels.length === 0
+		) {
 			this.reasoningEffortContainer.classList.add('hidden');
 			this.reasoningEffortSelect.replaceChildren();
 			this.updateComposerState();
 			return;
 		}
 
-		const selectedReasoningEffort = selectedModel.reasoningEffort && supportedReasoningLevels.includes(selectedModel.reasoningEffort)
-			? selectedModel.reasoningEffort
-			: selectedModelDescriptor.defaultReasoningEffort ?? supportedReasoningLevels[0];
+		const selectedReasoningEffort =
+			selectedModel.reasoningEffort &&
+				supportedReasoningLevels.includes(selectedModel.reasoningEffort)
+				? selectedModel.reasoningEffort
+				: (selectedModelDescriptor.defaultReasoningEffort ??
+					supportedReasoningLevels[0]);
 
 		this.reasoningEffortSelect.replaceChildren(
-			...supportedReasoningLevels.map(level => {
+			...supportedReasoningLevels.map((level) => {
 				const option = document.createElement('option');
 				option.value = level;
 				option.textContent = this.toReasoningEffortLabel(level);
@@ -2060,43 +3135,76 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
-		const selectedModel = this.modelSelectionService.getCurrentSelectionForThread(this.activeThreadId ?? '', 'chat');
-		const selectedModelDescriptor = selectedModel ? this.modelCatalogService.getModel(selectedModel.modelIdentifier) : undefined;
-		const supportedReasoningLevels = selectedModelDescriptor?.reasoningEffortLevels;
-		if (!selectedModel || !supportedReasoningLevels || supportedReasoningLevels.length === 0) {
+		const selectedModel =
+			this.modelSelectionService.getCurrentSelectionForThread(
+				this.activeThreadId ?? '',
+				'chat',
+			);
+		const selectedModelDescriptor = selectedModel
+			? this.modelCatalogService.getModel(selectedModel.modelIdentifier)
+			: undefined;
+		const supportedReasoningLevels =
+			selectedModelDescriptor?.reasoningEffortLevels;
+		if (
+			!selectedModel ||
+			!supportedReasoningLevels ||
+			supportedReasoningLevels.length === 0
+		) {
 			return;
 		}
 
-		const nextReasoningEffort = this.reasoningEffortSelect.value as VSCloneReasoningEffortLevel;
-		if (!supportedReasoningLevels.includes(nextReasoningEffort) || selectedModel.reasoningEffort === nextReasoningEffort) {
+		const nextReasoningEffort = this.reasoningEffortSelect
+			.value as VSCloneReasoningEffortLevel;
+		if (
+			!supportedReasoningLevels.includes(nextReasoningEffort) ||
+			selectedModel.reasoningEffort === nextReasoningEffort
+		) {
 			return;
 		}
 
-		await this.modelSelectionService.setSelectionForThread(this.activeThreadId ?? '', {
-			...selectedModel,
-			threadId: this.activeThreadId,
-			location: 'chat',
-			reasoningEffort: nextReasoningEffort,
-			selectedAt: Date.now(),
-		});
+		await this.modelSelectionService.setSelectionForThread(
+			this.activeThreadId ?? '',
+			{
+				...selectedModel,
+				threadId: this.activeThreadId,
+				location: 'chat',
+				reasoningEffort: nextReasoningEffort,
+				selectedAt: Date.now(),
+			},
+		);
 	}
 
 	private toReasoningEffortLabel(level: VSCloneReasoningEffortLevel): string {
 		switch (level) {
-			case 'xhigh': return localize('vsclone.composer.reasoningEffort.xhigh', 'Extra High');
-			case 'max': return localize('vsclone.composer.reasoningEffort.max', 'Max');
-			case 'high': return localize('vsclone.composer.reasoningEffort.high', 'High');
-			case 'medium': return localize('vsclone.composer.reasoningEffort.medium', 'Medium');
-			case 'standard': return localize('vsclone.composer.reasoningEffort.standard', 'Standard');
-			case 'low': return localize('vsclone.composer.reasoningEffort.low', 'Low');
-			case 'minimal': return localize('vsclone.composer.reasoningEffort.minimal', 'Minimal');
-			case 'lite': return localize('vsclone.composer.reasoningEffort.lite', 'Lite');
-			case 'none': return localize('vsclone.composer.reasoningEffort.none', 'None');
+			case 'xhigh':
+				return localize('vsclone.composer.reasoningEffort.xhigh', 'Extra High');
+			case 'max':
+				return localize('vsclone.composer.reasoningEffort.max', 'Max');
+			case 'high':
+				return localize('vsclone.composer.reasoningEffort.high', 'High');
+			case 'medium':
+				return localize('vsclone.composer.reasoningEffort.medium', 'Medium');
+			case 'standard':
+				return localize(
+					'vsclone.composer.reasoningEffort.standard',
+					'Standard',
+				);
+			case 'low':
+				return localize('vsclone.composer.reasoningEffort.low', 'Low');
+			case 'minimal':
+				return localize('vsclone.composer.reasoningEffort.minimal', 'Minimal');
+			case 'lite':
+				return localize('vsclone.composer.reasoningEffort.lite', 'Lite');
+			case 'none':
+				return localize('vsclone.composer.reasoningEffort.none', 'None');
 		}
 	}
 
-	private getLatestTurn(threadId?: string): IVSCloneChatHistoryTurn | undefined {
-		const candidateThreadId = threadId ?? this.activeThreadId ?? this.rail.getSelectedThread();
+	private getLatestTurn(
+		threadId?: string,
+	): IVSCloneChatHistoryTurn | undefined {
+		const candidateThreadId =
+			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread();
 		if (!candidateThreadId) {
 			return undefined;
 		}
@@ -2104,16 +3212,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return turns.at(-1);
 	}
 
-	private resolveThreadById(threadId: string): IVSCloneChatHistoryThread | undefined {
+	private resolveThreadById(
+		threadId: string,
+	): IVSCloneChatHistoryThread | undefined {
 		const cached = this.threadsById.get(threadId);
 		if (cached) {
 			return cached;
 		}
 
-		return this.historyService.getThreads({ includeArchived: true }).find(thread => thread.threadId === threadId);
+		return this.historyService
+			.getThreads({ includeArchived: true })
+			.find((thread) => thread.threadId === threadId);
 	}
 
-	private getModelSwitcherContext(): { threadId: string; location: IVSCloneChatLocation } {
+	private getModelSwitcherContext(): {
+		threadId: string;
+		location: IVSCloneChatLocation;
+	} {
 		return {
 			threadId: this.activeThreadId ?? '',
 			location: 'chat',
