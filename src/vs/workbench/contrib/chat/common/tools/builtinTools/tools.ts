@@ -11,6 +11,20 @@ import { ConfirmationTool, ConfirmationToolData, ConfirmationToolWithOptionsData
 import { EditTool, EditToolData } from './editFileTool.js';
 import { createManageTodoListToolData, ManageTodoListTool } from './manageTodoListTool.js';
 import { RunSubagentTool } from './runSubagentTool.js';
+import {
+	CreateDirectoryTool,
+	CreateDirectoryToolData,
+	CreateFileTool,
+	CreateFileToolData,
+	FileSearchTool,
+	FileSearchToolData,
+	ListDirectoryTool,
+	ListDirectoryToolData,
+	ReadFileTool,
+	ReadFileToolData,
+	TextSearchTool,
+	TextSearchToolData,
+} from './workspaceTools.js';
 
 export class BuiltinToolsContribution extends Disposable implements IWorkbenchContribution {
 
@@ -24,6 +38,31 @@ export class BuiltinToolsContribution extends Disposable implements IWorkbenchCo
 
 		const editTool = instantiationService.createInstance(EditTool);
 		this._register(toolsService.registerTool(EditToolData, editTool));
+		this._register(toolsService.editToolSet.addTool(EditToolData));
+
+		const readFileTool = instantiationService.createInstance(ReadFileTool);
+		this._register(toolsService.registerTool(ReadFileToolData, readFileTool));
+		this._register(toolsService.readToolSet.addTool(ReadFileToolData));
+
+		const listDirectoryTool = instantiationService.createInstance(ListDirectoryTool);
+		this._register(toolsService.registerTool(ListDirectoryToolData, listDirectoryTool));
+		this._register(toolsService.readToolSet.addTool(ListDirectoryToolData));
+
+		const fileSearchTool = instantiationService.createInstance(FileSearchTool);
+		this._register(toolsService.registerTool(FileSearchToolData, fileSearchTool));
+		this._register(toolsService.searchToolSet.addTool(FileSearchToolData));
+
+		const textSearchTool = instantiationService.createInstance(TextSearchTool);
+		this._register(toolsService.registerTool(TextSearchToolData, textSearchTool));
+		this._register(toolsService.searchToolSet.addTool(TextSearchToolData));
+
+		const createFileTool = instantiationService.createInstance(CreateFileTool);
+		this._register(toolsService.registerTool(CreateFileToolData, createFileTool));
+		this._register(toolsService.editToolSet.addTool(CreateFileToolData));
+
+		const createDirectoryTool = instantiationService.createInstance(CreateDirectoryTool);
+		this._register(toolsService.registerTool(CreateDirectoryToolData, createDirectoryTool));
+		this._register(toolsService.editToolSet.addTool(CreateDirectoryToolData));
 
 		const todoToolData = createManageTodoListToolData();
 		const manageTodoListTool = this._register(instantiationService.createInstance(ManageTodoListTool));
