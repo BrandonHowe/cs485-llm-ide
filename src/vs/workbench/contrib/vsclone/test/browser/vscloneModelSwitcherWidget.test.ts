@@ -12,7 +12,7 @@ import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderP
 import { VSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { TestVSCloneOAuthService } from '../common/vscloneTestOAuthService.js';
-import { TestVSCloneUnifiedChatBackendService } from '../common/backend/vscloneTestUnifiedChatBackendService.js';
+import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
 
 suite('VSCloneModelSwitcherWidget', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();

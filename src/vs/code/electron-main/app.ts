@@ -137,8 +137,8 @@ import { VSCloneChatApiChannel } from '../../workbench/contrib/vsclone/electron-
 import { VSCLONE_CHAT_API_CHANNEL_NAME } from '../../workbench/contrib/vsclone/common/vscloneChatApiIpc.js';
 // eslint-disable-next-line local/code-import-patterns -- Inline completion requests also need a main-process fetch path to avoid renderer CORS restrictions.
 import { VSCloneCompletionChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneCompletionChannel.js';
-// eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main via the VSClone completion IPC contract.
-import { VSCLONE_COMPLETION_CHANNEL_NAME } from '../../workbench/contrib/vsclone/common/vscloneCompletionApiIpc.js';
+// eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main via the VSClone completion IPC contract and lives next to the backend transport contract.
+import { VSCLONE_COMPLETION_CHANNEL_NAME } from '../../workbench/contrib/vsclone/common/backend/vscloneCompletionApiIpc.js';
 // eslint-disable-next-line local/code-import-patterns -- Main process must host the loopback listener used by VSClone OAuth.
 import { VSCloneOAuthLoopbackChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneOAuthLoopbackChannel.js';
 // eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main via the VSClone OAuth IPC contract.
