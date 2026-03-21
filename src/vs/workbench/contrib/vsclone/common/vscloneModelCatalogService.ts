@@ -77,6 +77,9 @@ export function isVSCloneReasoningEffortLevel(value: string): value is VSCloneRe
 const modelDefinitionsByProvider: Record<VSCloneModelVendor, readonly IModelDefinition[]> = {
 	openai: [
 		{ vendor: 'openai', modelId: 'gpt-5.3-codex', modelName: 'GPT-5.3-Codex', reasoningEffortLevels: ['xhigh', 'high', 'medium', 'low'], defaultReasoningEffort: 'medium' },
+		// Keep the picker catalog explicit so newly shipped GPT variants can be surfaced without
+		// changing the rest of the selection pipeline.
+		{ vendor: 'openai', modelId: 'gpt-5.4', modelName: 'GPT-5.4', reasoningEffortLevels: ['high', 'medium', 'low'], defaultReasoningEffort: 'medium' },
 		{ vendor: 'openai', modelId: 'gpt-5.3-codex-spark', modelName: 'GPT-5.3-Codex-Spark', reasoningEffortLevels: ['standard', 'lite'], defaultReasoningEffort: 'standard' },
 		{ vendor: 'openai', modelId: 'gpt-5.2-codex', modelName: 'GPT-5.2-Codex', reasoningEffortLevels: ['high', 'medium'], defaultReasoningEffort: 'medium' },
 		{ vendor: 'openai', modelId: 'gpt-5.1-codex', modelName: 'GPT-5.1-Codex', reasoningEffortLevels: ['high', 'medium'], defaultReasoningEffort: 'medium' },
@@ -85,8 +88,10 @@ const modelDefinitionsByProvider: Record<VSCloneModelVendor, readonly IModelDefi
 		{ vendor: 'openai', modelId: 'gpt-5-nano', modelName: 'GPT-5 Nano', reasoningEffortLevels: ['high', 'low'], defaultReasoningEffort: 'high' },
 	],
 	anthropic: [
-		{ vendor: 'anthropic', modelId: 'claude-opus-4.5', modelName: 'Claude Opus 4.5', reasoningEffortLevels: ['max', 'high', 'standard'], defaultReasoningEffort: 'high' },
-		{ vendor: 'anthropic', modelId: 'claude-sonnet-4.5', modelName: 'Claude Sonnet 4.5', reasoningEffortLevels: ['max', 'high', 'medium'], defaultReasoningEffort: 'high' },
+		// These entries intentionally track the marketed picker labels while the adapter resolves the
+		// concrete provider-facing version aliases separately.
+		{ vendor: 'anthropic', modelId: 'claude-opus-4.6', modelName: 'Claude Opus 4.6', reasoningEffortLevels: ['max', 'high', 'standard'], defaultReasoningEffort: 'high' },
+		{ vendor: 'anthropic', modelId: 'claude-sonnet-4.6', modelName: 'Claude Sonnet 4.6', reasoningEffortLevels: ['max', 'high', 'medium'], defaultReasoningEffort: 'high' },
 		{ vendor: 'anthropic', modelId: 'claude-sonnet-4.0', modelName: 'Claude Sonnet 4.0', reasoningEffortLevels: ['high', 'low'], defaultReasoningEffort: 'high' },
 	],
 	google: [

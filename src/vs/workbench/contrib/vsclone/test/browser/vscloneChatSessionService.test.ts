@@ -6,11 +6,8 @@
 import assert from 'assert';
 import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
-import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { IChatService } from '../../../chat/common/chatService/chatService.js';
 import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopOptions, IVSCloneAgentLoopService } from '../../browser/vscloneAgentLoopService.js';
 import { VSCloneChatSessionService } from '../../browser/vscloneChatSessionService.js';
 import { IVSCloneContextGatheringService } from '../../browser/vscloneContextGatheringService.js';
@@ -23,7 +20,6 @@ import {
 } from '../../common/backend/vscloneChatHistoryService.js';
 import { IVSClonePromptAssemblyService } from '../../common/vsclonePromptAssemblyService.js';
 import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
-import { VSCloneUseVSCodeChatBackendSetting } from '../../common/vscloneChatSettings.js';
 
 class TestHistoryService implements IVSCloneChatHistoryService {
 	declare readonly _serviceBrand: undefined;
@@ -45,13 +41,22 @@ class TestAgentLoopService implements IVSCloneAgentLoopService {
 	declare readonly _serviceBrand: undefined;
 	lastRunOptions: IVSCloneAgentLoopOptions | undefined;
 	cancelCalls = 0;
+	private lastRunResolver: (() => void) | undefined;
 
 	runAgentLoop(options: IVSCloneAgentLoopOptions): IVSCloneAgentLoopHandle {
 		this.lastRunOptions = options;
+		const done = new Promise<void>(resolve => {
+			this.lastRunResolver = resolve;
+		});
 		return {
-			done: Promise.resolve(),
+			done,
 			cancel: () => { this.cancelCalls += 1; },
 		};
+	}
+
+	completeLastRun(): void {
+		this.lastRunResolver?.();
+		this.lastRunResolver = undefined;
 	}
 }
 
@@ -142,7 +147,7 @@ function createPromptAssemblyService(): IVSClonePromptAssemblyService {
 suite('VSCloneChatSessionService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('routes to OAuth-backed API mode even when legacy mock transport setting is true', async () => {
+	test('routes prompts through the VSClone API when a model is selected', async () => {
 		const testDisposables = store.add(new DisposableStore());
 		const historyService = new TestHistoryService();
 		historyService.turnsByThread.set('thread-1', [createTurn('thread-1')]);
@@ -150,26 +155,10 @@ suite('VSCloneChatSessionService', () => {
 		const agentLoopService = new TestAgentLoopService();
 		const selectionService = new TestSelectionService();
 		await selectionService.setSelectionForThread('thread-1', createModelSelection());
-		const configService = new TestConfigurationService({
-			[VSCloneUseVSCodeChatBackendSetting]: false,
-			// This old setting remains in user configs; routing must now ignore it.
-			'vsclone.chat.useMockProviderTransport': true,
-		});
-
-		const chatService = {
-			_serviceBrand: undefined,
-			isEnabled: () => false,
-			getOrRestoreSession: async () => undefined,
-			startSession: () => ({ object: { sessionResource: URI.parse('vsclone://chat/fallback') }, dispose: () => undefined }),
-			sendRequest: async () => { throw new Error('unused in this test'); },
-			cancelCurrentRequestForSession: (_sessionResource: URI) => undefined,
-		} as unknown as IChatService;
 
 		const service = testDisposables.add(new VSCloneChatSessionService(
-			chatService,
 			historyService,
 			selectionService,
-			configService,
 			new NullLogService(),
 			agentLoopService,
 			createContextGatheringService(),
@@ -192,29 +181,18 @@ suite('VSCloneChatSessionService', () => {
 			{ role: 'assistant', content: 'Existing response' },
 		]);
 		assert.strictEqual(historyService.updates.length, 0);
+		agentLoopService.completeLastRun();
 	});
 
-	test('rejects direct API sends when no model is selected', async () => {
+	test('rejects sends when no model is selected', async () => {
 		const testDisposables = store.add(new DisposableStore());
 		const historyService = new TestHistoryService();
 		const agentLoopService = new TestAgentLoopService();
 		const selectionService = new TestSelectionService();
-		const configService = new TestConfigurationService({ [VSCloneUseVSCodeChatBackendSetting]: false });
-
-		const chatService = {
-			_serviceBrand: undefined,
-			isEnabled: () => false,
-			getOrRestoreSession: async () => undefined,
-			startSession: () => ({ object: { sessionResource: URI.parse('vsclone://chat/fallback') }, dispose: () => undefined }),
-			sendRequest: async () => { throw new Error('unused in this test'); },
-			cancelCurrentRequestForSession: (_sessionResource: URI) => undefined,
-		} as unknown as IChatService;
 
 		const service = testDisposables.add(new VSCloneChatSessionService(
-			chatService,
 			historyService,
 			selectionService,
-			configService,
 			new NullLogService(),
 			agentLoopService,
 			createContextGatheringService(),
@@ -229,50 +207,31 @@ suite('VSCloneChatSessionService', () => {
 		assert.strictEqual(historyService.updates[1]?.responsePlainTextReplace, 'Sign in to a provider and choose a model before sending messages through VSClone.');
 	});
 
-	test('cancelThread forwards cancellation to VS Code chat backend regardless of legacy mock flag', () => {
+	test('cancelThread cancels active API requests for the matching thread', async () => {
 		const testDisposables = store.add(new DisposableStore());
 		const historyService = new TestHistoryService();
-		historyService.threads.push({
-			threadId: 'thread-backend',
-			sessionResource: 'vsclone://chat/session-backend',
-			title: 'Backend thread',
-			createdAt: 1,
-			updatedAt: 1,
-			status: 'active',
-			archived: false,
-			turnCount: 1,
-			lastTurnPreview: 'preview',
-		});
-
-		const cancelledSessions: URI[] = [];
-		const chatService = {
-			_serviceBrand: undefined,
-			isEnabled: () => true,
-			getOrRestoreSession: async () => undefined,
-			startSession: () => ({ object: { sessionResource: URI.parse('vsclone://chat/fallback') }, dispose: () => undefined }),
-			sendRequest: async () => { throw new Error('unused in this test'); },
-			cancelCurrentRequestForSession: (sessionResource: URI) => {
-				cancelledSessions.push(sessionResource);
-			},
-		} as unknown as IChatService;
+		const selectionService = new TestSelectionService();
+		const agentLoopService = new TestAgentLoopService();
+		await selectionService.setSelectionForThread('thread-api', createModelSelection());
 
 		const service = testDisposables.add(new VSCloneChatSessionService(
-			chatService,
 			historyService,
-			new TestSelectionService(),
-			new TestConfigurationService({
-				[VSCloneUseVSCodeChatBackendSetting]: true,
-				'vsclone.chat.useMockProviderTransport': true,
-			}),
+			selectionService,
 			new NullLogService(),
-			new TestAgentLoopService(),
+			agentLoopService,
 			createContextGatheringService(),
 			createPromptAssemblyService(),
 		));
 
-		service.cancelThread('thread-backend');
+		await service.submitPrompt('Cancel this request', {
+			threadId: 'thread-api',
+			sessionResource: 'vsclone://api/thread-api',
+			modelSelection: createModelSelection(),
+		});
 
-		assert.strictEqual(cancelledSessions.length, 1);
-		assert.strictEqual(cancelledSessions[0].toString(), 'vsclone://chat/session-backend');
+		service.cancelThread('thread-api');
+
+		assert.strictEqual(agentLoopService.cancelCalls, 1);
+		agentLoopService.completeLastRun();
 	});
 });

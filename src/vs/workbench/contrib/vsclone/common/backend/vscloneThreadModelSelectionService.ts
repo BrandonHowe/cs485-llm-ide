@@ -25,6 +25,10 @@ export type {
 	IVSCloneModelSelectionChangeEvent,
 };
 
+const preferredEditorInlineFallbackIdentifier = 'openai/gpt-5.3-codex-spark';
+const legacyEditorInlineFallbackIdentifier = 'openai/gpt-5.3-codex';
+const preferredEditorInlineReasoningEffort: VSCloneReasoningEffortLevel = 'lite';
+
 function cloneSelectionState(state: IVSCloneUnifiedChatSelectionState): IVSCloneUnifiedChatSelectionState {
 	return {
 		selectedByThread: Object.fromEntries(Object.entries(state.selectedByThread).map(([threadId, selection]) => [threadId, { ...selection, threadId: undefined }])),
@@ -231,7 +235,7 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 
 		for (const location of allVSCloneChatLocations) {
 			const existing = nextState.selectedByLocation[location];
-			if (existing && this.isSelectableModelIdentifier(existing.modelIdentifier)) {
+			if (existing && this.isSelectableModelIdentifier(existing.modelIdentifier) && !this.shouldReplaceLocationSelection(location, existing.modelIdentifier, existing.reasoningEffort)) {
 				continue;
 			}
 
@@ -338,13 +342,58 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 		return model.defaultReasoningEffort ?? model.reasoningEffortLevels[0];
 	}
 
+	/**
+	 * Inline completions optimize for time-to-first-token, so the Spark fallback stays on the
+	 * lightest supported reasoning level even though the catalog default is tuned for chat quality.
+	 */
+	private getPreferredReasoningEffortForLocation(location: IVSCloneChatLocation, model: IVSCloneModelCatalogModelDescriptor): VSCloneReasoningEffortLevel | undefined {
+		if (location === 'editorInline' && model.identifier === preferredEditorInlineFallbackIdentifier && model.reasoningEffortLevels?.includes(preferredEditorInlineReasoningEffort)) {
+			return preferredEditorInlineReasoningEffort;
+		}
+
+		return model.defaultReasoningEffort ?? model.reasoningEffortLevels?.[0];
+	}
+
 	private isSelectableModelIdentifier(identifier: string): boolean {
 		const model = this.catalogService.getModel(identifier);
 		return !!model && model.isSelectable;
 	}
 
+	/**
+	 * Inline completions are latency-sensitive enough that the lighter Spark model is a better
+	 * default. This also migrates the previous editor-inline fallback so existing users pick up the
+	 * faster path without needing a dedicated UI control for inline model selection.
+	 */
+	private shouldReplaceLocationSelection(location: IVSCloneChatLocation, modelIdentifier: string, reasoningEffort: VSCloneReasoningEffortLevel | undefined): boolean {
+		if (location !== 'editorInline' || !this.isSelectableModelIdentifier(preferredEditorInlineFallbackIdentifier)) {
+			return false;
+		}
+
+		if (modelIdentifier === legacyEditorInlineFallbackIdentifier) {
+			return true;
+		}
+
+		if (modelIdentifier !== preferredEditorInlineFallbackIdentifier) {
+			return false;
+		}
+
+		const preferredInlineModel = this.catalogService.getModel(preferredEditorInlineFallbackIdentifier);
+		return !!preferredInlineModel && reasoningEffort !== this.getPreferredReasoningEffortForLocation(location, preferredInlineModel);
+	}
+
+	private getPreferredFallbackModel(location: IVSCloneChatLocation): IVSCloneModelCatalogModelDescriptor | undefined {
+		if (location === 'editorInline') {
+			const preferredInlineModel = this.catalogService.getModel(preferredEditorInlineFallbackIdentifier);
+			if (preferredInlineModel?.isSelectable) {
+				return preferredInlineModel;
+			}
+		}
+
+		return this.catalogService.getSelectableModels()[0];
+	}
+
 	private getFallbackSelection(location: IVSCloneChatLocation, threadId?: string): IVSCloneModelSelection | undefined {
-		const fallback = this.catalogService.getSelectableModels()[0];
+		const fallback = this.getPreferredFallbackModel(location);
 		if (!fallback) {
 			return undefined;
 		}
@@ -356,7 +405,7 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 			vendor: fallback.vendor,
 			modelId: fallback.modelId,
 			modelName: fallback.modelName,
-			reasoningEffort: fallback.defaultReasoningEffort ?? fallback.reasoningEffortLevels?.[0],
+			reasoningEffort: this.getPreferredReasoningEffortForLocation(location, fallback),
 			selectedAt: Date.now(),
 		};
 	}

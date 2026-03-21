@@ -13,7 +13,7 @@ suite('VSCloneToolResultDiff', () => {
 	test('formats and parses structured diff payloads', () => {
 		const output = formatToolResultWithDiff(
 			'Applied 1 edit.',
-			['--- a/src/app.ts', '+++ b/src/app.ts', '@@ change 1 @@', '-const x = 1;', '+const x = 2;'].join('\n'),
+			['--- a/src/app.ts', '+++ b/src/app.ts', '@@ -12,1 +12,1 @@', '-const x = 1;', '+const x = 2;'].join('\n'),
 		);
 
 		const parsed = parseToolResultDiff(output);

@@ -1,0 +1,122 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { IVSCloneCompletionPromptEnvelope } from '../vscloneCompletionTypes.js';
+import { IVSCloneModelSelection } from '../vscloneModelSelectionTypes.js';
+import { getVendorAdapter, resolveVSCloneApiModelId, toOpenAIReasoningEffort } from '../vscloneChatApiAdapters.js';
+import { defaultOAuthProviderConfig, VSCloneModelVendor } from '../vscloneOAuthTypes.js';
+
+export type VSCloneCompletionEndpointMode = 'sse';
+
+export interface IVSCloneCompletionAdapterRequest {
+	readonly url: string;
+	readonly body: Record<string, unknown>;
+}
+
+export interface IVSCloneCompletionParsedText {
+	readonly type: 'delta' | 'done' | 'error';
+	readonly text?: string;
+	readonly message?: string;
+}
+
+/**
+ * Inline completion keeps a dedicated transport path, but it reuses the existing SSE line parsers
+ * because the provider stream envelopes are identical to chat for the same vendor endpoints.
+ */
+export function parseText(vendor: VSCloneModelVendor, payload: string, currentEventType: string | undefined): IVSCloneCompletionParsedText | undefined {
+	return getVendorAdapter(vendor).parseLine(payload, currentEventType);
+}
+
+/**
+ * Dedicated completion requests all use SSE today so the transport can return as soon as the
+ * provider stops. Keeping the mode explicit leaves room for future native non-streaming FIM APIs.
+ */
+export function getEndpointMode(_selection: IVSCloneModelSelection): VSCloneCompletionEndpointMode {
+	return 'sse';
+}
+
+export function buildRequest(envelope: IVSCloneCompletionPromptEnvelope, selection: IVSCloneModelSelection): IVSCloneCompletionAdapterRequest {
+	switch (selection.vendor) {
+		case 'openai':
+			return buildOpenAIRequest(envelope, selection);
+		case 'anthropic':
+			return buildAnthropicRequest(envelope, selection);
+		case 'google':
+			return buildGoogleRequest(envelope, selection);
+	}
+}
+
+/**
+ * GPT-5/Codex-style Responses models reject temperature on this path, so we only forward it for
+ * OpenAI families that still expose classical sampling controls.
+ */
+function supportsOpenAICompletionTemperature(selection: IVSCloneModelSelection): boolean {
+	return !selection.modelId.startsWith('gpt-5');
+}
+
+function buildOpenAIRequest(envelope: IVSCloneCompletionPromptEnvelope, selection: IVSCloneModelSelection): IVSCloneCompletionAdapterRequest {
+	const apiModelId = resolveVSCloneApiModelId('openai', selection.modelId);
+	const body: Record<string, unknown> = {
+		model: apiModelId,
+		instructions: envelope.systemMessage,
+		store: false,
+		input: [{ role: 'user', content: envelope.promptText }],
+		stream: true,
+	};
+
+	if (supportsOpenAICompletionTemperature(selection) && envelope.temperature !== undefined) {
+		body.temperature = envelope.temperature;
+	}
+	if (selection.reasoningEffort) {
+		body.reasoning = { effort: toOpenAIReasoningEffort(selection.reasoningEffort) };
+	}
+
+	return {
+		url: defaultOAuthProviderConfig.openai.apiEndpoint,
+		body,
+	};
+}
+
+function buildAnthropicRequest(envelope: IVSCloneCompletionPromptEnvelope, selection: IVSCloneModelSelection): IVSCloneCompletionAdapterRequest {
+	const apiModelId = resolveVSCloneApiModelId('anthropic', selection.modelId);
+
+	return {
+		url: defaultOAuthProviderConfig.anthropic.apiEndpoint,
+		body: {
+			model: apiModelId,
+			system: envelope.systemMessage,
+			messages: [{ role: 'user', content: envelope.promptText }],
+			max_tokens: envelope.maxTokens,
+			temperature: envelope.temperature,
+			stop_sequences: envelope.stopTokens,
+			stream: true,
+		},
+	};
+}
+
+function buildGoogleRequest(envelope: IVSCloneCompletionPromptEnvelope, selection: IVSCloneModelSelection): IVSCloneCompletionAdapterRequest {
+	const apiModelId = resolveVSCloneApiModelId('google', selection.modelId);
+	const baseUrl = defaultOAuthProviderConfig.google.apiEndpoint;
+	const url = baseUrl.replace('/v1internal:', `/v1internal/models/${apiModelId}:`);
+
+	return {
+		url,
+		body: {
+			// Gemini's internal endpoint does not expose a dedicated system field, so we keep the
+			// instruction at the top of the first user turn to preserve transport compatibility.
+			contents: [{
+				role: 'user',
+				parts: [{
+					text: `${envelope.systemMessage}\n\n${envelope.promptText}`,
+				}],
+			}],
+			generationConfig: {
+				maxOutputTokens: envelope.maxTokens,
+				temperature: envelope.temperature,
+				stopSequences: [...envelope.stopTokens],
+			},
+		},
+	};
+}

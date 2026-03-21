@@ -38,7 +38,9 @@ suite('VSCloneModelCatalogService', () => {
 		assert.ok(openAIModel);
 		assert.deepStrictEqual(openAIModel?.reasoningEffortLevels, ['xhigh', 'high', 'medium', 'low']);
 		assert.strictEqual(openAIModel?.defaultReasoningEffort, 'medium');
-		assert.ok(state.models.some(model => model.identifier === 'anthropic/claude-opus-4.5'));
+		// Assert the picker exposes the upgraded model IDs so older 4.5 entries do not regress back in.
+		assert.ok(state.models.some(model => model.identifier === 'openai/gpt-5.4'));
+		assert.ok(state.models.some(model => model.identifier === 'anthropic/claude-opus-4.6'));
 	});
 
 	test('provider status projects requires_sign_in when enabled but signed out', async () => {

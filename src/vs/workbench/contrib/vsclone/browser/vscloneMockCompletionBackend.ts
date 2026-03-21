@@ -6,7 +6,7 @@
 import { timeout } from '../../../../base/common/async.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { isCancellationError } from '../../../../base/common/errors.js';
-import { IVSCloneCompletionBackend, IVSCloneCompletionRequest } from '../common/vscloneCompletionBackend.js';
+import { IVSCloneCompletionBackend, IVSCloneCompletionRequest } from '../common/vscloneCompletionTypes.js';
 
 const defaultMockDelayMs = 200;
 

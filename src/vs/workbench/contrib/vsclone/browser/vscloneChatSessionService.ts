@@ -4,16 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
-import { ChatSendResult, IChatService } from '../../chat/common/chatService/chatService.js';
-import { ChatAgentLocation } from '../../chat/common/constants.js';
 import { deriveThreadId } from '../common/backend/vscloneChatHistoryModel.js';
 import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
-import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { IVSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
@@ -43,38 +38,20 @@ function createApiSessionResource(sessionId: string): string {
 	return `vsclone://api/${encodeURIComponent(sessionId)}`;
 }
 
-function parseSessionResource(value: string | undefined): URI | undefined {
-	if (!value) {
-		return undefined;
-	}
-
-	try {
-		return URI.parse(value);
-	} catch {
-		return undefined;
-	}
-}
-
 export class VSCloneChatSessionService extends Disposable implements IVSCloneChatSessionService {
 	declare readonly _serviceBrand: undefined;
 
 	private readonly apiRequestHandles = new Map<string, IVSCloneAgentLoopHandle>();
 
 	constructor(
-		@IChatService private readonly chatService: IChatService,
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
 		@IVSCloneThreadModelSelectionService private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
-		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
 		@IVSCloneAgentLoopService private readonly agentLoopService: IVSCloneAgentLoopService,
 		@IVSCloneContextGatheringService private readonly contextGatheringService: IVSCloneContextGatheringService,
 		@IVSClonePromptAssemblyService private readonly promptAssemblyService: IVSClonePromptAssemblyService,
 	) {
 		super();
-	}
-
-	private get useVSCodeChatBackend(): boolean {
-		return this.configurationService.getValue<boolean>(VSCloneUseVSCodeChatBackendSetting) ?? false;
 	}
 
 	async submitPrompt(promptText: string, options: IVSCloneChatSubmitOptions = {}): Promise<IVSCloneChatSubmitResult | undefined> {
@@ -86,97 +63,20 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		await this.modelSelectionService.initialize();
 		const baseSelection = options.modelSelection ?? this.modelSelectionService.getCurrentSelectionForThread(options.threadId ?? '', 'chat');
 		const apiVendor = this.getApiVendor(baseSelection);
-		if (!this.useVSCodeChatBackend) {
-			if (!apiVendor || !baseSelection) {
-				return this.rejectMissingApiSelection(trimmedPrompt, options, baseSelection);
-			}
-			return this.submitApiPrompt(trimmedPrompt, options, apiVendor, baseSelection);
-		}
-
-		if (!this.chatService.isEnabled(ChatAgentLocation.Chat)) {
-			if (apiVendor && baseSelection) {
-				return this.submitApiPrompt(trimmedPrompt, options, apiVendor, baseSelection);
-			}
+		// VSClone now owns chat transport entirely, so every send must resolve to a concrete
+		// provider/model pair instead of falling back to an implicit transport.
+		if (!apiVendor || !baseSelection) {
 			return this.rejectMissingApiSelection(trimmedPrompt, options, baseSelection);
 		}
-
-		const preferredResource = parseSessionResource(options.sessionResource);
-		let activeResource: URI | undefined;
-
-		try {
-			if (preferredResource) {
-				const restored = await this.chatService.getOrRestoreSession(preferredResource);
-				if (restored) {
-					activeResource = restored.object.sessionResource;
-					restored.dispose();
-				}
-			}
-
-			if (!activeResource) {
-				const started = this.chatService.startSession(ChatAgentLocation.Chat);
-				activeResource = started.object.sessionResource;
-				started.dispose();
-			}
-
-			const sessionResource = activeResource.toString();
-			const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
-			const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
-			const resolvedSelection = await this.ensureThreadSelectionBinding(threadId, baseSelection);
-			const sendResult = await this.chatService.sendRequest(activeResource, trimmedPrompt, { location: ChatAgentLocation.Chat });
-
-			if (ChatSendResult.isRejected(sendResult)) {
-				this.injectRejectedTurn({
-					threadId,
-					sessionResource,
-					promptText: trimmedPrompt,
-					reason: sendResult.reason,
-					modelSelection: resolvedSelection,
-				});
-				return {
-					threadId,
-					sessionResource,
-				};
-			}
-
-			if (ChatSendResult.isQueued(sendResult)) {
-				void sendResult.deferred.then(result => {
-					if (ChatSendResult.isRejected(result)) {
-						this.injectRejectedTurn({
-							threadId,
-							sessionResource,
-							promptText: trimmedPrompt,
-							reason: result.reason,
-							modelSelection: resolvedSelection,
-						});
-					}
-				});
-			}
-
-			return {
-				threadId,
-				sessionResource,
-			};
-		} catch (error) {
-			this.logService.warn('VSClone chat send failed, retrying with the direct VSClone API backend when possible', error);
-			if (apiVendor && baseSelection) {
-				return this.submitApiPrompt(trimmedPrompt, options, apiVendor, baseSelection);
-			}
-			return undefined;
-		}
+		return this.submitApiPrompt(trimmedPrompt, options, apiVendor, baseSelection);
 	}
 
 	cancelThread(threadId: string): void {
-		if (this.useVSCodeChatBackend) {
-			const thread = this.historyService.getThreads({ includeArchived: true }).find(candidate => candidate.threadId === threadId);
-			const sessionResource = parseSessionResource(thread?.sessionResource);
-			if (sessionResource) {
-				this.chatService.cancelCurrentRequestForSession(sessionResource);
-			}
-		}
-
-		// Cancel active API request handles for this thread
+		// Handles are keyed as `${threadId}:api:${timestamp}`, so matching on the explicit delimiter
+		// avoids cancelling similarly prefixed thread ids such as `thread-1` and `thread-10`.
+		const threadHandlePrefix = `${threadId}:`;
 		for (const [turnId, handle] of [...this.apiRequestHandles]) {
-			if (turnId.startsWith(threadId)) {
+			if (turnId.startsWith(threadHandlePrefix)) {
 				handle.cancel();
 				this.apiRequestHandles.delete(turnId);
 			}

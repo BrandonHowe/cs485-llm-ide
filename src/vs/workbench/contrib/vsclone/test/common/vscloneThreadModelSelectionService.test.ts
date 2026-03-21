@@ -11,7 +11,7 @@ import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderP
 import { IVSCloneModelSelection, VSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { TestVSCloneOAuthService } from './vscloneTestOAuthService.js';
-import { TestVSCloneUnifiedChatBackendService } from './vscloneTestUnifiedChatBackendService.js';
+import { TestVSCloneUnifiedChatBackendService } from './backend/vscloneTestUnifiedChatBackendService.js';
 
 suite('VSCloneThreadModelSelectionService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -77,6 +77,15 @@ suite('VSCloneThreadModelSelectionService', () => {
 		assert.strictEqual(current?.modelIdentifier, model.identifier);
 	});
 
+	test('prefers codex spark for editor-inline fallback selection', async () => {
+		const { selectionService } = await createHarness();
+
+		const current = selectionService.getCurrentSelectionForThread('', 'editorInline');
+		assert.ok(current);
+		assert.strictEqual(current?.modelIdentifier, 'openai/gpt-5.3-codex-spark');
+		assert.strictEqual(current?.reasoningEffort, 'lite');
+	});
+
 	test('recent model identifiers dedupe and preserve recency', async () => {
 		const { catalogService, selectionService } = await createHarness();
 		const models = catalogService.getSelectableModels();
@@ -109,6 +118,58 @@ suite('VSCloneThreadModelSelectionService', () => {
 		const next = selectionService.getCurrentSelectionForThread('thread-1', 'chat');
 		assert.ok(next);
 		assert.notStrictEqual(next?.modelIdentifier, googleModel.identifier);
+	});
+
+	test('migrates the legacy editor-inline fallback to codex spark on restore', async () => {
+		const { selectionService, backendService, catalogService } = await createHarness();
+		await backendService.replaceSelectionState({
+			selectedByThread: {},
+			selectedByLocation: {
+				editorInline: {
+					location: 'editorInline',
+					modelIdentifier: 'openai/gpt-5.3-codex',
+					vendor: 'openai',
+					modelId: 'gpt-5.3-codex',
+					modelName: 'GPT-5.3-Codex',
+					reasoningEffort: 'medium',
+					selectedAt: Date.now() - 1_000,
+				},
+			},
+			recentModelIdentifiers: ['openai/gpt-5.3-codex'],
+		});
+
+		await catalogService.refreshCatalog();
+		await waitForCatalogToSettle(catalogService);
+		const current = selectionService.getCurrentSelectionForThread('', 'editorInline');
+		assert.ok(current);
+		assert.strictEqual(current?.modelIdentifier, 'openai/gpt-5.3-codex-spark');
+		assert.strictEqual(current?.reasoningEffort, 'lite');
+	});
+
+	test('reconciles stored editor-inline spark selections to lite reasoning on restore', async () => {
+		const { selectionService, backendService, catalogService } = await createHarness();
+		await backendService.replaceSelectionState({
+			selectedByThread: {},
+			selectedByLocation: {
+				editorInline: {
+					location: 'editorInline',
+					modelIdentifier: 'openai/gpt-5.3-codex-spark',
+					vendor: 'openai',
+					modelId: 'gpt-5.3-codex-spark',
+					modelName: 'GPT-5.3-Codex-Spark',
+					reasoningEffort: 'standard',
+					selectedAt: Date.now() - 1_000,
+				},
+			},
+			recentModelIdentifiers: ['openai/gpt-5.3-codex-spark'],
+		});
+
+		await catalogService.refreshCatalog();
+		await waitForCatalogToSettle(catalogService);
+		const current = selectionService.getCurrentSelectionForThread('', 'editorInline');
+		assert.ok(current);
+		assert.strictEqual(current?.modelIdentifier, 'openai/gpt-5.3-codex-spark');
+		assert.strictEqual(current?.reasoningEffort, 'lite');
 	});
 
 	test('reset clears explicit thread selection and falls back', async () => {

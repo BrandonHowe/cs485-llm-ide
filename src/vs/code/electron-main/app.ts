@@ -135,6 +135,10 @@ import ErrorTelemetry from '../../platform/telemetry/electron-main/errorTelemetr
 import { VSCloneChatApiChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneChatApiChannel.js';
 // eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main and is defined next to the VSClone IPC contract.
 import { VSCLONE_CHAT_API_CHANNEL_NAME } from '../../workbench/contrib/vsclone/common/vscloneChatApiIpc.js';
+// eslint-disable-next-line local/code-import-patterns -- Inline completion requests also need a main-process fetch path to avoid renderer CORS restrictions.
+import { VSCloneCompletionChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneCompletionChannel.js';
+// eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main via the VSClone completion IPC contract.
+import { VSCLONE_COMPLETION_CHANNEL_NAME } from '../../workbench/contrib/vsclone/common/vscloneCompletionApiIpc.js';
 // eslint-disable-next-line local/code-import-patterns -- Main process must host the loopback listener used by VSClone OAuth.
 import { VSCloneOAuthLoopbackChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneOAuthLoopbackChannel.js';
 // eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main via the VSClone OAuth IPC contract.
@@ -1276,6 +1280,10 @@ export class CodeApplication extends Disposable {
 		// VSClone chat API (main-process fetch path to avoid renderer CORS constraints)
 		const vscloneChatApiChannel = disposables.add(new VSCloneChatApiChannel(this.logService));
 		mainProcessElectronServer.registerChannel(VSCLONE_CHAT_API_CHANNEL_NAME, vscloneChatApiChannel);
+
+		// VSClone inline completion API (separate transport so editor suggestions stay decoupled from chat history semantics)
+		const vscloneCompletionChannel = disposables.add(new VSCloneCompletionChannel(this.logService));
+		mainProcessElectronServer.registerChannel(VSCLONE_COMPLETION_CHANNEL_NAME, vscloneCompletionChannel);
 
 		// VSClone OAuth loopback callback listener (serves a completion page on localhost and forwards code/state)
 		const vscloneOAuthLoopbackChannel = disposables.add(new VSCloneOAuthLoopbackChannel(this.logService));

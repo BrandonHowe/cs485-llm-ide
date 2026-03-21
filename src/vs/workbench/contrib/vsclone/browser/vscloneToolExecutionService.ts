@@ -476,7 +476,8 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 
 	/**
 	 * The preview only includes mutated hunks so transcript diffs stay compact enough to read
-	 * while still exposing exactly what was replaced.
+	 * while still exposing exactly what was replaced. We emit unified hunk headers with the
+	 * modified start line so the chat transcript can navigate back to the applied location.
 	 */
 	private buildEditFileDiffPreview(rawPath: string, originalContent: string, edits: readonly IVSCloneResolvedContentEdit[]): string {
 		const displayPath = toDiffDisplayPath(rawPath);
@@ -486,18 +487,23 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		];
 
 		const ordered = [...edits].sort((left, right) => left.startOffset - right.startOffset);
-		for (let index = 0; index < ordered.length; index++) {
-			const edit = ordered[index];
+		let modifiedLineDelta = 0;
+		for (const edit of ordered) {
 			const before = originalContent.slice(edit.startOffset, edit.endOffset);
 			const beforeLines = splitLinesForDiff(before);
 			const afterLines = splitLinesForDiff(edit.replaceText);
-			lines.push(`@@ change ${index + 1} @@`);
+			const originalStart = positionAtOffset(originalContent, edit.startOffset);
+			const originalLineCount = countDiffHunkLines(before);
+			const modifiedLineCount = countDiffHunkLines(edit.replaceText);
+			const modifiedStartLineNumber = Math.max(1, originalStart.lineNumber + modifiedLineDelta);
+			lines.push(`@@ -${originalStart.lineNumber},${originalLineCount} +${modifiedStartLineNumber},${modifiedLineCount} @@`);
 			for (const line of beforeLines) {
 				lines.push(`-${line}`);
 			}
 			for (const line of afterLines) {
 				lines.push(`+${line}`);
 			}
+			modifiedLineDelta += modifiedLineCount - originalLineCount;
 		}
 
 		return finalizeDiffPreview(lines);
@@ -595,6 +601,17 @@ function toDiffDisplayPath(value: string): string {
 		return 'unknown-path';
 	}
 	return normalized.startsWith('/') ? normalized.slice(1) : normalized;
+}
+
+/**
+ * Unified hunk counts use 0 for empty replacements, but blank lines still count as a single line.
+ */
+function countDiffHunkLines(value: string): number {
+	if (value.length === 0) {
+		return 0;
+	}
+
+	return splitLinesForDiff(value).length;
 }
 
 function finalizeDiffPreview(lines: readonly string[]): string {

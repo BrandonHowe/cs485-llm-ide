@@ -10,6 +10,7 @@ import { Action } from '../../../../base/common/actions.js';
 import { fromNow } from '../../../../base/common/date.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { splitLines } from '../../../../base/common/strings.js';
 import { localize } from '../../../../nls.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -20,11 +21,14 @@ import { IInstantiationService } from '../../../../platform/instantiation/common
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { URI } from '../../../../base/common/uri.js';
+import { IModelService } from '../../../../editor/common/services/model.js';
 import { IVSCloneChatHistoryQuery, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
-import { VSCloneUseVSCodeChatBackendSetting } from '../common/vscloneChatSettings.js';
 import { IVSCloneModelCatalogService, type VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
 import { IVSCloneChatLocation, IVSCloneThreadModelSelectionService, type IVSCloneModelSelection } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { parseToolCalls } from '../common/vscloneToolCallParser.js';
@@ -66,6 +70,30 @@ interface IParsedAgentTraceBlock {
 	readonly rawXml: string;
 	readonly startOffset: number;
 	readonly endOffset: number;
+}
+
+interface IUnifiedDiffHunkHeader {
+	readonly originalStartLineNumber: number;
+	readonly originalLineCount: number;
+	readonly modifiedStartLineNumber: number;
+	readonly modifiedLineCount: number;
+}
+
+interface IRenderedToolDiffLine {
+	readonly sourceLineIndex: number;
+	readonly rawText: string;
+	readonly kind: 'file' | 'hunk' | 'context' | 'added' | 'removed';
+	readonly navigationLineNumber?: number;
+}
+
+interface IDiffLineNavigationState {
+	startLineNumber?: number;
+	endLineNumber?: number;
+}
+
+interface ILegacyDiffHunk {
+	readonly lineIndexes: readonly number[];
+	readonly lines: readonly string[];
 }
 
 function parseToolResultBlocks(text: string): readonly IParsedToolResultBlock[] {
@@ -162,6 +190,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IClipboardService private readonly clipboardService: IClipboardService,
 		@IVSCloneEditApplicationService private readonly editApplicationService: IVSCloneEditApplicationService,
 		@INotificationService private readonly notificationService: INotificationService,
+		@IEditorService private readonly editorService: IEditorService,
+		@IModelService private readonly modelService: IModelService,
+		@IFileService private readonly fileService: IFileService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 
@@ -806,34 +837,143 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
+		// Group consecutive thinking traces into collapsible sections and pair tool traces
+		// with their results into unified cards.
 		let cursor = 0;
+		let pendingThinkingMessages: string[] = [];
+		let pendingToolTraceName: string | undefined;
+		let pendingToolTraceMessage: string | undefined;
+
+		const flushThinking = () => {
+			if (pendingThinkingMessages.length > 0) {
+				container.appendChild(this.renderCollapsibleThinkingBlock(pendingThinkingMessages, streaming));
+				pendingThinkingMessages = [];
+			}
+		};
+
+		const flushPendingTool = () => {
+			if (pendingToolTraceName !== undefined) {
+				// Tool trace without a result yet: render it as an in-progress card.
+				container.appendChild(this.renderToolCard(
+					pendingToolTraceName,
+					pendingToolTraceMessage ?? pendingToolTraceName,
+					streaming ? 'running' : 'complete',
+					undefined,
+					undefined,
+				));
+				pendingToolTraceName = undefined;
+				pendingToolTraceMessage = undefined;
+			}
+		};
+
 		for (const block of blocks) {
 			if (block.startOffset > cursor) {
-				this.appendPlainAssistantTextSegment(container, text.slice(cursor, block.startOffset));
+				const segment = text.slice(cursor, block.startOffset);
+				if (segment.trim().length > 0) {
+					flushThinking();
+					flushPendingTool();
+					this.appendPlainAssistantTextSegment(container, segment);
+				}
 			}
 
 			if (block.kind === 'tool_call') {
-				// When agent trace markers are available, prefer those concise status lines and suppress
-				// the raw tool XML block to reduce visual noise in the transcript.
 				if (!hasTraceBlocks) {
-					container.appendChild(this.renderToolCallStatusLine(block.toolName, streaming));
+					flushThinking();
+					flushPendingTool();
+					container.appendChild(this.renderToolCard(
+						block.toolName,
+						block.toolName,
+						streaming ? 'running' : 'complete',
+						undefined,
+						undefined,
+					));
 				}
 			} else if (block.kind === 'tool_result') {
 				const diffCard = (block.success && block.output)
 					? this.renderToolResultDiffCard(block.toolName, block.output)
 					: undefined;
-				if (diffCard) {
-					container.appendChild(diffCard);
-				}
-				// Keep a fallback status line for older turns that do not contain <agent_trace> markers.
-				if (!hasTraceBlocks && !diffCard) {
-					container.appendChild(this.renderToolResultStatusLine(block.toolName, !!block.success));
+
+				if (hasTraceBlocks && pendingToolTraceName !== undefined) {
+					// Pair this result with the pending tool trace into a single card
+					flushThinking();
+					container.appendChild(this.renderToolCard(
+						pendingToolTraceName,
+						pendingToolTraceMessage ?? pendingToolTraceName,
+						block.success ? 'success' : 'error',
+						block.output,
+						diffCard ?? undefined,
+					));
+					pendingToolTraceName = undefined;
+					pendingToolTraceMessage = undefined;
+				} else {
+					flushThinking();
+					flushPendingTool();
+					if (diffCard) {
+						container.appendChild(diffCard);
+					}
+					if (!hasTraceBlocks && !diffCard) {
+						container.appendChild(this.renderToolResultStatusLine(block.toolName, !!block.success));
+					}
 				}
 			} else {
-				container.appendChild(this.renderAgentTraceBlock(block.traceType ?? '', block.traceMessage ?? '', block.traceStatus));
+				// Agent trace block
+				if (block.traceType === 'thinking') {
+					flushPendingTool();
+					pendingThinkingMessages.push(block.traceMessage ?? '');
+				} else if (block.traceType === 'tool') {
+					const msg = block.traceMessage ?? '';
+					const isCompletion = msg.toLowerCase().includes('attempt') && msg.toLowerCase().includes('completion');
+					if (isCompletion) {
+						// attempt_completion is not a real tool action: render its
+						// summary as plain text instead of a tool card.
+						flushThinking();
+						flushPendingTool();
+						// Extract the summary after "Attempted completion: "
+						const colonIdx = msg.indexOf(':');
+						const summary = colonIdx >= 0 ? msg.slice(colonIdx + 1).trim() : msg;
+						if (summary) {
+							this.appendPlainAssistantTextSegment(container, summary);
+						}
+						// Mark so the following tool_result trace is also suppressed
+						pendingToolTraceName = '\x00completion';
+						pendingToolTraceMessage = undefined;
+					} else {
+						flushThinking();
+						flushPendingTool();
+						pendingToolTraceName = msg;
+						pendingToolTraceMessage = block.traceMessage;
+					}
+				} else if (block.traceType === 'tool_result') {
+					// Tool result trace without structured tool_result XML: render a paired card.
+					flushThinking();
+					if (pendingToolTraceName === '\x00completion') {
+						// Suppress the tool_result for attempt_completion
+						pendingToolTraceName = undefined;
+						pendingToolTraceMessage = undefined;
+					} else if (pendingToolTraceName !== undefined) {
+						container.appendChild(this.renderToolCard(
+							pendingToolTraceName,
+							pendingToolTraceMessage ?? pendingToolTraceName,
+							block.traceStatus === 'success' ? 'success' : (block.traceStatus === 'error' ? 'error' : 'complete'),
+							block.traceMessage,
+							undefined,
+						));
+						pendingToolTraceName = undefined;
+						pendingToolTraceMessage = undefined;
+					} else {
+						container.appendChild(this.renderAgentTraceBlock(block.traceType, block.traceMessage ?? '', block.traceStatus));
+					}
+				} else {
+					flushThinking();
+					flushPendingTool();
+					container.appendChild(this.renderAgentTraceBlock(block.traceType ?? '', block.traceMessage ?? '', block.traceStatus));
+				}
 			}
 			cursor = block.endOffset;
 		}
+
+		flushThinking();
+		flushPendingTool();
 
 		if (cursor < text.length) {
 			this.appendPlainAssistantTextSegment(container, text.slice(cursor));
@@ -844,20 +984,172 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (!text || text.trim().length === 0) {
 			return;
 		}
-		const segment = document.createElement('div');
-		segment.className = 'vsclone-thread-message-text-segment';
-		segment.textContent = text;
-		container.appendChild(segment);
+
+		// Split plain text into thinking lines vs normal text so "Thinking: ..."
+		// lines that aren't wrapped in <agent_trace> still render as collapsible blocks.
+		const lines = text.split('\n');
+		let normalLines: string[] = [];
+		let thinkingMessages: string[] = [];
+
+		const flushNormal = () => {
+			const joined = normalLines.join('\n').trim();
+			if (joined) {
+				const segment = document.createElement('div');
+				segment.className = 'vsclone-thread-message-text-segment';
+				segment.textContent = joined;
+				container.appendChild(segment);
+			}
+			normalLines = [];
+		};
+
+		const flushThinking = () => {
+			if (thinkingMessages.length > 0) {
+				container.appendChild(this.renderCollapsibleThinkingBlock(thinkingMessages, false));
+				thinkingMessages = [];
+			}
+		};
+
+		for (const line of lines) {
+			const trimmed = line.trim();
+			const thinkingMatch = /^Thinking:\s*(.+)/i.exec(trimmed);
+			if (thinkingMatch) {
+				flushNormal();
+				thinkingMessages.push(thinkingMatch[1]);
+			} else if (/^\[Agent iteration \d+\]$/.test(trimmed) || trimmed === '---') {
+				// Internal agent loop markers: suppress them from the UI.
+			} else {
+				flushThinking();
+				normalLines.push(line);
+			}
+		}
+
+		flushThinking();
+		flushNormal();
 	}
 
-	private renderToolCallStatusLine(toolName: string, streaming: boolean): HTMLElement {
-		const line = document.createElement('div');
-		line.className = 'vsclone-agent-trace-line';
-		line.classList.add('type-tool', 'status-start');
-		line.textContent = streaming
-			? localize('vsclone.thread.toolCall.running', 'Tool call running: {0}', toolName)
-			: localize('vsclone.thread.toolCall.complete', 'Tool call: {0}', toolName);
-		return line;
+	/**
+	 * Renders consecutive thinking traces as a collapsible disclosure block.
+	 * While streaming, the block is expanded; once complete, it collapses to a single summary line.
+	 */
+	private renderCollapsibleThinkingBlock(messages: string[], streaming: boolean): HTMLElement {
+		const details = document.createElement('details');
+		details.className = 'vsclone-thinking-block';
+		if (streaming) {
+			details.open = true;
+		}
+
+		const summary = document.createElement('summary');
+		summary.className = 'vsclone-thinking-summary';
+
+		const icon = document.createElement('span');
+		icon.className = 'codicon codicon-lightbulb vsclone-thinking-icon';
+		summary.appendChild(icon);
+
+		const label = document.createElement('span');
+		label.textContent = streaming
+			? localize('vsclone.thread.thinking.active', 'Thinking...')
+			: localize('vsclone.thread.thinking.label', 'Thinking ({0} steps)', messages.length.toString());
+		summary.appendChild(label);
+
+		details.appendChild(summary);
+
+		const content = document.createElement('div');
+		content.className = 'vsclone-thinking-content';
+		for (const msg of messages) {
+			if (msg.trim()) {
+				const step = document.createElement('div');
+				step.className = 'vsclone-thinking-step';
+				step.textContent = msg;
+				content.appendChild(step);
+			}
+		}
+		details.appendChild(content);
+
+		return details;
+	}
+
+	/**
+	 * Renders a tool call and its result as a paired card with an icon, status, and optional
+	 * collapsible output or diff card.
+	 */
+	private renderToolCard(
+		toolName: string,
+		displayMessage: string,
+		status: 'running' | 'complete' | 'success' | 'error',
+		output: string | undefined,
+		diffCard: HTMLElement | undefined,
+	): HTMLElement {
+		const card = document.createElement('div');
+		card.className = 'vsclone-tool-card';
+		card.classList.add(`status-${status}`);
+
+		const header = document.createElement('div');
+		header.className = 'vsclone-tool-card-header';
+
+		const icon = document.createElement('span');
+		icon.className = `codicon vsclone-tool-card-icon ${this.getToolIconClass(toolName)}`;
+		header.appendChild(icon);
+
+		const label = document.createElement('span');
+		label.className = 'vsclone-tool-card-label';
+		label.textContent = displayMessage;
+		header.appendChild(label);
+
+		const statusBadge = document.createElement('span');
+		statusBadge.className = 'vsclone-tool-card-status';
+		switch (status) {
+			case 'running':
+				statusBadge.classList.add('codicon', 'codicon-loading', 'codicon-modifier-spin');
+				break;
+			case 'success':
+				statusBadge.classList.add('codicon', 'codicon-check');
+				break;
+			case 'error':
+				statusBadge.classList.add('codicon', 'codicon-error');
+				break;
+			case 'complete':
+				statusBadge.classList.add('codicon', 'codicon-check');
+				break;
+		}
+		header.appendChild(statusBadge);
+
+		card.appendChild(header);
+
+		// Attach diff card if present
+		if (diffCard) {
+			card.appendChild(diffCard);
+		}
+
+		return card;
+	}
+
+	private getToolIconClass(toolName: string): string {
+		const lower = toolName.toLowerCase();
+		if (lower.includes('read') || lower.includes('Read')) {
+			return 'codicon-file';
+		}
+		if (lower.includes('edit') || lower.includes('Edit') || lower.includes('write') || lower.includes('Write')) {
+			return 'codicon-edit';
+		}
+		if (lower.includes('create') || lower.includes('Create')) {
+			return 'codicon-new-file';
+		}
+		if (lower.includes('run') || lower.includes('exec') || lower.includes('command') || lower.includes('terminal')) {
+			return 'codicon-terminal';
+		}
+		if (lower.includes('search') || lower.includes('grep') || lower.includes('find')) {
+			return 'codicon-search';
+		}
+		if (lower.includes('completion') || lower.includes('attempt')) {
+			return 'codicon-sparkle';
+		}
+		if (lower.includes('delete') || lower.includes('remove')) {
+			return 'codicon-trash';
+		}
+		if (lower.includes('list') || lower.includes('ls')) {
+			return 'codicon-list-tree';
+		}
+		return 'codicon-tools';
 	}
 
 	private renderToolResultStatusLine(toolName: string, success: boolean): HTMLElement {
@@ -882,9 +1174,443 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	/**
-	 * Diff cards surface mutating tool output inline so users can inspect applied changes
-	 * without interruptive dialogs or opening a separate editor just to verify the patch.
+	 * Extracts a filename from diff content by looking for `---` and `+++` header lines.
 	 */
+	private extractFilenameFromDiff(diff: string): string | undefined {
+		for (const line of diff.split('\n')) {
+			if (line.startsWith('+++ ') && !line.startsWith('+++ /dev/null')) {
+				const path = line.slice(4).trim();
+				// Strip leading a/ or b/ prefix from git diffs
+				return path.replace(/^[ab]\//, '');
+			}
+		}
+		return undefined;
+	}
+
+	/**
+	 * Guesses a file's language from its extension for use in the title bar label.
+	 */
+	private getLanguageLabelFromFilename(filename: string): string {
+		const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+		const languageMap: Record<string, string> = {
+			ts: 'TS', tsx: 'TSX', js: 'JS', jsx: 'JSX', css: 'CSS', scss: 'SCSS',
+			html: 'HTML', json: 'JSON', md: 'MD', py: 'PY', rs: 'RS', go: 'GO',
+			java: 'JAVA', c: 'C', cpp: 'C++', h: 'H', cs: 'C#', rb: 'RB',
+			yaml: 'YAML', yml: 'YAML', toml: 'TOML', xml: 'XML', svg: 'SVG',
+			sh: 'SH', bash: 'SH', zsh: 'SH', sql: 'SQL', vue: 'VUE', svelte: 'SVELTE',
+		};
+		return languageMap[ext] ?? ext.toUpperCase();
+	}
+
+	/**
+	 * Applies basic syntax highlighting to a code string by wrapping recognized tokens
+	 * in spans with appropriate CSS classes.
+	 */
+	private syntaxHighlightLine(code: string): HTMLSpanElement {
+		const container = document.createElement('span');
+		// Strip leading +/- diff prefix for highlighting purposes, but preserve it visually
+		let prefix = '';
+		let strippedCode = code;
+		if (code.startsWith('+') && !code.startsWith('+++')) {
+			prefix = '+';
+			strippedCode = code.slice(1);
+		} else if (code.startsWith('-') && !code.startsWith('---')) {
+			prefix = '-';
+			strippedCode = code.slice(1);
+		}
+
+		if (prefix) {
+			const prefixSpan = document.createElement('span');
+			prefixSpan.textContent = prefix;
+			container.appendChild(prefixSpan);
+		}
+
+		// Tokenize using regex patterns
+		const tokenRules: Array<{ pattern: RegExp; tokenClass: string }> = [
+			{ pattern: /\/\/.*$/gm, tokenClass: 'vsclone-token-comment' },
+			{ pattern: /\/\*[\s\S]*?\*\//g, tokenClass: 'vsclone-token-comment' },
+			{ pattern: /#.*$/gm, tokenClass: 'vsclone-token-comment' },
+			{ pattern: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, tokenClass: 'vsclone-token-string' },
+			{ pattern: /\b(?:import|export|from|const|let|var|function|return|if|else|for|while|class|extends|interface|type|enum|async|await|new|this|super|typeof|instanceof|in|of|try|catch|throw|finally|switch|case|default|break|continue|yield|do|void|delete|with|as|is|readonly|declare|abstract|implements|namespace|module|require|public|private|protected|static|get|set|constructor)\b/g, tokenClass: 'vsclone-token-keyword' },
+			{ pattern: /\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g, tokenClass: 'vsclone-token-number' },
+			{ pattern: /\b(?:true|false|null|undefined|NaN|Infinity)\b/g, tokenClass: 'vsclone-token-keyword' },
+			{ pattern: /[{}()[\];,.:]/g, tokenClass: 'vsclone-token-punctuation' },
+			{ pattern: /[+\-*/%=<>!&|^~?@]/g, tokenClass: 'vsclone-token-operator' },
+		];
+
+		// Build a combined regex that captures each token type
+		type TokenMatch = { index: number; length: number; text: string; tokenClass: string };
+		const matches: TokenMatch[] = [];
+		for (const rule of tokenRules) {
+			const regex = new RegExp(rule.pattern.source, rule.pattern.flags);
+			let match: RegExpExecArray | null;
+			while ((match = regex.exec(strippedCode)) !== null) {
+				matches.push({ index: match.index, length: match[0].length, text: match[0], tokenClass: rule.tokenClass });
+			}
+		}
+
+		// Sort by position and remove overlapping matches (earlier/longer wins)
+		matches.sort((a, b) => a.index - b.index || b.length - a.length);
+		const filtered: TokenMatch[] = [];
+		let lastEnd = 0;
+		for (const m of matches) {
+			if (m.index >= lastEnd) {
+				filtered.push(m);
+				lastEnd = m.index + m.length;
+			}
+		}
+
+		// Render tokens
+		let cursor = 0;
+		for (const m of filtered) {
+			if (m.index > cursor) {
+				container.appendChild(document.createTextNode(strippedCode.slice(cursor, m.index)));
+			}
+			const tokenSpan = document.createElement('span');
+			tokenSpan.className = m.tokenClass;
+			tokenSpan.textContent = m.text;
+			container.appendChild(tokenSpan);
+			cursor = m.index + m.length;
+		}
+		if (cursor < strippedCode.length) {
+			container.appendChild(document.createTextNode(strippedCode.slice(cursor)));
+		}
+
+		return container;
+	}
+
+	/**
+	 * Extracts a file:// URI from the tool result summary text.
+	 */
+	private extractFileUriFromSummary(summary: string): string | undefined {
+		// Allow dots within the path (e.g., styles.css) but strip a trailing dot
+		// that is likely sentence punctuation rather than part of the filename.
+		const match = /file:\/\/\/[^\s,)]+/.exec(summary);
+		if (!match) {
+			return undefined;
+		}
+		// Remove trailing period if it looks like end-of-sentence punctuation
+		return match[0].replace(/\.$/, '');
+	}
+
+	/**
+	 * Unified hunk headers carry the modified-side line numbers that the transcript uses for
+	 * both display and navigation. If the tool output predates that metadata, we skip line UI
+	 * instead of guessing and sending the user to the wrong place.
+	 */
+	private parseUnifiedDiffHunkHeader(line: string): IUnifiedDiffHunkHeader | undefined {
+		const match = /^@@\s*-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s*@@/.exec(line);
+		if (!match) {
+			return undefined;
+		}
+
+		return {
+			originalStartLineNumber: parseInt(match[1], 10),
+			originalLineCount: parseInt(match[2] ?? '1', 10),
+			modifiedStartLineNumber: parseInt(match[3], 10),
+			modifiedLineCount: parseInt(match[4] ?? '1', 10),
+		};
+	}
+
+	/**
+	 * The transcript only needs lightweight diff semantics: enough to paint the hunk and to map
+	 * visible rows back to the modified file. Removed rows intentionally point at the nearest
+	 * surviving modified line because that is where the user lands after the edit has applied.
+	 */
+	private buildRenderedDiffLines(diff: string): { readonly lines: readonly IRenderedToolDiffLine[]; readonly titleNavigation: IDiffLineNavigationState } {
+		const renderedLines: IRenderedToolDiffLine[] = [];
+		let originalLineNumber: number | undefined;
+		let modifiedLineNumber: number | undefined;
+		const titleNavigation: IDiffLineNavigationState = {};
+		const diffLines = diff.split('\n');
+
+		for (let sourceLineIndex = 0; sourceLineIndex < diffLines.length; sourceLineIndex++) {
+			const rawLine = diffLines[sourceLineIndex];
+			if (rawLine.startsWith('@@')) {
+				const hunkHeader = this.parseUnifiedDiffHunkHeader(rawLine);
+				originalLineNumber = hunkHeader?.originalStartLineNumber;
+				modifiedLineNumber = hunkHeader?.modifiedStartLineNumber;
+				if (hunkHeader) {
+					titleNavigation.startLineNumber ??= hunkHeader.modifiedStartLineNumber;
+					const hunkEndLineNumber = hunkHeader.modifiedStartLineNumber + Math.max(1, hunkHeader.modifiedLineCount) - 1;
+					titleNavigation.endLineNumber = titleNavigation.endLineNumber !== undefined
+						? Math.max(titleNavigation.endLineNumber, hunkEndLineNumber)
+						: hunkEndLineNumber;
+				}
+				renderedLines.push({
+					sourceLineIndex,
+					rawText: rawLine,
+					kind: 'hunk',
+					navigationLineNumber: hunkHeader?.modifiedStartLineNumber,
+				});
+				continue;
+			}
+
+			if (rawLine.startsWith('---') || rawLine.startsWith('+++')) {
+				renderedLines.push({ sourceLineIndex, rawText: rawLine, kind: 'file' });
+				continue;
+			}
+
+			if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
+				const navigationLineNumber = modifiedLineNumber;
+				titleNavigation.startLineNumber ??= navigationLineNumber;
+				if (navigationLineNumber !== undefined) {
+					titleNavigation.endLineNumber = titleNavigation.endLineNumber !== undefined
+						? Math.max(titleNavigation.endLineNumber, navigationLineNumber)
+						: navigationLineNumber;
+				}
+				renderedLines.push({ sourceLineIndex, rawText: rawLine, kind: 'added', navigationLineNumber });
+				if (modifiedLineNumber !== undefined) {
+					modifiedLineNumber += 1;
+				}
+				continue;
+			}
+
+			if (rawLine.startsWith('-') && !rawLine.startsWith('---')) {
+				renderedLines.push({
+					sourceLineIndex,
+					rawText: rawLine,
+					kind: 'removed',
+					navigationLineNumber: modifiedLineNumber,
+				});
+				if (originalLineNumber !== undefined) {
+					originalLineNumber += 1;
+				}
+				continue;
+			}
+
+			const navigationLineNumber = modifiedLineNumber;
+			titleNavigation.startLineNumber ??= navigationLineNumber;
+			if (navigationLineNumber !== undefined) {
+				titleNavigation.endLineNumber = titleNavigation.endLineNumber !== undefined
+					? Math.max(titleNavigation.endLineNumber, navigationLineNumber)
+					: navigationLineNumber;
+			}
+			renderedLines.push({ sourceLineIndex, rawText: rawLine, kind: 'context', navigationLineNumber });
+			if (originalLineNumber !== undefined) {
+				originalLineNumber += 1;
+			}
+			if (modifiedLineNumber !== undefined) {
+				modifiedLineNumber += 1;
+			}
+		}
+
+		return { lines: renderedLines, titleNavigation };
+	}
+
+	/**
+	 * Legacy tool results used `@@ change N @@` markers that described hunk order but not the
+	 * actual file location. To keep older transcript cards useful after we switched formats, the
+	 * renderer rehydrates a best-effort line mapping by matching the modified hunk text against
+	 * the current file contents.
+	 */
+	private async resolveLegacyDiffNavigation(fileUri: string, diff: string): Promise<{ readonly titleNavigation: IDiffLineNavigationState; readonly lineNumbers: Map<number, number> } | undefined> {
+		const diffLines = diff.split('\n');
+		const legacyHunks = this.parseLegacyDiffHunks(diffLines);
+		if (legacyHunks.length === 0) {
+			return undefined;
+		}
+
+		const content = await this.readDiffTargetContents(URI.parse(fileUri));
+		if (content === undefined) {
+			return undefined;
+		}
+
+		const fileLines = splitLines(content).map(line => line.replace(/\r$/, ''));
+		const lineNumbers = new Map<number, number>();
+		const titleNavigation: IDiffLineNavigationState = {};
+		let searchStartIndex = 0;
+
+		for (const hunk of legacyHunks) {
+			const modifiedLines = hunk.lines
+				.filter(line => !line.startsWith('-'))
+				.map(line => this.stripDiffLinePrefix(line));
+			const startIndex = this.findLegacyDiffStartIndex(fileLines, modifiedLines, searchStartIndex);
+			if (startIndex === undefined) {
+				continue;
+			}
+
+			let currentLineNumber = startIndex + 1;
+			titleNavigation.startLineNumber ??= currentLineNumber;
+			for (let index = 0; index < hunk.lines.length; index++) {
+				const rawLine = hunk.lines[index];
+				lineNumbers.set(hunk.lineIndexes[index], currentLineNumber);
+				if (!rawLine.startsWith('-')) {
+					titleNavigation.endLineNumber = titleNavigation.endLineNumber !== undefined
+						? Math.max(titleNavigation.endLineNumber, currentLineNumber)
+						: currentLineNumber;
+					currentLineNumber += 1;
+				}
+			}
+
+			searchStartIndex = Math.max(searchStartIndex, currentLineNumber - 1);
+		}
+
+		if (titleNavigation.startLineNumber !== undefined && titleNavigation.endLineNumber === undefined) {
+			titleNavigation.endLineNumber = titleNavigation.startLineNumber;
+		}
+
+		return lineNumbers.size > 0 ? { titleNavigation, lineNumbers } : undefined;
+	}
+
+	private parseLegacyDiffHunks(diffLines: readonly string[]): readonly ILegacyDiffHunk[] {
+		const hunks: ILegacyDiffHunk[] = [];
+		let currentLineIndexes: number[] | undefined;
+		let currentLines: string[] | undefined;
+
+		for (let index = 0; index < diffLines.length; index++) {
+			const line = diffLines[index];
+			if (/^@@\s*change\s+\d+\s*@@$/.test(line)) {
+				if (currentLineIndexes && currentLines && currentLines.length > 0) {
+					hunks.push({ lineIndexes: currentLineIndexes, lines: currentLines });
+				}
+				currentLineIndexes = [];
+				currentLines = [];
+				continue;
+			}
+
+			if (!currentLineIndexes || !currentLines) {
+				continue;
+			}
+
+			if (line.startsWith('@@')) {
+				if (currentLines.length > 0) {
+					hunks.push({ lineIndexes: currentLineIndexes, lines: currentLines });
+				}
+				currentLineIndexes = undefined;
+				currentLines = undefined;
+				continue;
+			}
+
+			if (line.startsWith('---') || line.startsWith('+++')) {
+				continue;
+			}
+
+			currentLineIndexes.push(index);
+			currentLines.push(line);
+		}
+
+		if (currentLineIndexes && currentLines && currentLines.length > 0) {
+			hunks.push({ lineIndexes: currentLineIndexes, lines: currentLines });
+		}
+
+		return hunks;
+	}
+
+	private async readDiffTargetContents(resource: URI): Promise<string | undefined> {
+		const modelService = this.modelService as IModelService | undefined;
+		const fileService = this.fileService as IFileService | undefined;
+		const openModel = modelService?.getModel(resource);
+		if (openModel) {
+			return openModel.getValue();
+		}
+
+		if (!fileService) {
+			return undefined;
+		}
+
+		try {
+			const fileContents = await fileService.readFile(resource);
+			return fileContents.value.toString();
+		} catch {
+			return undefined;
+		}
+	}
+
+	private findLegacyDiffStartIndex(fileLines: readonly string[], modifiedLines: readonly string[], searchStartIndex: number): number | undefined {
+		const exactMatch = this.findLegacyDiffStartIndexWithComparator(fileLines, modifiedLines, searchStartIndex, (left, right) => left === right);
+		if (exactMatch !== undefined) {
+			return exactMatch;
+		}
+
+		return this.findLegacyDiffStartIndexWithComparator(fileLines, modifiedLines, searchStartIndex, (left, right) => left.trim() === right.trim());
+	}
+
+	private findLegacyDiffStartIndexWithComparator(
+		fileLines: readonly string[],
+		modifiedLines: readonly string[],
+		searchStartIndex: number,
+		equals: (left: string, right: string) => boolean,
+	): number | undefined {
+		if (modifiedLines.length === 0) {
+			return undefined;
+		}
+
+		for (let blockLength = modifiedLines.length; blockLength >= 1; blockLength--) {
+			for (let offset = 0; offset <= modifiedLines.length - blockLength; offset++) {
+				const block = modifiedLines.slice(offset, offset + blockLength);
+				const matchIndex = this.findContiguousLineBlock(fileLines, block, searchStartIndex, equals);
+				if (matchIndex !== undefined) {
+					return Math.max(searchStartIndex, matchIndex - offset);
+				}
+			}
+		}
+
+		return undefined;
+	}
+
+	private findContiguousLineBlock(
+		fileLines: readonly string[],
+		block: readonly string[],
+		searchStartIndex: number,
+		equals: (left: string, right: string) => boolean,
+	): number | undefined {
+		if (block.length === 0 || fileLines.length < block.length) {
+			return undefined;
+		}
+
+		for (let index = searchStartIndex; index <= fileLines.length - block.length; index++) {
+			let matches = true;
+			for (let blockIndex = 0; blockIndex < block.length; blockIndex++) {
+				if (!equals(fileLines[index + blockIndex], block[blockIndex])) {
+					matches = false;
+					break;
+				}
+			}
+			if (matches) {
+				return index;
+			}
+		}
+
+		return undefined;
+	}
+
+	private stripDiffLinePrefix(line: string): string {
+		if ((line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---')) || line.startsWith(' ')) {
+			return line.slice(1);
+		}
+
+		return line;
+	}
+
+	private formatDiffLineLabel(navigation: IDiffLineNavigationState): string | undefined {
+		if (navigation.startLineNumber === undefined) {
+			return undefined;
+		}
+
+		const endLineNumber = navigation.endLineNumber ?? navigation.startLineNumber;
+		return endLineNumber > navigation.startLineNumber
+			? localize('vsclone.thread.toolDiff.lineRange', 'Ln {0}-{1}', navigation.startLineNumber.toString(), endLineNumber.toString())
+			: localize('vsclone.thread.toolDiff.lineNumber', 'Ln {0}', navigation.startLineNumber.toString());
+	}
+
+	private openDiffTarget(fileUri: string, navigation: IDiffLineNavigationState): void {
+		const resource = URI.parse(fileUri);
+		const sanitizedStartLineNumber = navigation.startLineNumber !== undefined ? Math.max(1, navigation.startLineNumber) : undefined;
+		const sanitizedEndLineNumber = navigation.endLineNumber !== undefined ? Math.max(sanitizedStartLineNumber ?? 1, navigation.endLineNumber) : sanitizedStartLineNumber;
+		this.editorService.openEditor({
+			resource,
+			options: sanitizedStartLineNumber ? {
+				selection: {
+					startLineNumber: sanitizedStartLineNumber,
+					startColumn: 1,
+					endLineNumber: sanitizedEndLineNumber ?? sanitizedStartLineNumber,
+					endColumn: 1,
+				},
+			} : undefined,
+		}).catch(() => { /* ignore */ });
+	}
+
 	private renderToolResultDiffCard(toolName: string, output: string): HTMLElement | undefined {
 		const parsedDiff = parseToolResultDiff(output);
 		if (!parsedDiff) {
@@ -894,43 +1620,151 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const card = document.createElement('div');
 		card.className = 'vsclone-tool-diff-card';
 
-		const title = document.createElement('div');
-		title.className = 'vsclone-tool-diff-title';
-		switch (toolName) {
-			case 'edit_file':
-				title.textContent = localize('vsclone.thread.toolDiff.editedTitle', 'Applied file edits');
-				break;
-			case 'create_file':
-				title.textContent = localize('vsclone.thread.toolDiff.createdTitle', 'Created file');
-				break;
-			default:
-				title.textContent = localize('vsclone.thread.toolDiff.genericTitle', 'Applied workspace change');
-				break;
-		}
-		card.appendChild(title);
+		const titleBar = document.createElement('div');
+		titleBar.className = 'vsclone-tool-diff-title';
 
-		if (parsedDiff.summary) {
-			const summary = document.createElement('div');
-			summary.className = 'vsclone-tool-diff-summary';
-			summary.textContent = parsedDiff.summary;
-			card.appendChild(summary);
+		const filename = this.extractFilenameFromDiff(parsedDiff.diff);
+		const fileUri = parsedDiff.summary ? this.extractFileUriFromSummary(parsedDiff.summary) : undefined;
+		const renderedDiff = this.buildRenderedDiffLines(parsedDiff.diff);
+		const titleNavigation: IDiffLineNavigationState = { ...renderedDiff.titleNavigation };
+		let lineBadge: HTMLAnchorElement | HTMLSpanElement | undefined;
+		const renderedLineEntries: Array<{ readonly sourceLineIndex: number; readonly state: IDiffLineNavigationState; readonly line: HTMLElement; readonly gutter?: HTMLElement }> = [];
+
+		if (filename) {
+			const langLabel = this.getLanguageLabelFromFilename(filename);
+			const fileIcon = document.createElement('span');
+			fileIcon.className = 'codicon codicon-file vsclone-tool-diff-title-icon';
+			titleBar.appendChild(fileIcon);
+
+			// Make the filename a clickable link that opens the file
+			const fileLabel = document.createElement('a');
+			fileLabel.className = 'vsclone-tool-diff-title-filename';
+			fileLabel.textContent = `${langLabel} ${filename}`;
+			fileLabel.title = titleNavigation.startLineNumber !== undefined
+				? localize('vsclone.thread.toolDiff.openAtLineTitle', 'Open {0} at line {1}', filename, titleNavigation.startLineNumber.toString())
+				: (fileUri ?? filename);
+			if (fileUri) {
+				fileLabel.href = '#';
+				fileLabel.addEventListener('click', (e) => {
+					e.preventDefault();
+					this.openDiffTarget(fileUri, titleNavigation);
+				});
+				fileLabel.style.cursor = 'pointer';
+			}
+			titleBar.appendChild(fileLabel);
+
+			if (fileUri) {
+				const anchorLineBadge = document.createElement('a');
+				anchorLineBadge.className = 'vsclone-tool-diff-title-line';
+				const lineLabel = this.formatDiffLineLabel(titleNavigation);
+				anchorLineBadge.hidden = lineLabel === undefined;
+				if (lineLabel !== undefined && titleNavigation.startLineNumber !== undefined) {
+					anchorLineBadge.textContent = lineLabel;
+					anchorLineBadge.title = localize('vsclone.thread.toolDiff.openLineTitle', 'Open line {0}', titleNavigation.startLineNumber.toString());
+				}
+				anchorLineBadge.href = '#';
+				anchorLineBadge.addEventListener('click', (e) => {
+					e.preventDefault();
+					this.openDiffTarget(fileUri, titleNavigation);
+				});
+				lineBadge = anchorLineBadge;
+				titleBar.appendChild(anchorLineBadge);
+			} else if (titleNavigation.startLineNumber !== undefined) {
+				lineBadge = document.createElement('span');
+				lineBadge.className = 'vsclone-tool-diff-title-line';
+				lineBadge.textContent = this.formatDiffLineLabel(titleNavigation) ?? '';
+				titleBar.appendChild(lineBadge);
+			}
+
+			if (fileUri && titleNavigation.startLineNumber === undefined && /^@@\s*change\s+\d+\s*@@/m.test(parsedDiff.diff)) {
+				void this.resolveLegacyDiffNavigation(fileUri, parsedDiff.diff).then(resolvedNavigation => {
+					if (!resolvedNavigation) {
+						return;
+					}
+
+					titleNavigation.startLineNumber = resolvedNavigation.titleNavigation.startLineNumber;
+					titleNavigation.endLineNumber = resolvedNavigation.titleNavigation.endLineNumber;
+					if (titleNavigation.startLineNumber !== undefined) {
+						fileLabel.title = localize('vsclone.thread.toolDiff.openAtLineTitle', 'Open {0} at line {1}', filename, titleNavigation.startLineNumber.toString());
+						if (lineBadge) {
+							lineBadge.hidden = false;
+							lineBadge.textContent = this.formatDiffLineLabel(titleNavigation) ?? '';
+							lineBadge.title = localize('vsclone.thread.toolDiff.openLineTitle', 'Open line {0}', titleNavigation.startLineNumber.toString());
+						}
+					}
+
+					for (const entry of renderedLineEntries) {
+						const resolvedLineNumber = resolvedNavigation.lineNumbers.get(entry.sourceLineIndex);
+						if (resolvedLineNumber !== undefined) {
+							entry.state.startLineNumber = resolvedLineNumber;
+							entry.state.endLineNumber = resolvedLineNumber;
+							if (entry.gutter) {
+								entry.gutter.textContent = resolvedLineNumber.toString();
+							}
+							entry.line.classList.add('clickable');
+							entry.line.title = localize('vsclone.thread.toolDiff.openChangedLineTitle', 'Open changed line {0}', resolvedLineNumber.toString());
+						}
+					}
+				});
+			}
+		} else {
+			const label = document.createElement('span');
+			label.className = 'vsclone-tool-diff-title-filename';
+			switch (toolName) {
+				case 'edit_file':
+					label.textContent = localize('vsclone.thread.toolDiff.editedTitle', 'Applied file edits');
+					break;
+				case 'create_file':
+					label.textContent = localize('vsclone.thread.toolDiff.createdTitle', 'Created file');
+					break;
+				default:
+					label.textContent = localize('vsclone.thread.toolDiff.genericTitle', 'Applied workspace change');
+					break;
+			}
+			titleBar.appendChild(label);
 		}
+
+		card.appendChild(titleBar);
 
 		const body = document.createElement('div');
 		body.className = 'vsclone-tool-diff-body';
-		for (const rawLine of parsedDiff.diff.split('\n')) {
+		for (const diffLine of renderedDiff.lines) {
 			const line = document.createElement('div');
 			line.className = 'vsclone-tool-diff-line';
-			if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
-				line.classList.add('added');
-			} else if (rawLine.startsWith('-') && !rawLine.startsWith('---')) {
-				line.classList.add('removed');
-			} else if (rawLine.startsWith('@@')) {
-				line.classList.add('hunk');
-			} else if (rawLine.startsWith('---') || rawLine.startsWith('+++')) {
-				line.classList.add('file');
+			const lineNavigation: IDiffLineNavigationState = {
+				startLineNumber: diffLine.navigationLineNumber,
+				endLineNumber: diffLine.navigationLineNumber,
+			};
+			if (diffLine.kind === 'added' || diffLine.kind === 'removed' || diffLine.kind === 'hunk' || diffLine.kind === 'file') {
+				line.classList.add(diffLine.kind);
 			}
-			line.textContent = rawLine || ' ';
+
+			let gutter: HTMLElement | undefined;
+			if (diffLine.kind !== 'file' && diffLine.kind !== 'hunk') {
+				gutter = document.createElement('span');
+				gutter.className = 'vsclone-tool-diff-gutter';
+				gutter.textContent = lineNavigation.startLineNumber !== undefined ? lineNavigation.startLineNumber.toString() : '';
+				line.appendChild(gutter);
+			}
+
+			// Syntax-highlighted content keeps the diff prefix visible while the line gutter stays separate.
+			if (diffLine.kind !== 'file') {
+				line.appendChild(this.syntaxHighlightLine(diffLine.rawText));
+			}
+
+			if (fileUri && diffLine.kind !== 'hunk' && diffLine.kind !== 'file') {
+				if (lineNavigation.startLineNumber !== undefined) {
+					line.classList.add('clickable');
+					line.title = localize('vsclone.thread.toolDiff.openChangedLineTitle', 'Open changed line {0}', lineNavigation.startLineNumber.toString());
+				}
+				line.addEventListener('click', () => {
+					if (lineNavigation.startLineNumber !== undefined) {
+						this.openDiffTarget(fileUri, lineNavigation);
+					}
+				});
+			}
+			renderedLineEntries.push({ sourceLineIndex: diffLine.sourceLineIndex, state: lineNavigation, line, gutter });
+
 			body.appendChild(line);
 		}
 		card.appendChild(body);
@@ -992,8 +1826,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const hasText = this.composerInput.value.trim().length > 0;
 		const threadBusy = this.activeThreadId ? this.isThreadBusy(this.activeThreadId) : false;
 		const composerBusy = threadBusy || this.submittingPrompt;
-		const requiresExplicitModelSelection = !(this.configurationService.getValue<boolean>(VSCloneUseVSCodeChatBackendSetting) ?? false);
-		const hasSelectedModel = !requiresExplicitModelSelection || !!this.getCurrentComposerModelSelection(this.activeThreadId);
+		const hasSelectedModel = !!this.getCurrentComposerModelSelection(this.activeThreadId);
 		const disabled = !hasText || composerBusy || !hasSelectedModel;
 		this.composerSendButton.disabled = disabled;
 		this.composerInput.disabled = composerBusy;
@@ -1004,7 +1837,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (this.composerInput.disabled) {
 			this.composerInput.placeholder = localize('vsclone.composer.waiting', 'Waiting for response...');
 		} else if (!hasSelectedModel) {
-			// The direct VSClone API path needs a concrete provider/model pair before we can send.
+			// VSClone always needs a concrete provider/model pair before it can send a prompt.
 			this.composerInput.placeholder = localize('vsclone.composer.signInRequired', 'Sign in to a provider and choose a model to start chatting...');
 		} else {
 			this.composerInput.placeholder = localize('vsclone.composer.placeholder', 'Ask a follow-up question...');

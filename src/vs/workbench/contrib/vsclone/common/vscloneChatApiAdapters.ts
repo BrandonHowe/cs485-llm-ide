@@ -36,8 +36,9 @@ export interface IVSCloneVendorAdapter {
 // -- Catalog-to-API model ID mappings --
 
 const anthropicModelMap: Record<string, string> = {
-	'claude-opus-4.5': 'claude-opus-4-5-latest',
-	'claude-sonnet-4.5': 'claude-sonnet-4-5-latest',
+	// The picker uses stable catalog IDs while Anthropic expects the provider's rolling alias.
+	'claude-opus-4.6': 'claude-opus-4-6-latest',
+	'claude-sonnet-4.6': 'claude-sonnet-4-6-latest',
 	'claude-sonnet-4.0': 'claude-sonnet-4-20250514',
 };
 
@@ -48,7 +49,12 @@ const googleModelMap: Record<string, string> = {
 	'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',
 };
 
-function resolveApiModelId(vendor: VSCloneModelVendor, catalogModelId: string): string {
+/**
+ * Provider-facing IDs occasionally drift from the catalog IDs exposed in the picker. Keeping the
+ * translation in one shared helper prevents chat and inline completion transports from disagreeing
+ * about which concrete model should receive a request.
+ */
+export function resolveVSCloneApiModelId(vendor: VSCloneModelVendor, catalogModelId: string): string {
 	switch (vendor) {
 		case 'anthropic': return anthropicModelMap[catalogModelId] ?? catalogModelId;
 		case 'google': return googleModelMap[catalogModelId] ?? catalogModelId;
@@ -77,7 +83,7 @@ const defaultSystemMessage = 'You are VSClone, a helpful coding assistant. Answe
  */
 type OpenAIReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
-function toOpenAIReasoningEffort(level: VSCloneReasoningEffortLevel): OpenAIReasoningEffort {
+export function toOpenAIReasoningEffort(level: VSCloneReasoningEffortLevel): OpenAIReasoningEffort {
 	switch (level) {
 		case 'xhigh': return 'xhigh';
 		case 'max': return 'xhigh';
@@ -93,7 +99,7 @@ function toOpenAIReasoningEffort(level: VSCloneReasoningEffortLevel): OpenAIReas
 
 const openaiAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
-		const apiModelId = resolveApiModelId('openai', options.modelId);
+		const apiModelId = resolveVSCloneApiModelId('openai', options.modelId);
 		const input = buildMessages(options).map(m => ({ role: m.role, content: m.content }));
 		// The Codex backend rejects requests without a non-empty instructions field.
 		// We always provide one so routing stays vendor-agnostic for callers.
@@ -164,7 +170,7 @@ function toAnthropicThinkingBudget(level: VSCloneReasoningEffortLevel, maxTokens
 
 const anthropicAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
-		const apiModelId = resolveApiModelId('anthropic', options.modelId);
+		const apiModelId = resolveVSCloneApiModelId('anthropic', options.modelId);
 		const nonSystemMessages = buildMessages(options);
 
 		const anthropicMaxTokens = 16000;
@@ -241,7 +247,7 @@ const anthropicAdapter: IVSCloneVendorAdapter = {
 
 const googleAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
-		const apiModelId = resolveApiModelId('google', options.modelId);
+		const apiModelId = resolveVSCloneApiModelId('google', options.modelId);
 		const messages = buildMessages(options);
 		const systemPrompt = options.systemMessage?.trim() || defaultSystemMessage;
 		// Gemini v1 endpoint has no dedicated system field, so we inject a leading user turn.

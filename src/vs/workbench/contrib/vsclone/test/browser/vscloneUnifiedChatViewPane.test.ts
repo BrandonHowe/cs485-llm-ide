@@ -459,7 +459,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			[
 				'--- a/src/app.ts',
 				'+++ b/src/app.ts',
-				'@@ change 1 @@',
+				'@@ -12,1 +12,1 @@',
 				'-const x = 1;',
 				'+const x = 2;',
 			].join('\n'),
@@ -475,6 +475,169 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.ok(container.querySelector('.vsclone-tool-diff-card'));
 		assert.ok(container.querySelector('.vsclone-tool-diff-line.added'));
 		assert.ok(container.querySelector('.vsclone-tool-diff-line.removed'));
-		assert.ok(container.textContent?.includes('Applied file edits'));
+		assert.ok(container.textContent?.includes('TS src/app.ts'));
+		assert.strictEqual((container.querySelector('.vsclone-tool-diff-title-line') as HTMLElement | null)?.textContent, 'Ln 12');
+	});
+
+	test('tool-aware renderer opens the file at the rendered diff line', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderToolAwareAssistantTarget & {
+			editorService: { openEditor: (input: { resource: { toString(): string }; options?: { selection?: { startLineNumber: number; endLineNumber?: number } } }) => Promise<unknown> };
+		};
+		const container = document.createElement('div');
+		const openEditorCalls: Array<{ resource: { toString(): string }; options?: { selection?: { startLineNumber: number; endLineNumber?: number } } }> = [];
+		target.editorService = {
+			openEditor: async (input) => {
+				openEditorCalls.push(input);
+				return undefined;
+			},
+		};
+
+		const formattedOutput = formatToolResultWithDiff(
+			'Applied 1 edit(s) to file:///workspace/src/styles.css. Current diagnostics on file: 0.',
+			[
+				'--- a/src/styles.css',
+				'+++ b/src/styles.css',
+				'@@ -42,2 +42,2 @@',
+				'-font-family: ui-sans-serif;',
+				'+font-family: "Comic Sans MS";',
+			].join('\n'),
+		);
+		const assistantText = [
+			'<agent_trace type="tool" status="start">Edited src/styles.css</agent_trace>',
+			`<tool_result tool_name="edit_file" success="true">${formattedOutput}</tool_result>`,
+			'<agent_trace type="tool_result" status="success">edit_file succeeded</agent_trace>',
+		].join('\n');
+
+		target.renderToolAwareAssistantText(container, assistantText, false);
+
+		const fileLabel = container.querySelector('.vsclone-tool-diff-title-filename') as HTMLAnchorElement | null;
+		assert.ok(fileLabel);
+		fileLabel.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+		assert.strictEqual(openEditorCalls.length, 1);
+		assert.strictEqual(openEditorCalls[0].resource.toString(), 'file:///workspace/src/styles.css');
+		assert.strictEqual(openEditorCalls[0].options?.selection?.startLineNumber, 42);
+	});
+
+	test('tool-aware renderer shows a title range for multi-line diffs', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderToolAwareAssistantTarget & {
+			editorService: { openEditor: (input: { resource: { toString(): string }; options?: { selection?: { startLineNumber: number; endLineNumber?: number } } }) => Promise<unknown> };
+		};
+		const container = document.createElement('div');
+		const openEditorCalls: Array<{ resource: { toString(): string }; options?: { selection?: { startLineNumber: number; endLineNumber?: number } } }> = [];
+		target.editorService = {
+			openEditor: async (input) => {
+				openEditorCalls.push(input);
+				return undefined;
+			},
+		};
+
+		const formattedOutput = formatToolResultWithDiff(
+			'Applied 1 edit(s) to file:///workspace/src/styles.css. Current diagnostics on file: 0.',
+			[
+				'--- a/src/styles.css',
+				'+++ b/src/styles.css',
+				'@@ -20,9 +20,9 @@',
+				'-old line 1',
+				'-old line 2',
+				'-old line 3',
+				'-old line 4',
+				'-old line 5',
+				'-old line 6',
+				'-old line 7',
+				'-old line 8',
+				'-old line 9',
+				'+new line 1',
+				'+new line 2',
+				'+new line 3',
+				'+new line 4',
+				'+new line 5',
+				'+new line 6',
+				'+new line 7',
+				'+new line 8',
+				'+new line 9',
+			].join('\n'),
+		);
+		const assistantText = [
+			'<agent_trace type="tool" status="start">Edited src/styles.css</agent_trace>',
+			`<tool_result tool_name="edit_file" success="true">${formattedOutput}</tool_result>`,
+			'<agent_trace type="tool_result" status="success">edit_file succeeded</agent_trace>',
+		].join('\n');
+
+		target.renderToolAwareAssistantText(container, assistantText, false);
+
+		const lineBadge = container.querySelector('.vsclone-tool-diff-title-line') as HTMLElement | null;
+		assert.ok(lineBadge);
+		assert.strictEqual(lineBadge.textContent, 'Ln 20-28');
+
+		lineBadge.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+		assert.strictEqual(openEditorCalls.length, 1);
+		assert.strictEqual(openEditorCalls[0].options?.selection?.startLineNumber, 20);
+		assert.strictEqual(openEditorCalls[0].options?.selection?.endLineNumber, 28);
+	});
+
+	test('tool-aware renderer backfills line numbers for legacy change hunks', async () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderToolAwareAssistantTarget & {
+			editorService: { openEditor: (input: { resource: { toString(): string }; options?: { selection?: { startLineNumber: number; endLineNumber?: number } } }) => Promise<unknown> };
+			modelService: { getModel: (resource: { toString(): string }) => { getValue(): string } | undefined };
+			fileService: { readFile: () => Promise<{ value: { toString(): string } }> };
+		};
+		const container = document.createElement('div');
+		const openEditorCalls: Array<{ resource: { toString(): string }; options?: { selection?: { startLineNumber: number; endLineNumber?: number } } }> = [];
+		target.editorService = {
+			openEditor: async (input) => {
+				openEditorCalls.push(input);
+				return undefined;
+			},
+		};
+		target.modelService = {
+			getModel: resource => resource.toString() === 'file:///workspace/src/styles.css'
+				? {
+					getValue: () => [
+						'body {',
+						'  margin: 0;',
+						'  font-family: "Comic Sans MS", "Comic Sans", cursive;',
+						'}',
+					].join('\n'),
+				}
+				: undefined,
+		};
+		target.fileService = {
+			readFile: async () => ({ value: { toString: () => '' } }),
+		};
+
+		const formattedOutput = formatToolResultWithDiff(
+			'Applied 1 edit(s) to file:///workspace/src/styles.css. Current diagnostics on file: 0.',
+			[
+				'--- a/src/styles.css',
+				'+++ b/src/styles.css',
+				'@@ change 1 @@',
+				'-font-family: ui-sans-serif, system-ui;',
+				'+font-family: "Comic Sans MS", "Comic Sans", cursive;',
+			].join('\n'),
+		);
+		const assistantText = [
+			'<agent_trace type="tool" status="start">Edited src/styles.css</agent_trace>',
+			`<tool_result tool_name="edit_file" success="true">${formattedOutput}</tool_result>`,
+			'<agent_trace type="tool_result" status="success">edit_file succeeded</agent_trace>',
+		].join('\n');
+
+		target.renderToolAwareAssistantText(container, assistantText, false);
+		await new Promise(resolve => setTimeout(resolve, 0));
+
+		const lineBadge = container.querySelector('.vsclone-tool-diff-title-line') as HTMLElement | null;
+		assert.ok(lineBadge);
+		assert.strictEqual(lineBadge.textContent, 'Ln 3');
+
+		const fileLabel = container.querySelector('.vsclone-tool-diff-title-filename') as HTMLAnchorElement | null;
+		assert.ok(fileLabel);
+		fileLabel.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+		assert.strictEqual(openEditorCalls.length, 1);
+		assert.strictEqual(openEditorCalls[0].options?.selection?.startLineNumber, 3);
 	});
 });

@@ -15,23 +15,34 @@ import { InlineCompletion, InlineCompletionContext, InlineCompletions, InlineCom
 import { ITextModel } from '../../../../editor/common/model.js';
 import { ILanguageFeaturesService } from '../../../../editor/common/services/languageFeatures.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
-import { IVSCloneCompletionBackend, VSCloneCompletionPredictionType } from '../common/vscloneCompletionBackend.js';
-import { postProcessCompletion } from '../common/vscloneCompletionPostProcessor.js';
+import { localize } from '../../../../nls.js';
+import { IVSCloneCompletionBackend, VSCloneCompletionPredictionType } from '../common/vscloneCompletionTypes.js';
+import { IVSCloneCompletionContextService } from './vscloneCompletionContextService.js';
 
 export const VSCloneAutocompleteEnabledSetting = 'vsclone.autocomplete.enabled';
 export const VSCloneAutocompleteDebounceMsSetting = 'vsclone.autocomplete.debounceMs';
+export const VSCloneInlineSuggestionVisibleContextKey = new RawContextKey<boolean>('vsclone.inlineSuggestionVisible', false, localize('vsclone.inlineSuggestionVisible', "Whether a VSClone inline suggestion is visible."));
 
 const defaultDebounceMs = 500;
+const triggerCharacterDebounceMs = 250;
+const emptyLineDebounceMs = 300;
+const identifierDebounceMs = 325;
+const fillMiddleDebounceMs = 400;
 const defaultEnabled = true;
 const cacheEntryLimitPerDocument = 20;
 const cacheEntryMaxAgeMs = 30_000;
 const maxConcurrentRequestsPerDocument = 2;
 const maxPrefixContextLines = 120;
 const maxSuffixContextLines = 80;
-const maxPrefixContextCharacters = 12_000;
-const maxSuffixContextCharacters = 4_000;
+const maxPrefixContextCharacters = 8_000;
+const maxSuffixContextCharacters = 2_000;
+const maxCrossFileContextSnippets = 2;
+const maxCrossFileContextCharsPerSnippet = 1_000;
+const completionTriggerCharacters = new Set(['.', '(', '{', ':', '=']);
+const identifierAtEndOfLinePattern = /[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 type VSClonePredictionMode = 'single-line-redo-suffix' | 'single-line-fill-middle' | 'multi-line' | 'do-not-predict';
 
@@ -80,15 +91,20 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 	private readonly cacheByResource = new ResourceMap<LRUCache<string, IVSCloneCachedCompletion>>();
 	private readonly latestRequestTimestampByResource = new ResourceMap<number>();
 	private readonly activeRequestsByResource = new ResourceMap<IVSCloneActiveBackendRequest[]>();
+	private readonly shownCompletionLists = new Set<InlineCompletions>();
+	private readonly inlineSuggestionVisibleContextKey: IContextKey<boolean>;
 	private requestIdPool = 0;
 
 	constructor(
 		@IVSCloneCompletionBackend private readonly backend: IVSCloneCompletionBackend,
+		@IVSCloneCompletionContextService private readonly completionContextService: IVSCloneCompletionContextService,
 		@ILanguageFeaturesService languageFeaturesService: ILanguageFeaturesService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IContextKeyService contextKeyService: IContextKeyService,
 		@ILogService private readonly logService: ILogService,
 	) {
 		super();
+		this.inlineSuggestionVisibleContextKey = VSCloneInlineSuggestionVisibleContextKey.bindTo(contextKeyService);
 		this._register(languageFeaturesService.inlineCompletionsProvider.register({ pattern: '**' }, this));
 	}
 
@@ -102,6 +118,8 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 		this.activeRequestsByResource.clear();
 		this.cacheByResource.clear();
 		this.latestRequestTimestampByResource.clear();
+		this.shownCompletionLists.clear();
+		this.inlineSuggestionVisibleContextKey.reset();
 		super.dispose();
 	}
 
@@ -112,10 +130,6 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 		token: CancellationToken,
 	): Promise<InlineCompletions | undefined> {
 		if (!this.isEnabled()) {
-			return undefined;
-		}
-
-		if (!(await this.debounce(model.uri, token)) || token.isCancellationRequested) {
 			return undefined;
 		}
 
@@ -133,7 +147,21 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 			};
 		}
 
+		if (!(await this.debounce(model.uri, completionContext, predictionMode, token)) || token.isCancellationRequested) {
+			return undefined;
+		}
+
 		const predictionType = this.toBackendPredictionType(predictionMode);
+		// Single-line inline suggestions need to win on latency first. Cross-file context is reserved
+		// for multi-line continuations where the added semantic signal is more likely to offset cost.
+		const crossFileContext = predictionType === 'multi-line'
+			? this.completionContextService.gatherContext(
+				model.uri,
+				model.getLanguageId(),
+				maxCrossFileContextSnippets,
+				maxCrossFileContextCharsPerSnippet,
+			)
+			: [];
 		const requestHandle = this.beginBackendRequest(model.uri, token);
 		let rawCompletion: string | undefined;
 		try {
@@ -143,7 +171,8 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 				languageId: model.getLanguageId(),
 				filePath: model.uri.fsPath,
 				predictionType,
-				maxTokens: predictionType === 'multi-line' ? 256 : 128,
+				maxTokens: predictionType === 'multi-line' ? 160 : 64,
+				crossFileContext,
 			}, requestHandle.token);
 		} catch (error) {
 			if (!isCancellationError(error)) {
@@ -158,24 +187,35 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 			return undefined;
 		}
 
-		const postProcessed = postProcessCompletion(rawCompletion, completionContext.prefix, completionContext.suffix, predictionType);
-		if (!postProcessed) {
-			return undefined;
-		}
-
-		this.addToCache(model.uri, completionContext.prefix, postProcessed);
+		// The backend already applies deterministic normalization so cache reuse and UI insertion stay
+		// aligned with the exact text that was shown to the user as ghost text.
+		this.addToCache(model.uri, completionContext.prefix, rawCompletion);
 
 		const range = this.getReplaceRange(model, position, predictionMode);
 		const item: InlineCompletion = {
-			insertText: postProcessed,
+			insertText: rawCompletion,
 			range,
 		};
 
 		return { items: [item] };
 	}
 
-	disposeInlineCompletions(_completions: InlineCompletions): void {
-		// Provider returns immutable payloads, so there is no per-result resource to release.
+	handleItemDidShow(completions: InlineCompletions, _item: InlineCompletion): void {
+		// The editor does not expose provider-specific context keys, so we track when a VSClone result
+		// is the visible ghost text and use that to scope the Tab override narrowly to VSClone items.
+		if (this.shownCompletionLists.has(completions)) {
+			return;
+		}
+
+		this.shownCompletionLists.add(completions);
+		this.inlineSuggestionVisibleContextKey.set(true);
+	}
+
+	disposeInlineCompletions(completions: InlineCompletions): void {
+		// Visibility is reference-counted by completion list so a stale dispose cannot clear the key
+		// while a newer VSClone suggestion is still visible.
+		this.shownCompletionLists.delete(completions);
+		this.inlineSuggestionVisibleContextKey.set(this.shownCompletionLists.size > 0);
 	}
 
 	private isEnabled(): boolean {
@@ -191,8 +231,40 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 		return Math.max(0, configured);
 	}
 
-	private async debounce(resource: URI, token: CancellationToken): Promise<boolean> {
-		const debounceMs = this.getDebounceMs();
+	/**
+	 * Lower prompt budgets and a smaller inline model reduce backend latency enough that we can
+	 * afford more responsive debounce values again without falling back into constant cancellations.
+	 */
+	private getAdaptiveDebounceMs(context: IVSCloneCompletionContext, mode: VSClonePredictionMode): number {
+		if (mode === 'single-line-fill-middle') {
+			return fillMiddleDebounceMs;
+		}
+
+		if (mode === 'multi-line' && context.linePrefix.trim().length === 0 && context.lineSuffix.trim().length === 0) {
+			return emptyLineDebounceMs;
+		}
+
+		const linePrefixTrimmedRight = context.linePrefix.trimEnd();
+		if (context.lineSuffix.length === 0 && linePrefixTrimmedRight.length > 0) {
+			const lastCharacter = linePrefixTrimmedRight[linePrefixTrimmedRight.length - 1];
+			if (completionTriggerCharacters.has(lastCharacter)) {
+				return triggerCharacterDebounceMs;
+			}
+			if (identifierAtEndOfLinePattern.test(linePrefixTrimmedRight)) {
+				return identifierDebounceMs;
+			}
+		}
+
+		return fillMiddleDebounceMs;
+	}
+
+	private async debounce(
+		resource: URI,
+		context: IVSCloneCompletionContext,
+		mode: VSClonePredictionMode,
+		token: CancellationToken,
+	): Promise<boolean> {
+		const debounceMs = Math.min(this.getDebounceMs(), this.getAdaptiveDebounceMs(context, mode));
 		if (debounceMs <= 0) {
 			return true;
 		}
