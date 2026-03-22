@@ -274,11 +274,12 @@ function buildApiHeaders(vendor: VSCloneModelVendor, tokenSet: IVSCloneOAuthToke
 			break;
 		}
 		case 'google': {
-			headers['User-Agent'] = 'antigravity/1.0.0';
-			headers['Client-Metadata'] = JSON.stringify({
-				ideType: 'VSCLONE',
-				platform: typeof process !== 'undefined' ? process.platform : 'unknown',
-			});
+			const quotaProject = defaultOAuthProviderConfig.google.quotaProject;
+			// Google's REST OAuth quickstart sends quota/billing attribution through
+			// `x-goog-user-project`, so preserve that header whenever local config can resolve one.
+			if (quotaProject) {
+				headers['x-goog-user-project'] = quotaProject;
+			}
 			break;
 		}
 	}

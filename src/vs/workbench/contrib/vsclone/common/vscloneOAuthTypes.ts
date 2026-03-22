@@ -68,7 +68,9 @@ export interface IVSCloneOAuthProviderConfig {
 	readonly extraAuthorizeParams: Readonly<Record<string, string>>;
 	/** Extra body params added to the token exchange POST */
 	readonly extraTokenParams: Readonly<Record<string, string>>;
-	/** The API endpoint this provider's tokens grant access to */
+	/** Optional Google quota/billing project sent as `x-goog-user-project` on REST calls. */
+	readonly quotaProject?: string;
+	/** The API endpoint or base URL this provider's tokens grant access to. */
 	readonly apiEndpoint: string;
 }
 
@@ -79,6 +81,19 @@ export interface IVSCloneOAuthProviderConfig {
 function optionalOAuthEnvValue(key: string): string | undefined {
 	const rawValue = env[key]?.trim();
 	return rawValue && rawValue.length > 0 ? rawValue : undefined;
+}
+
+const googleOAuthClientId = optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_ID') ?? 'vsclone-google-client-id';
+
+/**
+ * Google's desktop OAuth client IDs embed the owning Cloud project number as the leading token
+ * (`1234567890-...apps.googleusercontent.com`). The public Gemini REST OAuth quickstart expects
+ * callers to send `x-goog-user-project`, so we infer that quota project by default and still
+ * allow local overrides for setups where billing/quota should land on a different project.
+ */
+function inferGoogleQuotaProjectFromClientId(clientId: string): string | undefined {
+	const match = /^([0-9]+)-/.exec(clientId);
+	return match?.[1];
 }
 
 /** Single source of truth - add new providers here */
@@ -117,21 +132,24 @@ export const defaultOAuthProviderConfig: Readonly<Record<VSCloneModelVendor, IVS
 		vendor: 'google',
 		displayName: 'Google',
 		// Keep repository defaults credential-free while letting local env vars provide real credentials.
-		clientId: optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_ID') ?? 'vsclone-google-client-id',
+		clientId: googleOAuthClientId,
 		clientSecret: optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET'),
 		authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
 		tokenUrl: 'https://oauth2.googleapis.com/token',
+		// The public Gemini OAuth quickstart's manual OAuth flow uses the Gemini retriever scope for
+		// user-authorized REST access, and live `streamGenerateContent` calls reject tokens that do
+		// not carry that Gemini scope. Keep the scope set limited to the one Google API this provider
+		// calls while still avoiding profile scopes because the UI can function without user claims.
 		scopes: [
-			'https://www.googleapis.com/auth/cloud-platform',
-			'https://www.googleapis.com/auth/userinfo.email',
-			'https://www.googleapis.com/auth/userinfo.profile',
+			'https://www.googleapis.com/auth/generative-language.retriever',
 		],
 		redirectStrategy: 'loopback',
 		redirectUriTemplate: 'http://127.0.0.1:{port}/oauth2callback',
 		preferredPort: 0,
 		extraAuthorizeParams: { access_type: 'offline', prompt: 'consent' },
 		extraTokenParams: {},
-		apiEndpoint: 'https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse',
+		quotaProject: optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT') ?? inferGoogleQuotaProjectFromClientId(googleOAuthClientId),
+		apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
 	},
 } as const;
 

@@ -52,6 +52,10 @@ suite('VSCloneCompletionApiAdapters', () => {
 
 		assert.strictEqual(anthropicRequest.body.model, 'claude-haiku-4-5-20251001');
 		assert.strictEqual(anthropicRequest.body.temperature, 0.01);
+		assert.strictEqual(googleRequest.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse');
+		assert.deepStrictEqual(googleRequest.body.systemInstruction, {
+			parts: [{ text: 'system' }],
+		});
 		assert.strictEqual((googleRequest.body.generationConfig as { temperature?: number }).temperature, 0.01);
 	});
 
@@ -62,6 +66,11 @@ suite('VSCloneCompletionApiAdapters', () => {
 		assert.strictEqual(resolveVSCloneApiModelId('anthropic', 'claude-sonnet-4.6'), 'claude-sonnet-4-6');
 		assert.strictEqual(resolveVSCloneApiModelId('anthropic', 'claude-sonnet-4.0'), 'claude-sonnet-4-20250514');
 		assert.strictEqual(resolveVSCloneApiModelId('anthropic', 'claude-haiku-4.5'), 'claude-haiku-4-5-20251001');
+	});
+
+	test('maps Google picker IDs to the live provider model aliases', () => {
+		assert.strictEqual(resolveVSCloneApiModelId('google', 'gemini-3-pro'), 'gemini-3.1-pro-preview');
+		assert.strictEqual(resolveVSCloneApiModelId('google', 'gemini-3-flash'), 'gemini-3-flash-preview');
 	});
 
 	test('rejects Anthropic completion models that the OAuth Messages beta still fails to serve', () => {

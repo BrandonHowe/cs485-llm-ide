@@ -221,7 +221,11 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 	private createButtonModelLabel(selection: IVSCloneModelSelection | undefined): HTMLElement {
 		const model = document.createElement('span');
 		model.className = 'vsclone-model-switcher-button-model';
-		model.textContent = selection?.modelName || localize('vsclone.modelSwitcher.selectModel', 'Select model');
+		const label = selection?.modelName || localize('vsclone.modelSwitcher.selectModel', 'Select model');
+		model.textContent = label;
+		// Mirror the full label into the native tooltip so truncation in the composer never hides
+		// the exact selected model from mouse users.
+		model.title = label;
 		return model;
 	}
 
@@ -337,6 +341,9 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		const title = document.createElement('span');
 		title.className = 'vsclone-model-switcher-row-label';
 		title.textContent = model.modelName;
+		// Keep the full model name inspectable even when the menu row has to ellipsize inside the
+		// fixed-width dropdown panel.
+		title.title = model.modelName;
 		row.appendChild(title);
 
 		if (selected?.modelIdentifier === model.identifier) {

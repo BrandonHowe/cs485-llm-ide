@@ -53,4 +53,22 @@ suite('VSCloneChatApiAdapters', () => {
 			/Anthropic OAuth messages currently support only Claude Haiku 4\.5 and Claude Haiku 3/,
 		);
 	});
+
+	test('google requests target the public Gemini streaming endpoint with a dedicated system instruction', () => {
+		const request = getVendorAdapter('google').buildRequest(createSubmitOptions({
+			vendor: 'google',
+			modelId: 'gemini-2.5-pro',
+			modelIdentifier: 'google/gemini-2.5-pro',
+			systemMessage: 'system prompt',
+		}));
+
+		assert.strictEqual(request.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse');
+		assert.deepStrictEqual(request.body.systemInstruction, {
+			parts: [{ text: 'system prompt' }],
+		});
+		assert.deepStrictEqual(request.body.contents, [{
+			role: 'user',
+			parts: [{ text: 'what model are you' }],
+		}]);
+	});
 });

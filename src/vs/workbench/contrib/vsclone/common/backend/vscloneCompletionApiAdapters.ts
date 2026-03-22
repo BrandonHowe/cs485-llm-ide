@@ -100,17 +100,22 @@ function buildAnthropicRequest(envelope: IVSCloneCompletionPromptEnvelope, selec
 function buildGoogleRequest(envelope: IVSCloneCompletionPromptEnvelope, selection: IVSCloneModelSelection): IVSCloneCompletionAdapterRequest {
 	const apiModelId = resolveVSCloneApiModelId('google', selection.modelId);
 	const baseUrl = defaultOAuthProviderConfig.google.apiEndpoint;
-	const url = baseUrl.replace('/v1internal:', `/v1internal/models/${apiModelId}:`);
+	const url = `${baseUrl}/${apiModelId}:streamGenerateContent?alt=sse`;
 
 	return {
 		url,
 		body: {
-			// Gemini's internal endpoint does not expose a dedicated system field, so we keep the
-			// instruction at the top of the first user turn to preserve transport compatibility.
+			// The public Gemini REST API accepts a dedicated `systemInstruction` block, which avoids
+			// polluting the user prompt with transport-only scaffolding.
+			systemInstruction: {
+				parts: [{
+					text: envelope.systemMessage,
+				}],
+			},
 			contents: [{
 				role: 'user',
 				parts: [{
-					text: `${envelope.systemMessage}\n\n${envelope.promptText}`,
+					text: envelope.promptText,
 				}],
 			}],
 			generationConfig: {

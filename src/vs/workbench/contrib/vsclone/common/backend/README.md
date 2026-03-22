@@ -36,12 +36,12 @@ The table below lists every external library, framework, technology, or service 
 | OAuth 2.0 Authorization Code + PKCE | Yes for provider sign-in | All three providers authenticate through OAuth rather than raw API keys. | Loopback capture is preferred; manual paste fallback exists if localhost callback capture fails. |
 | OpenAI OAuth + Codex Responses API | Optional provider | Used when the active vendor is `openai`. | Requires a user account with access to the backing OpenAI/ChatGPT service. |
 | Anthropic OAuth + Messages API | Optional provider | Used when the active vendor is `anthropic`. | Requires a user account with access to the backing Anthropic service. |
-| Google OAuth + Gemini/Cloud Code streaming endpoint | Optional provider | Used when the active vendor is `google`. | Requires local client credentials in `.env.vsclone` and a user account with access. |
+| Google OAuth + Gemini REST streaming endpoint | Optional provider | Used when the active vendor is `google`. | Requires local client credentials in `.env.vsclone` and a user account with access. |
 | Local environment file loading (`.env.vsclone`, `.env.local`, `.env`) | Optional | `scripts/code.sh` loads these before startup so repo-local credentials can be injected. | Only Google currently depends on repo-local OAuth client credentials. |
 
 ### Provider Endpoints
 
-VSClone currently talks to these external services:
+VSClone currently supports OpenAI, Google, and Anthropic logins. It currently talks to these external services:
 
 - OpenAI
   - OAuth authorize: `https://auth.openai.com/oauth/authorize`
@@ -54,7 +54,9 @@ VSClone currently talks to these external services:
 - Google
   - OAuth authorize: `https://accounts.google.com/o/oauth2/v2/auth`
   - OAuth token: `https://oauth2.googleapis.com/token`
-  - Inference: `https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`
+  - Inference: `https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse`
+
+**Note: Due to Anthropic login being against their Terms of Service, only select Haiku models are offered.**
 
 ### OAuth and Loopback Ports
 
@@ -126,6 +128,7 @@ Then populate:
 
 - `VSCODE_VSCLONE_GOOGLE_CLIENT_ID`
 - `VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET`
+- `VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT` (optional override for the billed/quota project)
 
 ### Prerequisites
 

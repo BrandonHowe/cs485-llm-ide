@@ -746,6 +746,7 @@
 	grid-template-areas:
 		'input send'
 		'controls controls'
+		'mode mode'
 		'hint hint';
 	gap: 8px 10px;
 	background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorWidget-background) 10%);
@@ -817,8 +818,10 @@
 
 .vsclone-thread-model-switcher {
 	position: relative;
-	flex: 0 1 auto;
-	width: fit-content;
+	/* Cap the composer control so long model names shrink and ellipsize instead of pushing the */
+	/* other composer selectors out of view. */
+	flex: 0 1 240px;
+	width: min(240px, 100%);
 	max-width: 100%;
 	min-width: 0;
 }
@@ -832,47 +835,134 @@
 	display: none;
 }
 
-.vsclone-plan-mode-toggle {
+.vsclone-thread-plan-mode {
+	grid-area: mode;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 10px;
+	border-radius: 8px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 88%, white 12%);
+	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 64%, var(--vscode-editor-background) 36%);
+}
+
+.vsclone-thread-plan-mode.plan-active {
+	border-color: color-mix(in srgb, var(--vscode-testing-iconQueued) 44%, var(--vscode-panel-border) 56%);
+	background: color-mix(in srgb, var(--vscode-testing-iconQueued) 11%, var(--vscode-editor-background) 89%);
+}
+
+.vsclone-thread-plan-mode.act-active {
+	border-color: color-mix(in srgb, var(--vscode-panel-border) 88%, white 12%);
+	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 64%, var(--vscode-editor-background) 36%);
+}
+
+.vsclone-thread-plan-mode-copy {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.vsclone-thread-plan-mode-label-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.vsclone-thread-plan-mode-label {
+	font-size: 12px;
+	font-weight: 700;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 94%, white 6%);
+}
+
+.vsclone-thread-plan-mode-state {
 	display: inline-flex;
 	align-items: center;
-	padding: 2px;
-	border-radius: 6px;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 90%, white 10%);
-	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 72%, var(--vscode-editor-background) 28%);
-}
-
-.vsclone-plan-mode-button {
-	height: 24px;
-	min-width: 44px;
-	padding: 0 10px;
-	border: none;
-	border-radius: 4px;
-	background: transparent;
-	color: color-mix(in srgb, var(--vscode-editor-foreground) 86%, white 14%);
-	font-size: 11px;
+	height: 18px;
+	padding: 0 6px;
+	border-radius: 999px;
+	font-size: 10px;
 	font-weight: 700;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 88%, white 12%);
+	background: color-mix(in srgb, var(--vscode-panel-border) 72%, transparent 28%);
+}
+
+.vsclone-thread-plan-mode.plan-active .vsclone-thread-plan-mode-state {
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 92%, white 8%);
+	background: color-mix(in srgb, var(--vscode-testing-iconQueued) 24%, transparent 76%);
+}
+
+.vsclone-thread-plan-mode-description {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vsclone-thread-plan-mode-switch {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 46px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: 999px;
+	background: transparent;
 	cursor: pointer;
-	transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
 }
 
-.vsclone-plan-mode-button:hover {
-	background: color-mix(in srgb, var(--vscode-button-secondaryHoverBackground) 74%, transparent 26%);
+.vsclone-thread-plan-mode-switch-track {
+	position: relative;
+	display: block;
+	width: 44px;
+	height: 24px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 88%, white 12%);
+	background: color-mix(in srgb, var(--vscode-input-background) 72%, var(--vscode-editor-background) 28%);
+	transition: border-color 120ms ease, background 120ms ease;
 }
 
-.vsclone-plan-mode-button.active {
-	background: color-mix(in srgb, var(--vscode-focusBorder) 24%, transparent 76%);
-	color: var(--vscode-editor-foreground);
+.vsclone-thread-plan-mode-switch-thumb {
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	background: color-mix(in srgb, var(--vscode-editor-foreground) 92%, white 8%);
+	box-shadow: 0 1px 4px color-mix(in srgb, black 40%, transparent 60%);
+	transition: transform 120ms ease, background 120ms ease;
 }
 
-.vsclone-plan-mode-toggle.plan-active .vsclone-plan-mode-button.active {
-	background: color-mix(in srgb, var(--vscode-testing-iconQueued) 20%, transparent 80%);
+.vsclone-thread-plan-mode-switch:hover .vsclone-thread-plan-mode-switch-track {
+	background: color-mix(in srgb, var(--vscode-button-secondaryHoverBackground) 70%, var(--vscode-editor-background) 30%);
 }
 
-.vsclone-plan-mode-toggle.act-active .vsclone-plan-mode-button.active {
-	background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent 82%);
+.vsclone-thread-plan-mode-switch.checked .vsclone-thread-plan-mode-switch-track {
+	border-color: color-mix(in srgb, var(--vscode-testing-iconQueued) 58%, var(--vscode-panel-border) 42%);
+	background: color-mix(in srgb, var(--vscode-testing-iconQueued) 44%, var(--vscode-editor-background) 56%);
 }
 
-.vsclone-plan-mode-button:disabled {
+.vsclone-thread-plan-mode-switch.checked .vsclone-thread-plan-mode-switch-thumb {
+	transform: translateX(20px);
+	background: var(--vscode-editor-background);
+}
+
+.vsclone-thread-plan-mode-switch:focus-visible {
+	outline: none;
+}
+
+.vsclone-thread-plan-mode-switch:focus-visible .vsclone-thread-plan-mode-switch-track {
+	border-color: color-mix(in srgb, var(--vscode-focusBorder) 88%, white 12%);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 28%, transparent 72%);
+}
+
+.vsclone-thread-plan-mode-switch:disabled {
 	cursor: default;
 	opacity: 0.65;
 }
@@ -917,13 +1007,13 @@
 
 .vsclone-model-switcher-root {
 	position: relative;
-	width: fit-content;
+	width: 100%;
 	max-width: 100%;
 }
 
 .vsclone-model-switcher-button {
 	height: 28px;
-	width: fit-content;
+	width: 100%;
 	max-width: 100%;
 	min-width: 0;
 	border-radius: 5px;
@@ -953,17 +1043,17 @@
 }
 
 .vsclone-model-switcher-button-model {
-	flex: 0 0 auto;
-	min-width: auto;
-	max-width: none;
+	flex: 1 1 auto;
+	min-width: 0;
 	white-space: nowrap;
-	text-overflow: clip;
-	overflow: visible;
+	text-overflow: ellipsis;
+	overflow: hidden;
 }
 
 .vsclone-model-switcher-button-provider {
-	flex: 1 1 12ch;
+	flex: 0 1 10ch;
 	min-width: 0;
+	max-width: 10ch;
 	font-size: 10px;
 	font-weight: 500;
 	opacity: 0.82;
@@ -1284,6 +1374,7 @@
 		grid-template-areas:
 			'input send'
 			'controls controls'
+			'mode mode'
 			'hint hint';
 	}
 
@@ -1294,18 +1385,17 @@
 
 	.vsclone-thread-model-switcher {
 		flex: 1 1 auto;
-		width: auto;
+		width: 100%;
 		min-width: 0;
 		max-width: none;
 	}
 
-	.vsclone-plan-mode-toggle {
-		width: 100%;
-		justify-content: stretch;
+	.vsclone-thread-plan-mode {
+		align-items: flex-start;
 	}
 
-	.vsclone-plan-mode-button {
-		flex: 1 1 0;
+	.vsclone-thread-plan-mode-description {
+		white-space: normal;
 	}
 
 	.vsclone-thread-reasoning-level {
@@ -1323,17 +1413,17 @@
 	}
 
 	.vsclone-model-switcher-button-model {
-		flex: 0 0 auto;
-		min-width: auto;
-		max-width: none;
+		flex: 1 1 auto;
+		min-width: 0;
 		white-space: nowrap;
-		overflow: visible;
-		text-overflow: clip;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.vsclone-model-switcher-button-provider {
-		flex: 1 1 9ch;
+		flex: 0 1 9ch;
 		min-width: 0;
+		max-width: 9ch;
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;

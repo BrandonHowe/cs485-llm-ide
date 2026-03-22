@@ -364,9 +364,39 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		const parent = document.createElement('div');
 		target.renderConversationSurface(parent);
+		const composer = parent.querySelector('.vsclone-thread-composer') as HTMLElement;
+		const controls = parent.querySelector('.vsclone-thread-composer-controls') as HTMLElement;
+		const planModeRow = parent.querySelector('.vsclone-thread-plan-mode') as HTMLElement;
+		const planModeSwitch = parent.querySelector('.vsclone-thread-plan-mode-switch') as HTMLButtonElement;
+		const hint = parent.querySelector('.vsclone-thread-composer-hint') as HTMLElement;
 		assert.ok(parent.querySelector('.vsclone-thread-model-switcher'));
 		assert.ok(parent.querySelector('.vsclone-thread-reasoning-level-select'));
-		assert.strictEqual(parent.querySelectorAll('.vsclone-plan-mode-button').length, 2);
+		assert.ok(planModeRow);
+		assert.strictEqual(controls.contains(planModeRow), false);
+		assert.deepStrictEqual(
+			{
+				role: planModeSwitch.getAttribute('role'),
+				checked: planModeSwitch.getAttribute('aria-checked'),
+				state: (planModeRow.querySelector('.vsclone-thread-plan-mode-state') as HTMLElement).textContent,
+				description: (planModeRow.querySelector('.vsclone-thread-plan-mode-description') as HTMLElement).textContent,
+				order: {
+					controls: Array.from(composer.children).indexOf(controls),
+					mode: Array.from(composer.children).indexOf(planModeRow),
+					hint: Array.from(composer.children).indexOf(hint),
+				},
+			},
+			{
+				role: 'switch',
+				checked: 'true',
+				state: 'On',
+				description: 'Read-only planning',
+				order: {
+					controls: 2,
+					mode: 3,
+					hint: 4,
+				},
+			},
+		);
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-button') as HTMLButtonElement).getAttribute('aria-label'), 'Show chat history');
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-overflow') as HTMLButtonElement).textContent, '\u22ef');
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-overflow') as HTMLButtonElement).getAttribute('aria-haspopup'), 'menu');
@@ -375,7 +405,6 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.strictEqual((parent.querySelector('.vsclone-thread-messages') as HTMLElement).getAttribute('aria-relevant'), 'additions text');
 		assert.strictEqual((parent.querySelector('.vsclone-thread-messages') as HTMLElement).getAttribute('aria-label'), 'Conversation messages');
 		assert.strictEqual((parent.querySelector('.vsclone-thread-composer-input') as HTMLTextAreaElement).getAttribute('aria-label'), 'Chat message');
-		const hint = parent.querySelector('.vsclone-thread-composer-hint') as HTMLElement;
 		assert.strictEqual((parent.querySelector('.vsclone-thread-composer-input') as HTMLTextAreaElement).getAttribute('aria-describedby'), hint.id);
 		// Explicitly dispose synthesized registrations in this unit harness to satisfy leak checks.
 		(target.modelSwitcher as { dispose?: () => void } | undefined)?.dispose?.();

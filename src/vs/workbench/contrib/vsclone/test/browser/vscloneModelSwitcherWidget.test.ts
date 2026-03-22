@@ -113,6 +113,8 @@ suite('VSCloneModelSwitcherWidget', () => {
 		const button = container.querySelector('.vsclone-model-switcher-button') as HTMLButtonElement;
 		assert.ok(button.textContent?.includes('Haiku 4.5'));
 		assert.ok(button.textContent?.includes('anthropic'));
+		const modelLabel = container.querySelector('.vsclone-model-switcher-button-model') as HTMLElement | null;
+		assert.strictEqual(modelLabel?.getAttribute('title'), 'Haiku 4.5');
 	});
 
 	test('escape closes the menu and restores focus to the switcher button', async () => {
@@ -161,6 +163,8 @@ suite('VSCloneModelSwitcherWidget', () => {
 		const lockedRow = container.querySelector('.vsclone-model-switcher-row.locked') as HTMLButtonElement | null;
 		assert.ok(lockedRow);
 		assert.ok((lockedRow?.getAttribute('aria-label') || '').includes('provider requires sign in'));
+		const firstRowLabel = container.querySelector('.vsclone-model-switcher-row-label') as HTMLElement | null;
+		assert.ok((firstRowLabel?.getAttribute('title') || '').length > 0);
 
 		// Icons created through createCodicon are decorative and must stay hidden to assistive tech.
 		const refreshIcon = container.querySelector('.vsclone-model-switcher-refresh .codicon') as HTMLElement | null;

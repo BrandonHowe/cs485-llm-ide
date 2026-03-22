@@ -196,8 +196,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private composerSendButton: HTMLButtonElement | undefined;
 	private modelSwitcher: VSCloneModelSwitcherWidget | undefined;
 	private planModeContainer: HTMLElement | undefined;
-	private planModePlanButton: HTMLButtonElement | undefined;
-	private planModeActButton: HTMLButtonElement | undefined;
+	private planModeSwitchButton: HTMLButtonElement | undefined;
+	private planModeStateLabel: HTMLSpanElement | undefined;
+	private planModeDescriptionLabel: HTMLSpanElement | undefined;
 	private reasoningEffortContainer: HTMLElement | undefined;
 	private reasoningEffortSelect: HTMLSelectElement | undefined;
 
@@ -627,8 +628,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const controls = document.createElement('div');
 		controls.className = 'vsclone-thread-composer-controls';
 		this.planModeContainer = undefined;
-		this.planModePlanButton = undefined;
-		this.planModeActButton = undefined;
+		this.planModeSwitchButton = undefined;
+		this.planModeStateLabel = undefined;
+		this.planModeDescriptionLabel = undefined;
 		this.reasoningEffortContainer = undefined;
 		this.reasoningEffortSelect = undefined;
 
@@ -670,29 +672,50 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.reasoningEffortSelect = reasoningEffortSelect;
 		}
 
-		// Keep execution mode explicit in the composer so users can swap between planning and acting
-		// without coupling that choice to provider/model switches for the same thread.
+		// Keep execution mode on its own row so provider/model controls stay compact, and pair the
+		// boolean switch with explicit copy because the thumb alone is less descriptive than Plan/Act.
 		const planModeHost = document.createElement('div');
-		planModeHost.className = 'vsclone-plan-mode-toggle';
-		planModeHost.setAttribute('role', 'group');
-		planModeHost.setAttribute(
-			'aria-label',
-			localize('vsclone.composer.mode', 'Chat mode'),
+		planModeHost.className = 'vsclone-thread-plan-mode';
+		const planModeCopy = document.createElement('div');
+		planModeCopy.className = 'vsclone-thread-plan-mode-copy';
+		const planModeLabelRow = document.createElement('div');
+		planModeLabelRow.className = 'vsclone-thread-plan-mode-label-row';
+		const planModeLabel = document.createElement('span');
+		planModeLabel.className = 'vsclone-thread-plan-mode-label';
+		planModeLabel.textContent = localize(
+			'vsclone.composer.mode.title',
+			'Plan Mode',
 		);
-		const planButton = document.createElement('button');
-		planButton.type = 'button';
-		planButton.className = 'vsclone-plan-mode-button';
-		planButton.textContent = localize('vsclone.composer.mode.plan', 'Plan');
-		const actButton = document.createElement('button');
-		actButton.type = 'button';
-		actButton.className = 'vsclone-plan-mode-button';
-		actButton.textContent = localize('vsclone.composer.mode.act', 'Act');
-		planModeHost.appendChild(planButton);
-		planModeHost.appendChild(actButton);
-		controls.appendChild(planModeHost);
+		planModeLabel.id = `${this.id}-composer-plan-mode-label`;
+		const planModeState = document.createElement('span');
+		planModeState.className = 'vsclone-thread-plan-mode-state';
+		const planModeDescription = document.createElement('span');
+		planModeDescription.className = 'vsclone-thread-plan-mode-description';
+		planModeDescription.id = `${this.id}-composer-plan-mode-description`;
+		planModeLabelRow.appendChild(planModeLabel);
+		planModeLabelRow.appendChild(planModeState);
+		planModeCopy.appendChild(planModeLabelRow);
+		planModeCopy.appendChild(planModeDescription);
+		const planModeSwitch = document.createElement('button');
+		planModeSwitch.type = 'button';
+		planModeSwitch.className = 'vsclone-thread-plan-mode-switch';
+		planModeSwitch.setAttribute('role', 'switch');
+		planModeSwitch.setAttribute('aria-labelledby', planModeLabel.id);
+		planModeSwitch.setAttribute('aria-describedby', planModeDescription.id);
+		const planModeSwitchTrack = document.createElement('span');
+		planModeSwitchTrack.className = 'vsclone-thread-plan-mode-switch-track';
+		planModeSwitchTrack.setAttribute('aria-hidden', 'true');
+		const planModeSwitchThumb = document.createElement('span');
+		planModeSwitchThumb.className = 'vsclone-thread-plan-mode-switch-thumb';
+		planModeSwitchThumb.setAttribute('aria-hidden', 'true');
+		planModeSwitchTrack.appendChild(planModeSwitchThumb);
+		planModeSwitch.appendChild(planModeSwitchTrack);
+		planModeHost.appendChild(planModeCopy);
+		planModeHost.appendChild(planModeSwitch);
 		this.planModeContainer = planModeHost;
-		this.planModePlanButton = planButton;
-		this.planModeActButton = actButton;
+		this.planModeSwitchButton = planModeSwitch;
+		this.planModeStateLabel = planModeState;
+		this.planModeDescriptionLabel = planModeDescription;
 
 		const hint = document.createElement('div');
 		hint.className = 'vsclone-thread-composer-hint';
@@ -707,6 +730,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		composer.appendChild(input);
 		composer.appendChild(send);
 		composer.appendChild(controls);
+		composer.appendChild(planModeHost);
 		composer.appendChild(hint);
 
 		parent.appendChild(actions);
@@ -803,15 +827,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				void this.submitPrompt();
 			}),
 		);
-		if (this.planModePlanButton && this.planModeActButton) {
+		if (this.planModeSwitchButton) {
 			this._register(
-				addDisposableListener(this.planModePlanButton, EventType.CLICK, () => {
-					void this.updatePlanModeSelection('plan');
-				}),
-			);
-			this._register(
-				addDisposableListener(this.planModeActButton, EventType.CLICK, () => {
-					void this.updatePlanModeSelection('act');
+				addDisposableListener(this.planModeSwitchButton, EventType.CLICK, () => {
+					const nextMode =
+						this.getCurrentComposerMode() === 'plan' ? 'act' : 'plan';
+					void this.updatePlanModeSelection(nextMode);
 				}),
 			);
 		}
@@ -2993,8 +3014,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private refreshPlanModeControl(composerBusy?: boolean): void {
 		if (
 			!this.planModeContainer ||
-			!this.planModePlanButton ||
-			!this.planModeActButton
+			!this.planModeSwitchButton ||
+			!this.planModeStateLabel ||
+			!this.planModeDescriptionLabel
 		) {
 			return;
 		}
@@ -3006,18 +3028,28 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const mode = this.getCurrentComposerMode();
 		this.planModeContainer.classList.toggle('plan-active', mode === 'plan');
 		this.planModeContainer.classList.toggle('act-active', mode === 'act');
-		this.planModePlanButton.classList.toggle('active', mode === 'plan');
-		this.planModeActButton.classList.toggle('active', mode === 'act');
-		this.planModePlanButton.disabled = busy;
-		this.planModeActButton.disabled = busy;
-		this.planModePlanButton.setAttribute(
-			'aria-pressed',
+		this.planModeSwitchButton.classList.toggle('checked', mode === 'plan');
+		this.planModeSwitchButton.disabled = busy;
+		this.planModeSwitchButton.setAttribute(
+			'aria-checked',
 			mode === 'plan' ? 'true' : 'false',
 		);
-		this.planModeActButton.setAttribute(
-			'aria-pressed',
-			mode === 'act' ? 'true' : 'false',
-		);
+		// Mirror the current mode in text so the toggle stays understandable even when the switch is
+		// glanced at quickly or presented to assistive technology outside the visual track.
+		this.planModeStateLabel.textContent =
+			mode === 'plan'
+				? localize('vsclone.composer.mode.state.on', 'On')
+				: localize('vsclone.composer.mode.state.off', 'Off');
+		this.planModeDescriptionLabel.textContent =
+			mode === 'plan'
+				? localize(
+					'vsclone.composer.mode.description.plan',
+					'Read-only planning',
+				)
+				: localize(
+					'vsclone.composer.mode.description.act',
+					'Tool use and file edits enabled',
+				);
 	}
 
 	private async updatePlanModeSelection(mode: VSCloneChatMode): Promise<void> {
@@ -3177,7 +3209,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private toReasoningEffortLabel(level: VSCloneReasoningEffortLevel): string {
 		switch (level) {
 			case 'xhigh':
-				return localize('vsclone.composer.reasoningEffort.xhigh', 'Extra High');
+				return localize('vsclone.composer.reasoningEffort.xhigh', 'xhigh');
 			case 'max':
 				return localize('vsclone.composer.reasoningEffort.max', 'Max');
 			case 'high':

@@ -72,6 +72,25 @@ suite('VSCloneOAuthService', () => {
 		);
 	});
 
+	test('google provider config matches the current Gemini OAuth quickstart', () => {
+		assert.deepStrictEqual(
+			{
+				authUrl: defaultOAuthProviderConfig.google.authUrl,
+				tokenUrl: defaultOAuthProviderConfig.google.tokenUrl,
+				redirectUriTemplate: defaultOAuthProviderConfig.google.redirectUriTemplate,
+				scopes: defaultOAuthProviderConfig.google.scopes,
+			},
+			{
+				authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+				tokenUrl: 'https://oauth2.googleapis.com/token',
+				redirectUriTemplate: 'http://127.0.0.1:{port}/oauth2callback',
+				scopes: [
+					'https://www.googleapis.com/auth/generative-language.retriever',
+				],
+			}
+		);
+	});
+
 	test('initialize restores a persisted token and marks the provider ready', async () => {
 		const testDisposables = store.add(new DisposableStore());
 		const secretStorageService = testDisposables.add(new TestSecretStorageService());
