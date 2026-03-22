@@ -1,0 +1,14 @@
+flowchart TD
+  Caller["Composer"] --> Session["VSCloneChatSessionService"]
+  Session --> Selection["Thread Model Selection"]
+  Session --> Mode["VSClonePlanModeService"]
+  Session --> Context["VSCloneContextGatheringService"]
+  Session --> Prompt["VSClonePromptAssemblyService"]
+  Session --> Agent["VSCloneAgentLoopService"]
+  Agent --> Api["VSCloneChatApiService"]
+  Agent --> Tools["VSCloneToolExecutionService"]
+  Api --> Channel["VSCloneChatApiChannel"]
+  Channel --> Providers["OpenAI / Anthropic / Google"]
+  Agent --> History["VSCloneChatHistoryService"]
+  Api --> History
+  Tools --> History

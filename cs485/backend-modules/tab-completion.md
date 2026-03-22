@@ -1,297 +1,169 @@
-# Module 4: Tab Completion
+# Tab Completion
 
-Shared cross-module backend architecture, storage conventions, and design rationale live in [the backend architecture document](../backend-unified-spec.md). This module document isolates the `Tab Completion` backend so the low-latency request path, model-policy reuse, and completion transport details stay focused and implementation-ready.
-
-This module also draws directly on [the existing autocomplete research](../../src/vs/workbench/contrib/vsclone/AUTOCOMPLETE_RESEARCH.md) and the current VSClone scaffolding under `src/vs/workbench/contrib/vsclone`.
+Shared backend architecture lives in [the backend architecture document](../backend-unified-spec.md). This document focuses on the implemented `Tab Completion` backend: the editor-facing inline completion provider, bounded context gathering, completion prompt shaping, provider transport, retry policy, and post-processing.
 
 ## 1. Features
 
 What it can do:
 
-- accept bounded prefix/suffix context from `VSCloneAutocompleteService`
-- resolve an effective completion model for the `editorInline` location by reusing the existing model-selection backend
-- assemble a vendor-ready fill-in-the-middle style completion prompt from the current document snapshot
-- submit a low-latency completion request through a dedicated completion transport path
-- normalize raw provider output into plain source text through deterministic post-processing
-- honor cancellation, timeout, and per-document concurrency limits
-- support future retrieval of nearby same-language snippets without changing the editor-facing provider contract
+- register an inline completions provider for editor models
+- extract bounded prefix/suffix context around the cursor
+- choose a prediction mode (`single-line` vs `multi-line`)
+- debounce requests adaptively based on local typing context
+- reuse cached suggestions when the current prefix extends a prior prefix
+- gather small cross-file context snippets for multi-line continuations
+- resolve the `editorInline` model selection through the shared selection backend
+- send dedicated completion requests through a separate main-process transport
+- retry on inline fallback models when a provider request fails
+- post-process raw provider output into exact insertion text
 
 What it does not do:
 
-- it does not render ghost text or own editor keybindings
-- it does not persist completion payloads or acceptance history in MVP
-- it does not reuse the heavier chat context-gathering path on every keystroke
-- it does not mutate chat history state
-- it does not store provider secrets or tokens
+- it does not persist completion results across restart
+- it does not reuse the full chat context-gathering pipeline on every keystroke
+- it does not route through the chat history transport
+- it does not own OAuth token storage
 
 ## 2. Internal Architecture
 
-The backend boundary starts at `IVSCloneCompletionBackend.complete(...)` and ends when one normalized completion string is returned to `VSCloneAutocompleteService`.
+The implemented request path is:
 
-The implementation should stay split into four concerns:
+1. `VSCloneAutocompleteService`
+   - debounce, prediction mode, cache, replace range, and cancellation
+2. `VSCloneCompletionContextService`
+   - optional open-tab snippets for multi-line suggestions
+3. `VSCloneCompletionBackendService`
+   - selection resolution, timeout, retry, and normalization
+4. `VSCloneCompletionPromptService`
+   - prompt envelope construction
+5. `VSCloneCompletionApiService`
+   - auth headers + IPC
+6. `VSCloneCompletionChannel`
+   - main-process fetch + SSE accumulation
+7. `vscloneCompletionApiAdapters`
+   - vendor-specific body construction and SSE parsing
 
-- editor-facing request shaping in `VSCloneAutocompleteService`
-- model resolution plus prompt orchestration in `VSCloneCompletionBackendService`
-- pure prompt formatting and output normalization in common helpers
-- network transport and vendor protocol handling in a dedicated completion API service and main-process channel
-
-This split is important because tab completion has very different constraints from chat:
-
-- the editor provider must keep debounce, replacement-range logic, and prefix-extension cache close to editor events
-- the backend service must stay deterministic and unaware of UI rendering concerns
-- prompt assembly and post-processing should remain pure so they are cheap to unit test
-- transport should mirror the existing chat IPC pattern so token handling, abort propagation, and provider-specific parsing stay out of the renderer hot path
-
-```mermaid
-flowchart LR
-  Editor["Monaco Inline Completions API"] --> Auto["VSCloneAutocompleteService"]
-  Auto --> Cache["Per-Document LRU Cache + Request Gate"]
-  Cache --> Backend["VSCloneCompletionBackendService"]
-  Backend --> Selection["VSCloneThreadModelSelectionService<br/>location='editorInline'"]
-  Backend --> Prompt["VSCloneCompletionPromptService"]
-  Backend --> Post["postProcessCompletion(...) helper"]
-  Backend --> Api["VSCloneCompletionApiService"]
-  Selection --> Unified["VSCloneUnifiedChatBackendService"]
-  Unified --> Db[("SQLite Selection Tables")]
-  Api --> OAuth["VSCloneOAuthService"]
-  Api --> Channel["VSCloneCompletionChannel"]
-  Channel --> Adapters["VSCloneCompletionApiAdapters"]
-  Adapters --> Providers["Provider Completion Endpoint or Chat Fallback"]
-  Providers --> Channel
-  Channel --> Api
-  Api --> Backend
-  Backend --> Auto
-```
+![Tab Completion Architecture Diagram](../diagrams/backend/tab-completion-architecture-diagram.svg)
 
 ## 3. Data Abstraction
 
 Primary abstractions:
 
 - `IVSCloneCompletionRequest`
-- `IVSCloneModelSelection`
-- `VSCloneCompletionPromptEnvelope`
-- `VSCloneCompletionResponse`
-- `IVSCloneCachedCompletion`
+- `IVSCloneCompletionPromptEnvelope`
+- `IVSCloneCompletionResponse`
+- `IVSCloneCompletionCrossFileContext`
+- cached completion entries inside `VSCloneAutocompleteService`
 
 Abstraction function:
 
-- a completion request represents one bounded editor snapshot at one cursor position
-- a model selection represents the provider/model policy that should answer for `editorInline`
-- a prompt envelope represents a vendor-neutral completion job derived from that snapshot
-- a completion response represents raw provider text before post-processing plus normalized insert text after post-processing
-- a cached completion represents a previously returned backend result that can be reused when the current prefix extends the cached prefix
+- a completion request represents one bounded editor snapshot
+- a prompt envelope represents the normalized transport contract for provider calls
+- a completion response represents raw provider text plus normalized insert text
+- cross-file snippets represent small, serializable related-file context blocks
 
-Representation invariant:
+Representation invariants enforced by the implementation:
 
-- `prefix` and `suffix` are extracted from the same text model snapshot and cursor position
-- the request `predictionType` matches the replace-range semantics chosen by `VSCloneAutocompleteService`
-- the effective completion model must be selectable according to `VSCloneModelCatalogService`
-- only one normalized insert text is returned per request in MVP
-- cached entries are only reusable when the current normalized prefix extends the cached prefix and the entry is younger than the cache TTL
-- late provider responses are ignored after cancellation or timeout
-
-Two research-driven decisions matter here:
-
-- the request abstraction stays centered on prefix/suffix because that is the highest-signal context for fill-in-the-middle completion and is already present in the current service
-- the module intentionally does not reuse `IVSCloneContextGatheringService.gatherContext()` because that path collects workspace tree and diagnostics, which is appropriate for chat but too expensive for per-keystroke completion
+- `prefix` and `suffix` come from one text model snapshot and cursor position
+- only multi-line requests gather cross-file snippets
+- completion requests are cancelled when a newer keystroke supersedes them
+- the backend returns at most one normalized insert string per request
+- stale provider responses are ignored after timeout/cancellation
 
 ## 4. Stable Storage Mechanism
 
-This module should not own a dedicated durable completion store in MVP.
+This module does not add a durable completion store.
 
-Stable persisted inputs come from existing storage contracts:
+Persisted inputs reused from elsewhere:
 
-- VS Code configuration:
+- configuration
   - `vsclone.autocomplete.enabled`
   - `vsclone.autocomplete.debounceMs`
-- unified model-selection backend state:
+- model-selection state
   - `selectedByLocation['editorInline']`
-  - provider enablement and fallback state
+  - provider readiness/enablement derived through the selection backend
 
-Transient runtime state stays in memory only:
+Transient-only state:
 
-- per-document completion cache
-- active request maps
-- prompt envelopes in flight
-
-Why this is the correct durability boundary:
-
-- stale inline completions lose value quickly across edits, file changes, and restarts
-- persisting raw completion text increases privacy risk without improving restore semantics
-- the only state that should survive restart is policy state, not prediction output
+- per-document LRU cache
+- active request trackers
+- debounce timestamps
 
 ## 5. Storage Schemas
 
-This module should not add new SQLite tables in MVP.
+No new storage keys or SQL tables are added by the completion module.
 
-It reads existing backend state indirectly through `VSCloneThreadModelSelectionService` and `VSCloneUnifiedChatBackendService`:
+Relevant persistent contracts consumed indirectly:
 
-`location_defaults`
+- `vsclone.autocomplete.enabled`
+- `vsclone.autocomplete.debounceMs`
+- unified selection snapshot entries for `editorInline`
 
-- primary key: `location`
-- relevant row: `location = 'editorInline'`
-- purpose: default completion model when no thread-scoped selection exists
+Important implementation limits:
 
-`provider_preferences`
-
-- primary key: `vendor`
-- relevant field: `enabled`
-- purpose: prevent completion routing through disabled providers
-
-`recent_models`
-
-- primary key: `position`
-- relevant use: optional future ranking and fallback preference, not required for initial completion dispatch
-
-No completion cache table should be added unless later latency profiling shows that restart-surviving cache entries materially improve time-to-first-suggestion.
+- completion backend timeout: `8000ms`
+- cache entry limit per document: `20`
+- cache entry max age: `30000ms`
+- max concurrent requests per document: `2`
 
 ## 6. External API
 
-This project does not use a REST API here. The external API is an internal workbench service contract.
-
-Required editor-facing contract:
+Implemented service contracts:
 
 - `IVSCloneCompletionBackend.complete(request, token): Promise<string | undefined>`
-  - resolves model policy
-  - assembles a prompt envelope
-  - dispatches the provider request
-  - returns raw completion text for post-processing or `undefined`
+- `VSCloneCompletionContextService.gatherContext(currentUri, currentLanguageId, maxSnippets, maxCharsPerSnippet)`
+- `VSCloneCompletionPromptService.buildPromptEnvelope(request, selection)`
+- `VSCloneCompletionApiService.complete(envelope, selection, token)`
 
-Recommended internal service contracts:
+Main-process IPC contract:
 
-- `IVSCloneCompletionPromptService.buildPromptEnvelope(request, selection)`
-  - converts bounded editor context into a vendor-neutral prompt envelope
-- `IVSCloneCompletionApiService.complete(envelope, selection, token)`
-  - resolves auth headers and submits a completion request through IPC
-- `VSCloneCompletionApiAdapters.buildRequest(envelope, selection)`
-  - maps the neutral envelope to a vendor-specific request body
-- `VSCloneCompletionApiAdapters.parseResponse(payload)`
-  - extracts completion text from the provider response shape
-
-The API should stay intentionally narrow. The editor provider already owns debounce and cache; the backend should not introduce a second public API for those concerns.
+- channel: `vsclone-completion`
+- commands:
+  - `submit`
+  - `abort`
 
 ## 7. Class, Method, and Field Declarations
 
-Existing classes that remain part of this module boundary:
+Implemented classes:
 
-- `VSCloneAutocompleteService` (`browser/vscloneAutocompleteService.ts`)
-  - methods: `provideInlineCompletions`, `disposeInlineCompletions`
-  - private methods that should remain editor-local: `debounce`, `extractCompletionContext`, `getPredictionMode`, `getReplaceRange`, `getCachedCompletion`, `addToCache`, `beginBackendRequest`, `endBackendRequest`
-  - private fields that should remain editor-local: `cacheByResource`, `latestRequestTimestampByResource`, `activeRequestsByResource`
+- `VSCloneAutocompleteService`
+  - methods: `provideInlineCompletions`, `handleItemDidShow`, `disposeInlineCompletions`
+  - private helpers: `debounce`, `extractCompletionContext`, `getPredictionMode`, `getReplaceRange`, `getCachedCompletion`, `addToCache`, `beginBackendRequest`, `endBackendRequest`
+  - private fields: `cacheByResource`, `latestRequestTimestampByResource`, `activeRequestsByResource`, `shownCompletionLists`
 
-- `postProcessCompletion` helper (`common/vscloneCompletionPostProcessor.ts`)
-  - method: `postProcessCompletion`
-  - responsibility: deterministic cleanup only, with no transport or selection logic
+- `VSCloneCompletionContextService`
+  - method: `gatherContext`
+  - private helpers: `scoreCandidate`, `extractSnippet`
 
-- `VSCloneThreadModelSelectionService` (`common/backend/vscloneThreadModelSelectionService.ts`)
-  - methods used by this module: `initialize`, `getCurrentSelectionForThread`
-  - responsibility here: resolve the effective `editorInline` model policy
+- `VSCloneCompletionBackendService`
+  - method: `complete`
+  - private helpers: `resolveCompletionSelection`, `completeWithSelection`, `getRetrySelectionsAfterFailure`, `toRetrySelection`, `normalizeBackendResult`
+  - private field: `requestTimeoutMs`
 
-Proposed new classes:
+- `VSCloneCompletionPromptService`
+  - method: `buildPromptEnvelope`
+  - private helpers: `getStopTokens`, `getMaxOutputTokens`, `trimPrefixForBudget`, `trimSuffixForBudget`, `trimCrossFileContextForBudget`, `buildVendorPrompt`
 
-- `VSCloneCompletionBackendService` (`browser/vscloneCompletionBackendService.ts`)
-  - implements `IVSCloneCompletionBackend`
-  - methods: `complete`, `resolveCompletionSelection`, `normalizeBackendResult`
-  - private fields: `requestTimeoutMs`
+- `VSCloneCompletionApiService`
+  - method: `complete`
+  - private helper: `submitToMainProcess`
 
-- `VSCloneCompletionPromptService` (`common/vscloneCompletionPromptService.ts`)
-  - methods: `buildPromptEnvelope`, `getStopTokens`, `getMaxOutputTokens`, `buildVendorPrompt`
-  - private helpers: `trimPrefixForBudget`, `trimSuffixForBudget`
+- `VSCloneCompletionChannel`
+  - methods: `call`, `listen`
+  - private helpers: `submitRequest`, `abortRequest`, `runRequest`, `consumeSseText`, `processBufferedSseText`, `processSseLine`
+  - private field: `runningRequests`
 
-- `VSCloneCompletionApiService` (`browser/vscloneCompletionApiService.ts`)
-  - methods: `complete`
-  - private methods: `submitToMainProcess`
-  - private fields: `channel`
+- adapter helpers in `vscloneCompletionApiAdapters.ts`
+  - `buildRequest`
+  - `parseText`
+  - `getEndpointMode`
 
-- `VSCloneCompletionApiAdapters` (`common/vscloneCompletionApiAdapters.ts`)
-  - methods: `buildRequest`, `parseText`, `getEndpointMode`
+Implemented runtime policy:
 
-- `VSCloneCompletionChannel` (`electron-main/vscloneCompletionChannel.ts`)
-  - methods: `call`, `submitRequest`, `abortRequest`, `runRequest`
-  - private fields: `runningRequests`
+- the backend retries only through the inline fallback chain, not an arbitrary model list
+- cross-file context is used only for multi-line predictions
+- provider fetches are performed in the main process so cancellation can abort the underlying network request immediately
 
-- `VSCloneCompletionApiIpc` (`common/vscloneCompletionApiIpc.ts`)
-  - exports: channel name, command names, request and response DTOs
+## 8. Class Diagram
 
-Implementation constraints that should stay explicit:
-
-- keep `VSCloneAutocompleteService` as the only place that knows about debounce, replace ranges, and prefix-extension cache reuse
-- replace `VSCloneMockCompletionBackend` with `VSCloneCompletionBackendService`, but do not change the `IVSCloneCompletionBackend` surface unless a concrete blocker appears
-- reuse `editorInline` location defaults through the selection service instead of adding a completion-only provider/model setting first
-- do not route completion requests through `VSCloneChatApiService` because chat transport is transcript-oriented and completion transport is single-result oriented
-- do not call `VSCloneContextGatheringService.gatherContext()` from the autocomplete hot path
-- add a hard timeout in the completion backend or completion channel because late inline suggestions are worse than dropped suggestions
-- treat provider-native FIM support as an optimization, not a requirement
-
-## 8. Mermaid Class Diagram
-
-```mermaid
-classDiagram
-  class VSCloneAutocompleteService {
-    -cacheByResource
-    -latestRequestTimestampByResource
-    -activeRequestsByResource
-    +provideInlineCompletions(model, position, context, token)
-    +disposeInlineCompletions(completions)
-    -debounce(resource, token)
-    -extractCompletionContext(model, position)
-    -getPredictionMode(linePrefix, lineSuffix)
-    -getReplaceRange(model, position, mode)
-    -getCachedCompletion(resource, prefix, suffix)
-    -addToCache(resource, prefix, insertText)
-    -beginBackendRequest(resource, parentToken)
-    -endBackendRequest(resource, requestId)
-  }
-
-  class VSCloneCompletionBackendService {
-    -requestTimeoutMs
-    +complete(request, token)
-    -resolveCompletionSelection()
-    -normalizeBackendResult(rawText, request)
-  }
-
-  class VSCloneCompletionPromptService {
-    +buildPromptEnvelope(request, selection)
-    -getStopTokens(predictionType)
-    -getMaxOutputTokens(predictionType)
-    -trimPrefixForBudget(prefix)
-    -trimSuffixForBudget(suffix)
-  }
-
-  class VSCloneCompletionApiService {
-    -channel
-    +complete(envelope, selection, token)
-    -submitToMainProcess(payload, token)
-  }
-
-  class VSCloneCompletionApiAdapters {
-    +buildRequest(envelope, selection)
-    +parseText(responsePayload)
-    +getEndpointMode(selection)
-  }
-
-  class VSCloneCompletionChannel {
-    -runningRequests
-    +call(command, arg, cancellationToken)
-    -submitRequest(request)
-    -abortRequest(request)
-    -runRequest(request, signal)
-  }
-
-  class VSCloneThreadModelSelectionService {
-    +initialize()
-    +getCurrentSelectionForThread(threadId, location)
-  }
-
-  class CompletionPostProcessor {
-    +postProcessCompletion(rawCompletion, prefix, suffix, predictionType)
-  }
-
-  VSCloneAutocompleteService --> VSCloneCompletionBackendService
-  VSCloneCompletionBackendService --> VSCloneThreadModelSelectionService
-  VSCloneCompletionBackendService --> VSCloneCompletionPromptService
-  VSCloneCompletionBackendService --> VSCloneCompletionApiService
-  VSCloneCompletionBackendService --> CompletionPostProcessor
-  VSCloneCompletionApiService --> VSCloneCompletionChannel
-  VSCloneCompletionChannel --> VSCloneCompletionApiAdapters
-```
+![Tab Completion Class Diagram](../diagrams/backend/tab-completion-class-diagram.svg)

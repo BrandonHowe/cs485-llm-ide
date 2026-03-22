@@ -1,0 +1,41 @@
+classDiagram
+  class VSCloneProviderPreferencesService {
+    -initialized
+    -providers
+    +initialize()
+    +getProviders()
+    +getProvider(vendor)
+    +setProviderEnabled(vendor, enabled)
+    +resetDefaults()
+  }
+
+  class VSCloneModelCatalogService {
+    -state
+    -refreshing
+    +refreshCatalog()
+    +getState()
+    +getProviders()
+    +getModels(providerId)
+    +getModel(identifier)
+    +getSelectableModels()
+    -computeProviders(preferences)
+    -computeModels(preferences)
+  }
+
+  class VSCloneThreadModelSelectionService {
+    -initialized
+    +initialize()
+    +getCurrentSelectionForThread(threadId, location)
+    +setSelectionForThread(threadId, selection)
+    +switchToNextModel(threadId, location)
+    +resetSelectionForThread(threadId)
+    +hasSelectionForThread(threadId)
+    +getRecentModelIdentifiers(limit)
+    -reconcileSelections(reason)
+    -getFallbackSelection(location, threadId)
+  }
+
+  VSCloneModelCatalogService --> VSCloneProviderPreferencesService
+  VSCloneModelCatalogService --> VSCloneOAuthService
+  VSCloneThreadModelSelectionService --> VSCloneModelCatalogService
+  VSCloneThreadModelSelectionService --> VSCloneUnifiedChatBackendService

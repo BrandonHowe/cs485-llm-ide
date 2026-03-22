@@ -3,169 +3,92 @@
 - **Author(s):** Brandon Howe
 - **Role(s):** Developer
 - **Version History:**
-  - `v1.0` - Initial unified backend specification for Stories 1 and 3.
-  - `v1.1` - Split module-level specifications into dedicated files under `backend-modules/`.
+  - `v1.0` - Initial unified backend specification.
+  - `v1.1` - Updated to match the implemented VSClone backend in `src/vs/workbench/contrib/vsclone`.
 
-This document defines one backend architecture for the related VSClone chat stories in this repo:
-
-- Story 1: chat history rail
-- Story 3: per-thread model switcher
-- Plan Mode: read-only planning turns with hard runtime tool enforcement
-
-Important constraint: VSClone does not have a traditional backend server and does not expose a REST API for these features. In this project, "backend" means the in-process workbench service layer that owns canonical state, durable storage, model-selection policy, and direct provider request execution.
-
-This document now focuses on the shared architecture, storage contract, and top-level rationale. Detailed module specifications live in the linked files under `backend-modules/` so each subsystem has a dedicated document without duplicating the cross-module design context.
+This document describes the backend that currently exists in the repository. In this project, "backend" means local workbench services plus Electron main-process IPC channels. VSClone does not expose a standalone REST service and does not manage a separate database schema.
 
 ## 1. Unified Architecture
 
 ### 1.1 Text Description
 
-The unified backend has three main modules plus one cross-cutting execution policy:
+The implemented backend is composed of six cooperating subsystems:
 
 1. `Thread History`
-2. `Chat Execution`
-3. `Model Selection`
-4. `Plan Mode`
+2. `Model Selection`
+3. `Plan Mode`
+4. `Chat Execution`
+5. `Tab Completion`
+6. `OAuth / Auth`
 
-The core architectural decision is to make `ThreadSnapshot` the canonical domain object for both user stories. A thread snapshot represents one recoverable conversation and contains:
+The main architectural decision is to keep one durable snapshot owner: `VSCloneUnifiedChatBackendService`. That service owns the persisted `IVSCloneChatHistorySnapshot`, which carries:
 
-- thread summary metadata
-- ordered turn history
-- the selected model for that thread
-- supporting preferences such as defaults, recents, and provider enablement
+- thread summaries
+- ordered turns per thread
+- per-thread selected models
+- per-location defaults
+- recent model identifiers
+- persisted thread plan mode
 
-This gives the feature set one source of truth. The history rail reads thread summaries and turns from the same backend snapshot that the model switcher uses to restore the selected model. The execution path also resolves the active model from that same snapshot before sending any request. Plan Mode uses the same thread snapshot so the UI, prompt assembly, tool gating, and post-response affordances all agree on whether a turn is read-only. That prevents split-brain behavior where the UI shows one mode while the execution path behaves like another.
+That design keeps restore-path and send-path behavior aligned. The history rail reads thread data from the same snapshot that `VSCloneThreadModelSelectionService` uses to restore model selection and that `VSClonePlanModeService` uses to restore thread mode. Execution never needs to reconstruct state from UI-only memory.
 
-Why this is the right design for a senior architect:
+The renderer/workbench layer owns orchestration, prompt assembly, tool execution, completion debounce/cache, and storage coordination. The Electron main process owns the provider fetches, request cancellation, SSE parsing, and OAuth loopback listener. This split is the practical boundary for the codebase because it keeps secrets and CORS-sensitive network work out of the renderer while staying fully local.
 
-- State ownership is explicit. Only one module owns durable thread state.
-- Execution and observation are grouped into one top-level module because the product has exactly one supported send path: direct provider execution.
-- Provider discovery and provider execution are separated, which reduces the chance that catalog churn corrupts thread state.
-- Plan Mode is a cross-cutting policy service rather than a UI-only toggle so read-only turns are enforced consistently across prompting, execution, and transcript rendering.
-- SQLite gives us transactional durability, schema evolution, and indexed queries without inventing a network dependency that the product does not need.
-- The design matches the current repo direction, which already has separate history, runtime, session, and model-selection services that can converge into this architecture cleanly.
+### 1.2 Architecture Diagram
 
-`TODO(student): Add one paragraph in your own voice explaining why an in-process workbench backend is a better fit than a separate web service for this project.`
-
-### 1.2 Mermaid Diagram
-
-```mermaid
-flowchart LR
-  subgraph UI["Workbench UI Surfaces"]
-    Rail["Chat History Rail"]
-    Composer["Composer + Model Switcher"]
-    Actions["Commands / Actions"]
-  end
-
-  subgraph Backend["VSClone In-Process Backend"]
-    History["Thread History"]
-    Execution["Chat Execution"]
-    Selection["Model Selection"]
-    PlanMode["Plan Mode Policy"]
-  end
-
-  subgraph Platform["Workbench Services"]
-    LM["Language Model + OAuth Services"]
-    Paths["Workspace / Profile Path Services"]
-  end
-
-  subgraph Local["Durable Local Storage"]
-    WorkspaceDb[("workspace/vsclone-unified-chat.v1.sqlite")]
-    ProfileDb[("profile/vsclone-unified-chat.v1.sqlite")]
-  end
-
-  subgraph Cloud["Configured LLM Providers"]
-    Providers["OpenAI / Anthropic / Google"]
-  end
-
-  Rail --> History
-  Composer --> Selection
-  Composer --> Execution
-  Composer --> PlanMode
-  Actions --> History
-
-  Execution --> History
-  Execution --> Selection
-  Execution --> PlanMode
-  Selection --> History
-  PlanMode --> History
-
-  Selection --> LM
-  Execution --> LM
-
-  History --> Paths
-  Paths --> WorkspaceDb
-  Paths --> ProfileDb
-
-  Execution --> Providers
-```
+![Backend Unified Architecture Diagram](diagrams/backend/backend-unified-architecture-diagram.svg)
 
 ## 2. Shared Storage Contract
 
-All modules and cross-cutting services rely on one SQLite durability contract rooted in VS Code storage locations:
+The shared durability contract is JSON-over-host-storage, not custom tables. On desktop builds the underlying host storage is SQLite-backed, but VSClone itself owns only these keys and payload shapes:
 
-- Workspace scope: `<workspaceStorage>/<workspaceId>/vsclone/vsclone-unified-chat.v1.sqlite`
-- Profile scope: `<profileGlobalStorage>/vsclone/vsclone-unified-chat.v1.sqlite`
+- `vsclone.chatHistory.v2.index`
+  - thread summaries
+  - `modeByThread`
+  - `selectedByLocation`
+  - `recentModelIdentifiers`
+- `vsclone.chatHistory.v2.thread.<url-encoded-thread-id>`
+  - ordered turns
+  - optional per-thread selection
+- `vsclone.providerPreferences.v1`
+  - enabled flags for `openai`, `anthropic`, and `google`
+- `secret://vsclone.oauth.tokens.<vendor>`
+  - encrypted token sets through `ISecretStorageService`
 
-This is the preferred design because:
-
-- thread, turn, and selection updates can commit atomically
-- indexed lookups are a better fit than JSON-file scanning for thread lists and restore
-- crash recovery and concurrent access are materially better than ad hoc file coordination
-- schema migration remains straightforward through versioned DDL and metadata rows
-
-The shared tables are:
-
-- `meta`
-- `threads`
-- `turns`
-- `thread_selection`
-- `thread_modes`
-- `location_defaults`
-- `recent_models`
-- `provider_preferences`
+Chat history keys are stored in workspace or profile scope depending on `vsclone.chatHistory.persistScope`. Provider preferences are profile-scoped. OAuth token sets are application-scoped secret-storage entries.
 
 ## 3. Module Documents
 
-Each backend module now has its own focused document in `backend-modules/`. This keeps the architecture overview readable while preserving the deeper module-level specifications, APIs, data abstractions, and diagrams.
+Detailed subsystem documents live in `backend-modules/`:
 
-### 3.1 Thread History
+- [`Thread History`](backend-modules/thread-history.md)
+- [`Model Selection`](backend-modules/model-selection.md)
+- [`Plan Mode`](backend-modules/plan-mode.md)
+- [`Chat Execution`](backend-modules/chat-execution.md)
+- [`Tab Completion`](backend-modules/tab-completion.md)
+- [`OAuth / Auth`](backend-modules/oauth-auth.md)
 
-[`Thread History Module`](backend-modules/thread-history.md)
+Plan Mode and OAuth / Auth each have their own module documents because both own cross-cutting runtime/state boundaries used by other subsystems. Chat Execution and Thread History still describe where plan-mode state is snapshotted into turns, while Model Selection, Chat Execution, and Tab Completion still describe where OAuth readiness and API headers are consumed.
 
-Thread History owns the canonical `ThreadSnapshot`, thread lifecycle operations, retention policy, and transactional persistence that powers restore and history-rail queries.
+## 4. Implemented Design Justifications
 
-### 3.2 Chat Execution
+- One durable snapshot owner is the main correctness boundary. It prevents history, plan mode, and model selection from drifting apart.
+- The code deliberately reuses VS Code host storage instead of introducing a VSClone-specific database file or schema migration layer.
+- Renderer services own policy and orchestration; Electron main-process channels own provider fetches, abort wiring, and loopback OAuth because that is where the environment can safely perform them.
+- OAuth uses secret storage plus a main-process loopback/token-exchange channel so browser launch, localhost callback capture, and token POSTs stay out of renderer fetch paths.
+- Model catalog state is explicit source code, not a dynamic remote discovery step. `refreshCatalog()` recomputes readiness from provider preferences plus OAuth state so the picker behavior is deterministic and testable.
+- Plan Mode is enforced twice: prompt assembly hides mutation tools from the model, and `VSCloneToolExecutionService` still blocks edit/create tools at runtime.
+- Tab completion reuses the same selection policy as chat, but it keeps a dedicated transport and timeout path so editor latency requirements do not leak into the chat execution pipeline.
 
-[`Chat Execution Module`](backend-modules/chat-execution.md)
+## 5. Concrete Constraints from the Code
 
-Chat Execution owns prompt submission, provider execution, runtime observation, cancellation, and normalization of turn updates before those updates are reduced into durable thread state.
-
-### 3.3 Model Selection
-
-[`Model Selection Module`](backend-modules/model-selection.md)
-
-Model Selection owns provider and model catalog discovery, per-thread model choice, location defaults, recent models, and provider enablement policy.
-
-### 3.4 Plan Mode
-
-[`Chat Execution Module`](backend-modules/chat-execution.md)
-
-Plan Mode owns thread-scoped chat mode persistence, per-turn execution-mode snapshots, runtime tool-allowance checks, and the guarantee that read-only turns cannot mutate the workspace through tools or transcript actions.
-
-## 4. Recommended Design Justifications
-
-Use or adapt the following points when presenting to a senior architect:
-
-- One canonical snapshot per thread is the main correctness boundary. It prevents history/model divergence and makes recovery deterministic.
-- Chat Execution owns both send orchestration and stream normalization because the product only supports one direct provider path.
-- Plan Mode must be enforced in runtime services, not just described in prompts, or the system still has mutation escape hatches.
-- SQLite should remain local because the value of the feature is local recovery, not shared cloud history.
-- Model selection is a policy layer over canonical thread state, not a UI-only preference.
-- Execution state should stay transient except for the normalized updates reduced into Thread History, which keeps recovery simpler and avoids a second source of truth.
-
-## 5. Open Blanks You Can Fill In
-
-- `TODO(student): Add any latency or scale assumptions your professor expects.`
-- `TODO(student): Add any privacy requirements, such as redaction or retention windows.`
-- `TODO(student): Add any course-specific wording about abstraction functions or invariants if needed.`
+- Streamed history deltas are persisted with a `300ms` delay; non-stream terminal states persist immediately.
+- Retention limits are enforced by `vsclone.chatHistory.maxThreads` and `vsclone.chatHistory.retentionDays`.
+- Inline completion requests time out after `8000ms`.
+- The agent loop stops after `25` iterations and allows at most `2` corrective reprompts when the model fails to use tools for a tool-required task.
+- The inline-completion fallback chain is policy-driven and currently prefers:
+  - `openai/gpt-5.3-codex-spark`
+  - `openai/gpt-5-nano`
+  - `google/gemini-3.1-flash-lite-preview`
+  - `anthropic/claude-haiku-4-5-20251001`
+- The current composer send path always routes through the agent loop, even for ordinary chat turns.

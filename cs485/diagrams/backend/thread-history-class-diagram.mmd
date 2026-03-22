@@ -1,0 +1,69 @@
+classDiagram
+  class VSCloneChatHistoryService {
+    +initialize()
+    +getThreads(query)
+    +getTurns(threadId)
+    +applyTurnUpdate(update)
+    +archiveThread(threadId, archived)
+    +deleteThread(threadId)
+    +clearAll(scope)
+  }
+
+  class VSCloneUnifiedChatBackendService {
+    -model
+    -store
+    -persistDelayer
+    -initialized
+    -disabled
+    -initializing
+    +initialize()
+    +getThreads(query)
+    +getTurns(threadId)
+    +applyTurnUpdate(update)
+    +archiveThread(threadId, archived)
+    +deleteThread(threadId)
+    +clearAll(scope)
+    +getSelectionState()
+    +replaceSelectionState(state)
+    +getPlanModeState()
+    +replacePlanModeState(state)
+  }
+
+  class VSCloneChatHistoryModel {
+    -threads
+    -turnsByThreadId
+    -modeByThread
+    -selectedByThread
+    -selectedByLocation
+    -recentModelIdentifiers
+    +initialize(snapshot)
+    +toSnapshot(updatedAt)
+    +getThreads(query)
+    +getTurns(threadId)
+    +setThreadState(thread, turns)
+    +archiveThread(threadId, archived)
+    +deleteThread(threadId)
+    +applyRetention(maxThreads, retentionDays, now)
+    +getSelectionState()
+    +replaceSelectionState(state)
+    +getPlanModeState()
+    +replacePlanModeState(state)
+  }
+
+  class VSCloneChatHistoryStore {
+    +load(scope)
+    +save(scope, snapshot, options)
+    +clear(scope)
+  }
+
+  class VSCloneChatHistorySerializer {
+    +serializeIndex(...)
+    +serializeThread(...)
+    +deserializeIndex(raw)
+    +deserializeThread(raw)
+  }
+
+  VSCloneChatHistoryService --> VSCloneUnifiedChatBackendService
+  VSCloneUnifiedChatBackendService --> VSCloneChatHistoryModel
+  VSCloneUnifiedChatBackendService --> VSCloneChatHistoryStore
+  VSCloneChatHistoryStore --> VSCloneChatHistorySerializer

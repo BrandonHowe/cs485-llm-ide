@@ -1,0 +1,133 @@
+flowchart LR
+  subgraph UI["Workbench UI"]
+    direction TB
+    Rail["History Rail"]
+    Composer["Composer + Model Switcher"]
+    Inline["Inline Completions"]
+    ProviderUI["Provider Actions"]
+  end
+
+  subgraph Renderer["Renderer / Workbench Services"]
+    direction LR
+
+    subgraph History["Thread History"]
+      direction TB
+      ChatHistoryService["VSCloneChatHistoryService"]
+      UnifiedBackend["VSCloneUnifiedChatBackendService"]
+      ChatHistoryModel["VSCloneChatHistoryModel"]
+      ChatHistoryStore["VSCloneChatHistoryStore"]
+      ChatHistorySerializer["VSCloneChatHistorySerializer"]
+    end
+
+    subgraph Selection["Model Selection"]
+      direction TB
+      ThreadSelection["VSCloneThreadModelSelectionService"]
+      ModelCatalog["VSCloneModelCatalogService"]
+      ProviderPrefs["VSCloneProviderPreferencesService"]
+    end
+
+    subgraph PlanMode["Plan Mode"]
+      direction TB
+      PlanModeService["VSClonePlanModeService"]
+    end
+
+    subgraph ChatExec["Chat Execution"]
+      direction TB
+      ChatSession["VSCloneChatSessionService"]
+      ContextGathering["VSCloneContextGatheringService"]
+      PromptAssembly["VSClonePromptAssemblyService"]
+      AgentLoop["VSCloneAgentLoopService"]
+      ToolExecution["VSCloneToolExecutionService"]
+      ChatApi["VSCloneChatApiService"]
+    end
+
+    subgraph Completion["Tab Completion"]
+      direction TB
+      Autocomplete["VSCloneAutocompleteService"]
+      CompletionContext["VSCloneCompletionContextService"]
+      CompletionBackend["VSCloneCompletionBackendService"]
+      CompletionPrompt["VSCloneCompletionPromptService"]
+      CompletionApi["VSCloneCompletionApiService"]
+    end
+
+    subgraph OAuth["OAuth / Auth"]
+      direction TB
+      OAuthService["VSCloneOAuthService"]
+    end
+  end
+
+  subgraph Main["Electron Main Process Channels"]
+    direction TB
+    ChatChannel["VSCloneChatApiChannel\n(vsclone-chat-api)"]
+    CompletionChannel["VSCloneCompletionChannel\n(vsclone-completion)"]
+    OAuthChannel["VSCloneOAuthLoopbackChannel\n(vsclone-oauth)"]
+  end
+
+  subgraph Storage["Host Storage Services"]
+    direction TB
+    IndexStore[("vsclone.chatHistory.v2.index")]
+    ThreadStore[("vsclone.chatHistory.v2.thread.<id>")]
+    PrefStore[("vsclone.providerPreferences.v1")]
+    SecretStore[("secret://vsclone.oauth.tokens.<vendor>")]
+  end
+
+  subgraph Cloud["Providers"]
+    direction TB
+    OpenAI["OpenAI"]
+    Anthropic["Anthropic"]
+    Google["Google"]
+  end
+
+  Rail --> ChatHistoryService
+  Composer --> ThreadSelection
+  Composer --> PlanModeService
+  Composer --> ChatSession
+  Inline --> Autocomplete
+  ProviderUI --> OAuthService
+
+  ChatHistoryService --> UnifiedBackend
+  UnifiedBackend --> ChatHistoryModel
+  UnifiedBackend --> ChatHistoryStore
+  ChatHistoryStore --> ChatHistorySerializer
+  ChatHistoryStore --> IndexStore
+  ChatHistoryStore --> ThreadStore
+
+  ThreadSelection --> UnifiedBackend
+  ThreadSelection --> ModelCatalog
+  ModelCatalog --> ProviderPrefs
+  ModelCatalog --> OAuthService
+  ProviderPrefs --> PrefStore
+
+  PlanModeService --> UnifiedBackend
+
+  ChatSession --> ThreadSelection
+  ChatSession --> PlanModeService
+  ChatSession --> ContextGathering
+  ChatSession --> PromptAssembly
+  ChatSession --> AgentLoop
+  AgentLoop --> ToolExecution
+  AgentLoop --> ChatApi
+  AgentLoop --> ChatHistoryService
+  ChatApi --> ChatChannel
+  ChatApi --> OAuthService
+
+  Autocomplete --> CompletionContext
+  Autocomplete --> CompletionBackend
+  CompletionBackend --> ThreadSelection
+  CompletionBackend --> CompletionPrompt
+  CompletionBackend --> CompletionApi
+  CompletionApi --> CompletionChannel
+  CompletionApi --> OAuthService
+
+  OAuthService --> OAuthChannel
+  OAuthService --> SecretStore
+
+  ChatChannel --> OpenAI
+  ChatChannel --> Anthropic
+  ChatChannel --> Google
+  CompletionChannel --> OpenAI
+  CompletionChannel --> Anthropic
+  CompletionChannel --> Google
+  OAuthChannel --> OpenAI
+  OAuthChannel --> Anthropic
+  OAuthChannel --> Google

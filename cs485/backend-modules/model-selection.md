@@ -1,232 +1,164 @@
-# Module 3: Model Selection
+# Model Selection
 
-Shared cross-module architecture, storage details, and top-level design rationale live in [the backend architecture document](../backend-unified-spec.md). This module document isolates the `Model Selection` design so the catalog and policy behavior can evolve without burying those details inside the architecture overview.
+Shared architecture lives in [the backend architecture document](../backend-unified-spec.md). This document focuses on the implemented `Model Selection` subsystem: provider enablement preferences, explicit model catalog construction, per-thread selections, location defaults, and fallback policy.
 
 ## 1. Features
 
 What it can do:
 
-- build the selectable provider/model catalog
-- track per-thread selected models
-- track per-location default models
-- track recent models
-- track provider enablement
-- validate whether a model is selectable for the current context
-- expose selection decisions to Chat Execution
+- persist provider enablement preferences
+- build an explicit provider/model catalog from source-controlled definitions
+- mark models selectable only when the provider is signed in and enabled
+- persist per-thread selections
+- persist per-location defaults
+- persist recent model identifiers
+- reconcile stale selections when catalog/auth state changes
+- provide a policy-managed fallback for `editorInline`
 
 What it does not do:
 
+- it does not fetch a remote model list from providers
 - it does not execute requests
-- it does not store provider secrets
-- it does not persist full conversation history
+- it does not store OAuth secrets
 - it does not render the picker widget itself
 
 ## 2. Internal Architecture
 
-Model Selection should remain internally split between two concerns:
+The implemented selection stack is:
 
-- catalog discovery and validation
-- thread-specific selection policy and preference persistence
+1. `VSCloneProviderPreferencesService`
+   - profile-scoped enable/disable flags
+2. `VSCloneModelCatalogService`
+   - explicit catalog + auth readiness
+3. `VSCloneThreadModelSelectionService`
+   - per-thread selection policy, location defaults, recents, and fallback reconciliation
 
-That separation matters because provider availability can change frequently, while thread selection state should remain stable unless the user changes it or the saved choice becomes invalid.
+The durable selection state itself lives inside the unified chat snapshot owned by `VSCloneUnifiedChatBackendService`. That means thread restore, send-time resolution, and picker restore all read from the same persisted state.
 
-Why this is defensible to a senior architect:
-
-- catalog refreshes do not need to mutate thread history
-- selection policy can stay deterministic over canonical thread state
-- provider enablement and recents remain policy data, not UI-local state
-- fallback behavior stays centralized instead of spreading across picker code and send code
-
-```mermaid
-flowchart TD
-  Models["Language Model + Config Services"] --> Catalog["VSCloneModelCatalogService"]
-  Catalog --> Selection["VSCloneThreadModelSelectionService"]
-  Preferences["Provider Preferences Service"] --> Catalog
-  History["Thread History"] --> Selection
-  Selection --> Db["SQLite preference tables"]
-```
+![Model Selection Architecture Diagram](../diagrams/backend/model-selection-architecture-diagram.svg)
 
 ## 3. Data Abstraction
 
 Primary abstractions:
 
-- `ModelCatalogState`
-- `ModelSelection`
-- `SelectionPreferences`
+- `IVSCloneProviderPreferenceState`
+- `IVSCloneModelCatalogState`
+- `IVSCloneModelSelection`
+- `IVSCloneUnifiedChatSelectionState`
 
 Abstraction function:
 
-- catalog state represents the currently available providers and models
-- model selection represents the chosen model for one thread or location
-- selection preferences represent persistent fallback and recent-choice policy
+- provider preferences represent which vendors are eligible for selection
+- catalog state represents the current selectable/non-selectable model list
+- a model selection represents one persisted decision for a thread or location
+- the unified selection state groups thread bindings, location defaults, and recents so reconciliation is atomic
 
-Representation invariant:
+Representation invariants enforced by the implementation:
 
-- a selected model identifier must refer to a model known to the catalog unless it is explicitly marked unavailable
-- recent model identifiers are unique and ordered newest-first
-- location defaults contain at most one default per location
-- provider enablement contains at most one record per vendor
+- `selectedByThread` and `selectedByLocation` store normalized selections without UI-only data
+- recent identifiers are unique and newest-first
+- a selection is considered valid only if the catalog still knows the model and `isSelectable=true`
+- `editorInline` may replace stored location state with the current fallback chain automatically
 
 ## 4. Stable Storage Mechanism
 
-Stable storage for this module is the shared SQLite database used by Thread History.
+This module uses two durable locations:
 
-Durability policy:
+- profile storage key `vsclone.providerPreferences.v1`
+  - enabled flags for `openai`, `anthropic`, and `google`
+- unified chat snapshot
+  - `selectedByThread`
+  - `selectedByLocation`
+  - `recentModelIdentifiers`
 
-- per-thread selection persists in `thread_selection`
-- per-location defaults persist in `location_defaults`
-- recent models persist in `recent_models`
-- provider enablement persists in `provider_preferences`
-
-This keeps history restore and model restore on the same durability contract.
+There are no dedicated `thread_selection`, `location_defaults`, or `recent_models` tables in the implementation.
 
 ## 5. Storage Schemas
 
-This module owns or reads the following tables:
+### Provider preferences payload
 
-`thread_selection`
+Stored at `vsclone.providerPreferences.v1`:
 
-- primary key and foreign key: `thread_id -> threads.thread_id`
-- key fields: `location`, `model_identifier`, `vendor`, `model_id`, `model_name`, `reasoning_effort`, `selected_at`
-- purpose: selected model bound to a specific thread
+- `version: 1`
+- `providers: { [vendor]: { enabled: boolean } }`
 
-`location_defaults`
+Default runtime values:
 
-- primary key: `location`
-- key fields: `model_identifier`
-- purpose: fallback defaults by surface or location
+- `openai: enabled`
+- `anthropic: enabled`
+- `google: disabled`
 
-`recent_models`
+### Unified selection state
 
-- primary key: `position`
-- key fields: `model_identifier`
-- purpose: bounded recent-model list
+Persisted inside the chat history snapshot:
 
-`provider_preferences`
+- `selectedByThread: Record<string, IVSCloneModelSelection>`
+- `selectedByLocation: Partial<Record<'chat' | 'editorInline' | 'notebook' | 'terminal', IVSCloneModelSelection>>`
+- `recentModelIdentifiers: string[]`
 
-- primary key: `vendor`
-- key fields: `enabled`
-- purpose: persisted provider enablement policy
+### Catalog characteristics
+
+`VSCloneModelCatalogService` does not persist catalog snapshots. It recomputes them from:
+
+- source-controlled model definitions
+- provider enabled flags
+- `VSCloneOAuthService.state.providers[vendor].isReady`
 
 ## 6. External API
 
-The external API is an internal service contract used by the picker and Chat Execution.
+Implemented service operations:
 
-Operations exposed by Model Selection:
+- `VSCloneProviderPreferencesService`
+  - `initialize()`
+  - `getProviders()`
+  - `getProvider(vendor)`
+  - `setProviderEnabled(vendor, enabled)`
+  - `resetDefaults()`
 
-- `initialize()`
-  - loads provider preferences, defaults, recents, and any needed selection state
-- `getCurrentSelectionForThread(threadId, location)`
-  - returns the effective model for the thread
-- `setSelectionForThread(threadId, selection)`
-  - persists the selected model for a thread
-- `switchToNextModel(threadId, location)`
-  - rotates to the next valid model
-- `resetSelectionForThread(threadId)`
-  - clears explicit selection and falls back to defaults
-- `hasSelectionForThread(threadId)`
-  - reports whether the thread has an explicit saved selection
-- `getRecentModelIdentifiers(limit)`
-  - returns recent model identifiers
-- `refreshCatalog()`
-  - rebuilds provider/model catalog state
-- `getProviders()`
-  - returns provider descriptors
-- `getModels(providerId)`
-  - returns models for one provider or for the full catalog
+- `VSCloneModelCatalogService`
+  - `refreshCatalog()`
+  - `getState()`
+  - `getProviders()`
+  - `getModels(providerId?)`
+  - `getModel(identifier)`
+  - `getSelectableModels()`
+
+- `VSCloneThreadModelSelectionService`
+  - `initialize()`
+  - `getCurrentSelectionForThread(threadId, location)`
+  - `setSelectionForThread(threadId, selection)`
+  - `switchToNextModel(threadId, location)`
+  - `resetSelectionForThread(threadId)`
+  - `hasSelectionForThread(threadId)`
+  - `getRecentModelIdentifiers(limit?)`
 
 ## 7. Class, Method, and Field Declarations
 
-Externally visible classes:
-
-- `VSCloneThreadModelSelectionService`
-  - methods: `initialize`, `getCurrentSelectionForThread`, `setSelectionForThread`, `switchToNextModel`, `resetSelectionForThread`, `hasSelectionForThread`, `getRecentModelIdentifiers`
-  - fields: `onDidChangeSelection`
-
-- `VSCloneModelCatalogService`
-  - methods: `refreshCatalog`, `getState`, `getProviders`, `getModels`, `getModel`, `getSelectableModels`
-  - fields: `onDidChangeCatalog`
+Implemented classes:
 
 - `VSCloneProviderPreferencesService`
   - methods: `initialize`, `getProviders`, `getProvider`, `setProviderEnabled`, `resetDefaults`
-  - fields: `onDidChangeProviders`
+  - private fields: `initialized`, `providers`
 
-Private-to-module classes and helpers:
+- `VSCloneModelCatalogService`
+  - methods: `refreshCatalog`, `getState`, `getProviders`, `getModels`, `getModel`, `getSelectableModels`
+  - private helpers: `computeProviders`, `computeModels`
+  - private fields: `state`, `refreshing`, `failNextRefreshForTest`
 
-- selection-policy helpers inside `VSCloneThreadModelSelectionService`
-  - methods: `touchRecentModelIdentifier`, `toSelectionFromStorage`
-  - fields: `selectedByThread`, `selectedByLocation`, `recentModelIdentifiers`
+- `VSCloneThreadModelSelectionService`
+  - methods: `initialize`, `getCurrentSelectionForThread`, `setSelectionForThread`, `switchToNextModel`, `resetSelectionForThread`, `hasSelectionForThread`, `getRecentModelIdentifiers`
+  - private helpers: `reconcileSelections`, `toSelection`, `normalizeReasoningEffort`, `getPreferredReasoningEffortForLocation`, `isSelectableModelIdentifier`, `shouldReplaceLocationSelection`, `getPreferredFallbackModel`, `getFallbackSelection`
+  - private field: `initialized`
 
-- catalog-computation helpers inside `VSCloneModelCatalogService`
-  - methods: `computeProviders`, `computeModels`
-  - fields: `state`, `refreshing`
+Important implemented policy:
 
-- provider-preference persistence helpers inside `VSCloneProviderPreferencesService`
-  - methods: `store`
-  - fields: `providers`, `initialized`
+- the `editorInline` fallback chain prefers:
+  - `openai/gpt-5.3-codex-spark` with `lite`
+  - `openai/gpt-5-nano` with `none`
+  - `google/gemini-3.1-flash-lite-preview` with `minimal`
+  - `anthropic/claude-haiku-4-5-20251001`
+- catalog refresh is driven by auth/provider-state changes, not remote model discovery
 
-Externally visible fields:
+## 8. Class Diagram
 
-- `onDidChangeSelection`
-- `onDidChangeCatalog`
-- `onDidChangeProviders`
-
-Private fields:
-
-- `selectedByThread`
-- `selectedByLocation`
-- `recentModelIdentifiers`
-- `state`
-- `refreshing`
-- `providers`
-- `initialized`
-
-## 8. Mermaid Class Diagram
-
-```mermaid
-classDiagram
-  class VSCloneThreadModelSelectionService {
-    +onDidChangeSelection
-    -selectedByThread
-    -selectedByLocation
-    -recentModelIdentifiers
-    +initialize()
-    +getCurrentSelectionForThread(threadId, location)
-    +setSelectionForThread(threadId, selection)
-    +switchToNextModel(threadId, location)
-    +resetSelectionForThread(threadId)
-    +hasSelectionForThread(threadId)
-    +getRecentModelIdentifiers(limit)
-    -touchRecentModelIdentifier(identifier)
-    -toSelectionFromStorage(row)
-  }
-
-  class VSCloneModelCatalogService {
-    +onDidChangeCatalog
-    -state
-    -refreshing
-    +refreshCatalog()
-    +getState()
-    +getProviders()
-    +getModels(providerId)
-    +getModel(identifier)
-    +getSelectableModels()
-    -computeProviders(preferences)
-    -computeModels(preferences)
-  }
-
-  class VSCloneProviderPreferencesService {
-    +onDidChangeProviders
-    -providers
-    -initialized
-    +initialize()
-    +getProviders()
-    +getProvider(vendor)
-    +setProviderEnabled(vendor, enabled)
-    +resetDefaults()
-    -store()
-  }
-
-  VSCloneThreadModelSelectionService --> VSCloneModelCatalogService
-  VSCloneThreadModelSelectionService --> VSCloneProviderPreferencesService
-```
+![Model Selection Class Diagram](../diagrams/backend/model-selection-class-diagram.svg)

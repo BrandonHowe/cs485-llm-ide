@@ -1,270 +1,168 @@
-# Module 2: Chat Execution
+# Chat Execution
 
-Shared cross-module architecture, storage details, and top-level design rationale live in [the backend architecture document](../backend-unified-spec.md). This module document isolates the `Chat Execution` design so request orchestration, live execution tracking, and turn-update normalization remain focused and easy to review.
+Shared architecture and storage context live in [the backend architecture document](../backend-unified-spec.md). This document isolates the implemented `Chat Execution` path: prompt submission, agent-loop orchestration, tool execution, prompt context gathering, and provider transport.
 
 ## 1. Features
 
 What it can do:
 
-- accept prompt submission from the composer or commands
-- resolve the active thread and selected model before send
-- call the configured provider through the direct provider path
-- manage cancellation and in-flight request handles
-- observe provider stream events
-- normalize prompt, delta, completion, error, and cancel events into turn updates
-- support agent-loop execution as an extension of the same request lifecycle
+- accept prompt submission from the VSClone composer
+- resolve the active thread id, selected model, and current Plan/Act mode
+- snapshot the execution mode at submit time
+- gather workspace/editor context and assemble a system prompt
+- run a multi-step agent loop that can call workspace tools
+- stream provider output into history
+- sanitize invalid tool transcripts before using them
+- enforce Plan Mode at runtime for edit/create tools
+- cancel in-flight work by thread
 
 What it does not do:
 
 - it does not own durable storage directly
-- it does not define provider catalog policy
-- it does not choose a model from UI state alone
-- it does not render UI
+- it does not define the model catalog
+- it does not render the UI
+- it does not persist OAuth tokens
 
 ## 2. Internal Architecture
 
-Chat Execution is one top-level module because the system has one supported send path. Internally, it uses a small set of cooperating classes so transport, session control, agent execution, and live event handling stay understandable and testable:
+The current composer send path always flows through the agent loop:
 
-- a session service that accepts send requests and resolves the selected model
-- a plan-mode service that resolves and persists the effective read-only vs act mode for the thread
-- an API service that performs transport-level provider execution
-- an agent-loop service for multi-step execution
-- a tool-execution service that enforces mode-specific workspace tool access
-- a runtime service and session bridge that convert live provider events into normalized updates
+1. `VSCloneChatSessionService.submitPrompt(...)`
+2. `VSCloneThreadModelSelectionService` resolves the model
+3. `VSClonePlanModeService` snapshots the current mode
+4. `VSCloneContextGatheringService` gathers active file/open files/workspace tree/diagnostics
+5. `VSClonePromptAssemblyService` builds the system prompt
+6. `VSCloneAgentLoopService.runAgentLoop(...)` drives the turn
+7. `VSCloneChatApiService` bridges to the Electron main process for model streaming
+8. `VSCloneToolExecutionService` executes any parsed tool calls
+9. `IVSCloneChatHistoryService.applyTurnUpdate(...)` persists the canonical transcript
 
-This design keeps the public architecture simple without collapsing all execution behavior into one oversized class.
-
-Why this is defensible to a senior architect:
-
-- one module owns the full lifecycle from send to normalized update
-- internal seams remain available for unit and integration testing
-- request transport remains separate from thread-state ownership
-- read-only planning is enforced by execution services instead of relying on model obedience
-- execution can evolve without destabilizing storage semantics
-
-```mermaid
-flowchart TD
-  Caller["Composer / Command"] --> Session["VSCloneChatSessionService"]
-  Session --> Selection["Model Selection"]
-  Session --> PlanMode["VSClonePlanModeService"]
-  Session --> Api["VSCloneChatApiService"]
-  Session --> Agent["VSCloneAgentLoopService"]
-  Agent --> PlanMode
-  Agent --> Tools["VSCloneToolExecutionService"]
-  Tools --> PlanMode
-  Agent --> Api
-  Api --> Providers["Provider APIs"]
-  Api --> Runtime["VSCloneChatRuntimeService"]
-  Agent --> Runtime
-  Runtime --> Bridge["VSCloneChatSessionBridge"]
-  Bridge --> Update["Normalized Turn Update"]
-  Update --> History["Thread History"]
-```
+![Chat Execution Architecture Diagram](../diagrams/backend/chat-execution-architecture-diagram.svg)
 
 ## 3. Data Abstraction
 
 Primary abstractions:
 
-- `ExecutionRequest`
-- `ExecutionHandle`
-- `RuntimeRequestState`
-- `NormalizedTurnUpdate`
-- `ExecutionModeSnapshot`
+- `IVSCloneChatSubmitOptions`
+- `IVSCloneAgentLoopOptions`
+- `IVSCloneApiSubmitOptions`
+- `IVSCloneChatTurnUpdate`
+- `VSCloneChatMode`
 
 Abstraction function:
 
-- an execution request represents one logical user send
-- an execution handle represents control over the in-flight request
-- runtime request state represents transient progress while the request is active
-- a normalized turn update represents the durable semantic output that Thread History can safely persist
-- an execution-mode snapshot represents the thread's effective `plan` or `act` mode captured at submit time
+- a submit request represents one logical composer send
+- agent-loop options represent one tool-capable execution turn
+- API submit options represent one provider request with all model/provider metadata already resolved
+- chat turn updates are the durable boundary between transient runtime work and persisted history
+- chat mode represents the execution policy (`act` vs `plan`) captured for that turn
 
-Representation invariant:
+Representation invariants enforced by the code:
 
-- every execution request is bound to exactly one thread
-- every normalized turn update refers to one existing thread identifier and turn identifier
-- every tool execution within a turn uses the same snapshotted execution mode that prompt assembly used
-- stream events are reduced in sequence order for a given request
-- terminal states are exclusive: completed, failed, or cancelled
-
-The key architectural idea is that this module is allowed to be transient internally as long as it emits durable turn updates promptly into Thread History.
+- each request is bound to exactly one `threadId` and `turnId`
+- provider transport runs only after a concrete `vendor` and `modelId` are resolved
+- the snapshotted turn mode is reused across prompt assembly, tool gating, and transcript updates
+- the agent loop stops on completion, error, cancel, or the hard iteration cap
+- only one tool call is executed at a time
 
 ## 4. Stable Storage Mechanism
 
-This module does not own an independent durable store. Its stable storage mechanism is indirect:
+This module does not own a separate store. Its durable effects are emitted into history as `IVSCloneChatTurnUpdate` events with phases:
 
-- request start, stream checkpoints, and terminal events are emitted into Thread History
-- Thread History persists those updates in SQLite
+- `prompt`
+- `stream`
+- `complete`
+- `error`
+- `cancel`
 
-Why this is acceptable:
-
-- execution state is only valuable insofar as it changes the recoverable conversation
-- a second execution-specific database would introduce another source of truth
-- the system can recover to the last committed thread state even if the application crashes mid-stream
+Those updates are reduced by Thread History and persisted through the unified snapshot store.
 
 ## 5. Storage Schemas
 
-This module does not own tables of its own. It writes durable effects into Thread History through the following tables:
+The execution module writes fields into the existing turn schema rather than creating new tables or keys:
 
-- `threads`
-  - used to keep active model, timestamps, and summary state current
-- `turns`
-  - used to persist prompt text, streamed assistant output, status, error information, and per-turn execution mode
-- `thread_modes`
-  - used to persist the current Plan/Act mode for each thread so the composer restores it on reopen
+- `executionMode`
+- `modelIdentifier`
+- `providerId`
+- `promptText`
+- `responseMarkdown`
+- `responsePlainText`
+- `startedAt`
+- `completedAt`
+- `status`
+- `errorCode`
 
-Module-local transient state is not persisted separately.
+Additional execution behavior reflected in the transcript:
+
+- agent traces are emitted as `<agent_trace ...>` XML markers
+- tool results are appended as `<tool_result ...>` XML blocks
+- rejected sends write a failed turn with `errorCode='request_rejected'`
 
 ## 6. External API
 
-The external API is an internal execution service contract.
+Implemented workbench service contracts:
 
-Operations exposed by Chat Execution:
+- `VSCloneChatSessionService`
+  - `submitPrompt(promptText, options?)`
+  - `cancelThread(threadId)`
 
-- `submitPrompt(promptText, options)`
-  - resolves thread and model, starts execution, and returns a submission result
-- `cancelThread(threadId)`
-  - cancels the active request for the given thread
-- `getModeForThread(threadId)`
-  - resolves the current persisted Plan/Act mode for a thread or unsaved composer
-- `setModeForThread(threadId, mode)`
-  - persists the Plan/Act mode for a thread or the unsaved composer
-- `isToolAllowed(mode, toolName)`
-  - determines whether a workspace tool is allowed for the snapshotted turn mode
-- `submitApiPrompt(options)`
-  - dispatches a direct provider request
-- `submitApiPromptForAgentLoop(options, observer)`
-  - dispatches a provider request for agent-mode execution
-- `runAgentLoop(options)`
-  - executes a multi-step agent loop while still producing normalized updates
-- `initialize()`
-  - starts live request tracking so active streams can be tracked even before the view opens
+- `VSClonePlanModeService`
+  - `initialize()`
+  - `getModeForThread(threadId?)`
+  - `setModeForThread(threadId, mode)`
+  - `isToolAllowed(mode, toolName)`
+
+- `VSCloneChatApiService`
+  - `submitApiPrompt(options)`
+  - `submitApiPromptForAgentLoop(options, observer)`
+
+- `VSCloneAgentLoopService`
+  - `runAgentLoop(options)`
+
+- `VSCloneToolExecutionService`
+  - `executeTool(toolName, params, mode?)`
 
 ## 7. Class, Method, and Field Declarations
 
-Externally visible classes:
+Implemented classes:
 
 - `VSCloneChatSessionService`
   - methods: `submitPrompt`, `cancelThread`
-  - fields: none exposed publicly beyond service registration
-
-- `VSClonePlanModeService`
-  - methods: `initialize`, `getModeForThread`, `setModeForThread`, `isToolAllowed`
-  - fields: none exposed publicly beyond service registration
-
-- `VSCloneChatApiService`
-  - methods: `submitApiPrompt`, `submitApiPromptForAgentLoop`
-  - fields: none exposed publicly beyond service registration
+  - private helpers: `submitApiPrompt`, `ensureThreadSelectionBinding`, `injectRejectedTurn`, `getApiVendor`, `rejectMissingApiSelection`
+  - private field: `apiRequestHandles`
 
 - `VSCloneAgentLoopService`
   - methods: `runAgentLoop`
-  - fields: none exposed publicly beyond service registration
+  - private helpers: `runLoop`, `runModelIteration`, `appendAssistantDelta`, `replaceCurrentIterationTranscript`, `applyComplete`, `applyError`, `applyCancel`, `emitAgentTrace`
+  - policy constants: `maxAgentIterations=25`, `maxToolUsageReprompts=2`
+
+- `VSCloneChatApiService`
+  - methods: `submitApiPrompt`, `submitApiPromptForAgentLoop`
+  - private helpers: `submitApiPromptInternal`, `registerChannelListeners`, `submitToMainProcess`, `cancelRequest`, `handleDeltaEvent`, `handleCompleteEvent`, `handleErrorEvent`, `handleAbortedEvent`, `applyErrorUpdate`, `finishRequest`
+  - private fields: `channel`, `pendingRequests`
 
 - `VSCloneToolExecutionService`
   - methods: `executeTool`
-  - fields: none exposed publicly beyond service registration
+  - private helpers implement `read_file`, `list_directory`, `search_files`, `edit_file`, `create_file`
 
-- `VSCloneChatRuntimeService`
-  - methods: `initialize`
-  - fields: none exposed publicly beyond service registration
+- `VSCloneContextGatheringService`
+  - method: `gatherContext`
 
-Private-to-module classes:
+- `VSClonePromptAssemblyService`
+  - method: `assembleSystemMessage`
 
-- `VSCloneChatSessionBridge`
-  - methods: `initializeFromModel`, `ensureRequestState`, `emitPrompt`, `emitResponseSnapshot`
-  - fields: `requestStateById`, `nextSequence`
+- `VSCloneChatApiChannel`
+  - methods: `call`, `listen`
+  - private helpers: `submitRequest`, `abortRequest`, `streamRequest`, `consumeStream`, `processBufferedSseText`, `processSseLine`
+  - private fields: emitters for `onDelta`, `onComplete`, `onError`, `onAborted`, plus `runningRequests`
 
-Private methods across the module:
+Support helpers used by this module:
 
-- `submitApiPromptInternal`
-- `syncBridgeAttachment`
-- `attachRequestFlow`
-- `detachRequestFlow`
-- `runLoop`
-- `runModelIteration`
-- `appendAssistantDelta`
-- `applyComplete`
-- `applyError`
-- `applyCancel`
-- `createToolUsageReprompt`
-- `injectRejectedTurn`
-- `getApiVendor`
+- `sanitizeAgentModelOutput(...)`
+- `parseToolCalls(...)`
+- `formatToolResult(...)`
+- `getVendorAdapter(...)`
 
-Private fields across the module:
+## 8. Class Diagram
 
-- `apiRequestHandles`
-- `pendingRequests`
-- `bridgeStoresBySessionResource`
-- `requestStateById`
-- `initialized`
-
-## 8. Mermaid Class Diagram
-
-```mermaid
-classDiagram
-  class VSCloneChatSessionService {
-    -apiRequestHandles
-    +submitPrompt(promptText, options)
-    +cancelThread(threadId)
-    -submitApiPrompt(promptText, options, vendor)
-    -injectRejectedTurn(options)
-    -getApiVendor(selection)
-  }
-
-  class VSClonePlanModeService {
-    +initialize()
-    +getModeForThread(threadId)
-    +setModeForThread(threadId, mode)
-    +isToolAllowed(mode, toolName)
-  }
-
-  class VSCloneChatApiService {
-    -pendingRequests
-    +submitApiPrompt(options)
-    +submitApiPromptForAgentLoop(options, observer)
-    -submitApiPromptInternal(options, mode, observer)
-    -submitToMainProcess(pending)
-    -cancelRequest(requestId)
-  }
-
-  class VSCloneAgentLoopService {
-    +runAgentLoop(options)
-    -runLoop(options, state)
-    -runModelIteration(options, messages, state)
-    -appendAssistantDelta(options, delta)
-    -applyComplete(options, state)
-    -applyError(options, state, message)
-    -applyCancel(options, state)
-  }
-
-  class VSCloneToolExecutionService {
-    +executeTool(toolName, params, mode)
-  }
-
-  class VSCloneChatRuntimeService {
-    -bridgeStoresBySessionResource
-    -initialized
-    +initialize()
-    -syncBridgeAttachment()
-    -attachRequestFlow(flow)
-    -detachRequestFlow(flowId)
-  }
-
-  class VSCloneChatSessionBridge {
-    -requestStateById
-    -nextSequence
-    -initializeFromModel()
-    -ensureRequestState(request)
-    -emitPrompt(request)
-    -emitResponseSnapshot(request)
-  }
-
-  VSCloneChatSessionService --> VSClonePlanModeService
-  VSCloneChatSessionService --> VSCloneChatApiService
-  VSCloneChatSessionService --> VSCloneAgentLoopService
-  VSCloneAgentLoopService --> VSClonePlanModeService
-  VSCloneAgentLoopService --> VSCloneToolExecutionService
-  VSCloneToolExecutionService --> VSClonePlanModeService
-  VSCloneChatApiService --> VSCloneChatRuntimeService
-  VSCloneChatRuntimeService --> VSCloneChatSessionBridge
-```
+![Chat Execution Class Diagram](../diagrams/backend/chat-execution-class-diagram.svg)

@@ -1,0 +1,56 @@
+flowchart LR
+  subgraph UI["Workbench UI"]
+    direction TB
+    ProviderUI["Provider Actions"]
+  end
+
+  subgraph Renderer["Renderer / Workbench Services"]
+    direction LR
+
+    subgraph OAuth["OAuth / Auth"]
+      direction TB
+      OAuthService["VSCloneOAuthService"]
+      OAuthConfig["defaultOAuthProviderConfig"]
+    end
+
+    subgraph Consumers["OAuth Consumers"]
+      direction TB
+      ModelCatalog["VSCloneModelCatalogService"]
+      ChatApi["VSCloneChatApiService"]
+      CompletionApi["VSCloneCompletionApiService"]
+    end
+  end
+
+  subgraph Main["Electron Main Process"]
+    direction TB
+    OAuthChannel["VSCloneOAuthLoopbackChannel\n(vsclone-oauth)"]
+    Browser["shell.openExternal(...)"]
+    Loopback["localhost callback listener"]
+  end
+
+  subgraph Storage["Secret Storage"]
+    direction TB
+    SecretStore[("secret://vsclone.oauth.tokens.<vendor>")]
+  end
+
+  subgraph Cloud["Provider OAuth / Token Endpoints"]
+    direction TB
+    OpenAI["OpenAI auth + token endpoints"]
+    Anthropic["Anthropic auth + token endpoints"]
+    Google["Google auth + token endpoints"]
+  end
+
+  ProviderUI --> OAuthService
+  OAuthService --> OAuthConfig
+  OAuthService --> SecretStore
+  OAuthService --> OAuthChannel
+
+  ModelCatalog --> OAuthService
+  ChatApi --> OAuthService
+  CompletionApi --> OAuthService
+
+  OAuthChannel --> Browser
+  OAuthChannel --> Loopback
+  OAuthChannel --> OpenAI
+  OAuthChannel --> Anthropic
+  OAuthChannel --> Google

@@ -1,0 +1,7 @@
+flowchart TD
+  Prefs["VSCloneProviderPreferencesService"] --> Catalog["VSCloneModelCatalogService"]
+  OAuth["VSCloneOAuthService"] --> Catalog
+  Catalog --> Selection["VSCloneThreadModelSelectionService"]
+  Backend["VSCloneUnifiedChatBackendService"] --> Selection
+  Selection --> Snapshot[("selectedByThread / selectedByLocation / recents")]
+  Prefs --> PrefStore[("vsclone.providerPreferences.v1")]

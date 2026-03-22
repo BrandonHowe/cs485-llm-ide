@@ -1,251 +1,184 @@
-# Module 1: Thread History
+# Thread History
 
-Shared cross-module architecture, storage details, and top-level design rationale live in [the backend architecture document](../backend-unified-spec.md). This module document isolates the `Thread History` design so the durability and state-ownership details stay focused and easy to review.
+Shared architecture and cross-module rationale live in [the backend architecture document](../backend-unified-spec.md). This module document focuses on the implemented `Thread History` subsystem: the durable chat snapshot, the reducer that turns runtime events into persisted state, and the storage contract used by the rest of VSClone.
 
 ## 1. Features
 
 What it can do:
 
-- own the canonical `ThreadSnapshot` abstraction
-- create, update, archive, delete, and clear thread records
-- reduce normalized turn updates into stable thread state
-- restore a thread together with its turns and selected model
-- expose thread-summary queries for the history rail
-- persist thread, turn, and selection state transactionally
-- run migration and retention logic
+- own the canonical persisted chat snapshot
+- store and query thread summaries
+- store and query ordered turns per thread
+- archive, delete, and clear threads
+- persist per-thread model selection together with the thread snapshot
+- persist thread Plan/Act mode in the same durable snapshot
+- enforce retention limits and max-turn trimming
+- redact simple secret-like text before persistence when configured
 
 What it does not do:
 
-- it does not render UI
-- it does not discover models
-- it does not talk directly to cloud providers
-- it does not own provider secrets or authentication
+- it does not talk directly to providers
+- it does not render the UI
+- it does not decide fallback model policy
+- it does not execute tools
 
 ## 2. Internal Architecture
 
-Thread History should be structured as a thin public service over two internal layers:
+The implemented history stack has four layers:
 
-- an in-memory domain model that applies deterministic state transitions
-- a SQLite-backed repository that handles loading, saving, migration, and row mapping
+1. `VSCloneChatHistoryService`
+   - compatibility facade used by existing UI/services
+2. `VSCloneUnifiedChatBackendService`
+   - single durable owner of the snapshot
+3. `VSCloneChatHistoryModel`
+   - in-memory canonical state
+4. `VSCloneChatHistoryStore` + `VSCloneChatHistorySerializer`
+   - storage and schema validation
 
-This split is important because correctness and IO should be testable independently. The model should be easy to test with pure input/output cases, while the store should be tested with transaction, migration, and crash-recovery scenarios.
+Turn updates are reduced through `reduceThreadTurns(...)` in `vscloneChatHistoryStateMachine.ts`. That pure reducer is the correctness boundary for thread status, preview text, turn ordering, and terminal-state handling.
 
-Why this design is defensible to a senior architect:
-
-- the service layer owns lifecycle and change events, not business logic
-- the model layer is the correctness boundary
-- the store layer is the durability boundary
-- migration and row mapping remain isolated from higher-level thread semantics
-
-```mermaid
-flowchart TD
-  API["Thread History Service"] --> Service["VSCloneUnifiedChatBackendService"]
-  Service --> Model["VSCloneUnifiedChatModel"]
-  Service --> Store["VSCloneUnifiedChatStore"]
-  Store --> Mapper["VSCloneUnifiedChatRowMapper"]
-  Store --> Migration["VSCloneUnifiedChatMigrationService"]
-  Model --> Snapshot["ThreadSnapshot"]
-  Store --> Db["SQLite Database"]
-```
+![Thread History Architecture Diagram](../diagrams/backend/thread-history-architecture-diagram.svg)
 
 ## 3. Data Abstraction
 
-Primary abstraction: `ThreadSnapshot`
+The core durable abstraction is `IVSCloneChatHistorySnapshot`.
 
 Abstraction function:
 
-- the thread row represents summary-level conversation metadata
-- the turn rows represent the ordered prompt/response history for that thread
-- the optional selection row represents the active model bound to that thread
-- together, these values represent one recoverable conversation state
+- `threads` represents the restorable summary list used by the history rail
+- `turnsByThreadId` represents the ordered transcript for each thread
+- `selectedByThread` and `selectedByLocation` represent persisted model-selection state
+- `modeByThread` represents persisted Plan/Act mode
+- `recentModelIdentifiers` represents model-selection recency policy
 
-Representation invariant:
+Representation invariants enforced by the implementation:
 
-- every turn belongs to an existing thread
-- turns are ordered by sequence within a thread
-- `turnCount` matches the number of stored turns for that thread
-- `lastTurnPreview` is derived from the most recent turn
-- if a thread has a selection, the selection refers to that same thread
-
-Why this abstraction is useful:
-
-- it matches how the user experiences the feature
-- it gives restore, history display, and model restore the same correctness boundary
-- it prevents the history rail from reconstructing state from partial or stale inputs
-
-`TODO(student): If your instructor expects a formal abstraction function / representation invariant writeup, add it here using 6.005 terminology.`
+- each turn belongs to exactly one thread
+- turns are stored in increasing `sequence` order, with `startedAt` breaking ties
+- `turnCount` equals the number of retained turns for that thread
+- `lastTurnPreview` is derived from the latest retained turn
+- archived threads report status `archived`
+- only schema version `2` payloads are accepted by the serializer
 
 ## 4. Stable Storage Mechanism
 
-Stable storage for this module is SQLite in workspace or profile scope, with transactional writes for thread updates.
+This module uses VS Code host storage, not a VSClone-owned SQL schema. `VSCloneChatHistoryStore` writes JSON payloads under these keys:
 
-Durability policy:
+- `vsclone.chatHistory.v2.index`
+- `vsclone.chatHistory.v2.thread.<url-encoded-thread-id>`
 
-- initialize schema before first read or write
-- commit thread summary, turn rows, and thread selection in one transaction
-- retain a schema-version row in `meta`
-- use retention pruning as an explicit backend policy, not implicit file deletion
+Persistence scope is controlled by `vsclone.chatHistory.persistScope`:
+
+- `workspace`
+- `profile`
+
+Important implementation details:
+
+- streamed updates are persisted with a `300ms` delay
+- prompt completion/error/cancel/archive/delete operations persist immediately
+- retention is enforced on initialize and after each turn update
+- malformed thread payloads are skipped with a warning
+- a malformed index payload aborts history initialization
 
 ## 5. Storage Schemas
 
-This module owns or reads the following tables:
+### Index payload
 
-`threads`
+Stored at `vsclone.chatHistory.v2.index`:
 
-- primary key: `thread_id`
-- key fields: `session_resource`, `title`, `active_model_identifier`, `location`, `created_at`, `updated_at`, `status`, `archived`, `turn_count`, `last_turn_preview`
-- purpose: one summary row per conversation
+- `schemaVersion: 2`
+- `workspaceId`
+- `updatedAt`
+- `threads: IVSCloneChatHistoryThread[]`
+- `modeByThread: Record<string, 'act' | 'plan'>`
+- `selectedByLocation`
+- `recentModelIdentifiers`
 
-`turns`
+### Per-thread payload
 
-- primary key: `turn_id`
-- foreign key: `thread_id -> threads.thread_id`
-- key fields: `sequence`, `model_identifier`, `provider_id`, `prompt_text`, `response_markdown`, `response_plain_text`, `started_at`, `completed_at`, `status`, `error_code`
-- purpose: ordered turn history per thread
+Stored at `vsclone.chatHistory.v2.thread.<encoded-thread-id>`:
 
-`thread_selection`
+- `schemaVersion: 2`
+- `threadId`
+- `sessionResource`
+- `turns: IVSCloneChatHistoryTurn[]`
+- `selection?: IVSCloneModelSelection`
 
-- primary key and foreign key: `thread_id -> threads.thread_id`
-- key fields: `location`, `model_identifier`, `vendor`, `model_id`, `model_name`, `reasoning_effort`, `selected_at`
-- purpose: per-thread selected model stored with the thread state
+### Key thread fields
 
-`meta`
+- `IVSCloneChatHistoryThread`
+  - `threadId`
+  - `sessionResource`
+  - `title`
+  - `activeModelIdentifier`
+  - `createdAt`
+  - `updatedAt`
+  - `status`
+  - `archived`
+  - `turnCount`
+  - `lastTurnPreview`
 
-- primary key: `key`
-- key fields: `value`
-- purpose: schema version and store metadata
+- `IVSCloneChatHistoryTurn`
+  - `turnId`
+  - `threadId`
+  - `sequence`
+  - `executionMode`
+  - `modelIdentifier`
+  - `providerId`
+  - `promptText`
+  - `responseMarkdown`
+  - `responsePlainText`
+  - `startedAt`
+  - `completedAt`
+  - `status`
+  - `errorCode`
+  - `lastEventAt`
 
 ## 6. External API
 
-This project does not use a REST API here. The external API is an internal service contract exposed to other workbench services and UI surfaces.
-
-Operations exposed by Thread History:
+Implemented service operations:
 
 - `initialize()`
-  - loads persisted state, runs migration if needed, and publishes readiness
-- `getThreads(query)`
-  - returns thread summaries filtered by text, archive status, or limit
-- `getThreadSnapshot(threadId)`
-  - returns one thread with turns and selection
+- `getThreads(query?)`
+- `getTurns(threadId)`
 - `applyTurnUpdate(update)`
-  - reduces a normalized execution event into canonical state
-- `setThreadSelection(threadId, selection)`
-  - persists model selection as part of the thread snapshot
-- `getThreadSelection(threadId, location)`
-  - returns the selected model for that thread, if one exists
-- `getRecentModelIdentifiers(limit)`
-  - returns recent model identifiers needed by the switcher
 - `archiveThread(threadId, archived)`
-  - archives or unarchives a thread
 - `deleteThread(threadId)`
-  - permanently removes a thread and its turns
 - `clearAll(scope)`
-  - clears stored data for the selected persistence scope
+
+Unified-backend-only operations used by other modules:
+
+- `getSelectionState()`
+- `replaceSelectionState(state)`
+- `getPlanModeState()`
+- `replacePlanModeState(state)`
 
 ## 7. Class, Method, and Field Declarations
 
-Externally visible classes:
+Implemented classes:
+
+- `VSCloneChatHistoryService`
+  - methods: `initialize`, `getThreads`, `getTurns`, `applyTurnUpdate`, `archiveThread`, `deleteThread`, `clearAll`
+  - role: thin facade over the unified backend
 
 - `VSCloneUnifiedChatBackendService`
-  - methods: `initialize`, `getThreads`, `getThreadSnapshot`, `applyTurnUpdate`, `setThreadSelection`, `getThreadSelection`, `getRecentModelIdentifiers`, `archiveThread`, `deleteThread`, `clearAll`
-  - fields: `onDidChange`
+  - methods: `initialize`, `getThreads`, `getTurns`, `applyTurnUpdate`, `archiveThread`, `deleteThread`, `clearAll`, `getSelectionState`, `replaceSelectionState`, `getPlanModeState`, `replacePlanModeState`
+  - private fields: `model`, `store`, `persistDelayer`, `initialized`, `disabled`, `initializing`
 
-Private-to-module classes:
+- `VSCloneChatHistoryModel`
+  - methods: `initialize`, `toSnapshot`, `getThread`, `getThreadState`, `getTurns`, `getThreads`, `setThreadState`, `archiveThread`, `deleteThread`, `clear`, `applyRetention`, `getSelectionState`, `replaceSelectionState`, `getPlanModeState`, `replacePlanModeState`
+  - private fields: `threads`, `turnsByThreadId`, `threadIdsBySessionResource`, `searchTextByThreadId`, `modeByThread`, `selectedByThread`, `selectedByLocation`, `recentModelIdentifiers`
 
-- `VSCloneUnifiedChatModel`
-  - methods: `initialize`, `toSnapshot`, `getThreadSnapshot`, `getThreads`, `setThreadState`, `archiveThread`, `deleteThread`, `applyRetention`
-  - fields: `threads`, `turnsByThreadId`, `selectionByThreadId`, `searchTextByThreadId`
+- `VSCloneChatHistoryStore`
+  - methods: `load`, `save`, `clear`
+  - private helpers: `loadFromStorage`, `restoreSnapshot`, `getManagedStorageKeys`, `getManagedThreadKeys`, `getThreadStorageKey`
 
-- `VSCloneUnifiedChatStore`
-  - methods: `load`, `save`, `clear`, `openConnection`, `prepareSchema`, `runInTransaction`, `getDatabasePath`
-  - fields: `connectionByScope`, `rowMapper`
+- `VSCloneChatHistorySerializer`
+  - methods: `serializeIndex`, `serializeThread`, `deserializeIndex`, `deserializeThread`
 
-- `VSCloneUnifiedChatRowMapper`
-  - methods: `toThreadSnapshot`, `toThreadRecord`, `toTurnRecords`, `toSelectionRecord`
-  - fields: none required beyond implementation-local helpers
+- `reduceThreadTurns(...)`
+  - responsibility: deterministic turn/thread reduction
 
-- `VSCloneUnifiedChatMigrationService`
-  - methods: `prepareSchema`, store-import helpers
-  - fields: schema helpers and version constants
+## 8. Class Diagram
 
-Externally visible fields:
-
-- `onDidChange`
-
-Private fields:
-
-- `model`
-- `store`
-- `persistDelayer`
-- `initialized`
-- `initializing`
-- `threads`
-- `turnsByThreadId`
-- `selectionByThreadId`
-- `searchTextByThreadId`
-- `connectionByScope`
-- `rowMapper`
-
-## 8. Mermaid Class Diagram
-
-```mermaid
-classDiagram
-  class VSCloneUnifiedChatBackendService {
-    +onDidChange
-    +initialize()
-    +getThreads(query)
-    +getThreadSnapshot(threadId)
-    +applyTurnUpdate(update)
-    +setThreadSelection(threadId, selection)
-    +getThreadSelection(threadId, location)
-    +getRecentModelIdentifiers(limit)
-    +archiveThread(threadId, archived)
-    +deleteThread(threadId)
-    +clearAll(scope)
-  }
-
-  class VSCloneUnifiedChatModel {
-    -threads
-    -turnsByThreadId
-    -selectionByThreadId
-    -searchTextByThreadId
-    +initialize(snapshot)
-    +toSnapshot(updatedAt)
-    +getThreadSnapshot(threadId)
-    +getThreads(query)
-    +setThreadState(thread, turns, selection)
-    +archiveThread(threadId, archived)
-    +deleteThread(threadId)
-    +applyRetention(maxThreads, retentionDays, now)
-  }
-
-  class VSCloneUnifiedChatStore {
-    -connectionByScope
-    -rowMapper
-    +load(scope)
-    +save(scope, snapshot)
-    +clear(scope)
-    -openConnection(scope)
-    -prepareSchema(connection)
-    -runInTransaction(connection, work)
-    -getDatabasePath(scope)
-  }
-
-  class VSCloneUnifiedChatRowMapper {
-    +toThreadSnapshot(rows)
-    +toThreadRecord(thread)
-    +toTurnRecords(turns)
-    +toSelectionRecord(selection)
-  }
-
-  class VSCloneUnifiedChatMigrationService {
-    +prepareSchema(connection)
-    +importStoredThreadData(scope)
-    +importStoredSelectionData(scope)
-  }
-
-  VSCloneUnifiedChatBackendService --> VSCloneUnifiedChatModel
-  VSCloneUnifiedChatBackendService --> VSCloneUnifiedChatStore
-  VSCloneUnifiedChatStore --> VSCloneUnifiedChatRowMapper
-  VSCloneUnifiedChatStore --> VSCloneUnifiedChatMigrationService
-```
+![Thread History Class Diagram](../diagrams/backend/thread-history-class-diagram.svg)

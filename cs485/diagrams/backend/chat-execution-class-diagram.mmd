@@ -1,0 +1,61 @@
+classDiagram
+  class VSCloneChatSessionService {
+    -apiRequestHandles
+    +submitPrompt(promptText, options)
+    +cancelThread(threadId)
+    -ensureThreadSelectionBinding(threadId, selection)
+    -injectRejectedTurn(options)
+  }
+
+  class VSClonePlanModeService {
+    -composerMode
+    +initialize()
+    +getModeForThread(threadId)
+    +setModeForThread(threadId, mode)
+    +isToolAllowed(mode, toolName)
+  }
+
+  class VSCloneAgentLoopService {
+    +runAgentLoop(options)
+    -runLoop(options, state)
+    -runModelIteration(options, messages, state)
+    -appendAssistantDelta(options, delta)
+    -applyComplete(options, state)
+    -applyError(options, state, message)
+    -applyCancel(options, state)
+  }
+
+  class VSCloneChatApiService {
+    -channel
+    -pendingRequests
+    +submitApiPrompt(options)
+    +submitApiPromptForAgentLoop(options, observer)
+    -submitToMainProcess(pending)
+    -cancelRequest(requestId)
+  }
+
+  class VSCloneToolExecutionService {
+    +executeTool(toolName, params, mode)
+  }
+
+  class VSCloneContextGatheringService {
+    +gatherContext()
+  }
+
+  class VSClonePromptAssemblyService {
+    +assembleSystemMessage(context, vendor, mode)
+  }
+
+  class VSCloneChatApiChannel {
+    -runningRequests
+    +call(_, command, arg)
+    +listen(_, event)
+  }
+
+  VSCloneChatSessionService --> VSClonePlanModeService
+  VSCloneChatSessionService --> VSCloneAgentLoopService
+  VSCloneChatSessionService --> VSCloneContextGatheringService
+  VSCloneChatSessionService --> VSClonePromptAssemblyService
+  VSCloneAgentLoopService --> VSCloneChatApiService
+  VSCloneAgentLoopService --> VSCloneToolExecutionService
+  VSCloneChatApiService --> VSCloneChatApiChannel

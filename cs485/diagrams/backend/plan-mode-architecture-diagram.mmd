@@ -1,0 +1,9 @@
+flowchart TD
+  Toggle["Composer Plan/Act Toggle"] --> Mode["VSClonePlanModeService"]
+  Mode --> Backend["VSCloneUnifiedChatBackendService"]
+  Session["VSCloneChatSessionService"] --> Mode
+  Session --> Prompt["VSClonePromptAssemblyService"]
+  Prompt --> Tools["VSCLONE_TOOL_DEFINITIONS"]
+  Session --> Exec["VSCloneToolExecutionService"]
+  Exec --> Mode
+  Exec --> Tools

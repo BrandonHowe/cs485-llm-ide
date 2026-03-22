@@ -1,0 +1,47 @@
+classDiagram
+  class VSCloneAutocompleteService {
+    -cacheByResource
+    -latestRequestTimestampByResource
+    -activeRequestsByResource
+    +provideInlineCompletions(model, position, context, token)
+    +handleItemDidShow(completions, item)
+    +disposeInlineCompletions(completions)
+    -debounce(resource, context, mode, token)
+    -extractCompletionContext(model, position)
+    -getPredictionMode(linePrefix, lineSuffix)
+    -getReplaceRange(model, position, mode)
+    -getCachedCompletion(resource, prefix, suffix)
+  }
+
+  class VSCloneCompletionContextService {
+    +gatherContext(currentUri, currentLanguageId, maxSnippets, maxCharsPerSnippet)
+  }
+
+  class VSCloneCompletionBackendService {
+    -requestTimeoutMs
+    +complete(request, token)
+    -resolveCompletionSelection(token)
+    -completeWithSelection(request, selection, token)
+    -normalizeBackendResult(rawText, request, selection)
+  }
+
+  class VSCloneCompletionPromptService {
+    +buildPromptEnvelope(request, selection)
+  }
+
+  class VSCloneCompletionApiService {
+    +complete(envelope, selection, token)
+  }
+
+  class VSCloneCompletionChannel {
+    -runningRequests
+    +call(_, command, arg, token)
+    +listen(_, event)
+  }
+
+  VSCloneAutocompleteService --> VSCloneCompletionContextService
+  VSCloneAutocompleteService --> VSCloneCompletionBackendService
+  VSCloneCompletionBackendService --> VSCloneThreadModelSelectionService
+  VSCloneCompletionBackendService --> VSCloneCompletionPromptService
+  VSCloneCompletionBackendService --> VSCloneCompletionApiService
+  VSCloneCompletionApiService --> VSCloneCompletionChannel

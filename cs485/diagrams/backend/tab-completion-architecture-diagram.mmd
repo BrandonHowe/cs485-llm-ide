@@ -1,0 +1,10 @@
+flowchart LR
+  Editor["Monaco Inline Completion API"] --> Auto["VSCloneAutocompleteService"]
+  Auto --> Context["VSCloneCompletionContextService"]
+  Auto --> Backend["VSCloneCompletionBackendService"]
+  Backend --> Selection["VSCloneThreadModelSelectionService"]
+  Backend --> Prompt["VSCloneCompletionPromptService"]
+  Backend --> Api["VSCloneCompletionApiService"]
+  Api --> Channel["VSCloneCompletionChannel"]
+  Channel --> Adapters["Completion API Adapters"]
+  Adapters --> Providers["OpenAI / Anthropic / Google"]

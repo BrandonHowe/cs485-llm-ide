@@ -1,0 +1,86 @@
+classDiagram
+  class IVSCloneOAuthService {
+    +state
+    +onDidChangeState
+    +initialize()
+    +signIn(vendor)
+    +signOut(vendor)
+    +getAccessToken(vendor)
+    +getTokenSet(vendor)
+    +getApiHeaders(vendor)
+    +isSignedIn(vendor)
+  }
+
+  class VSCloneOAuthService {
+    -_state
+    -_tokenSets
+    -_refreshPromises
+    -_initialized
+    -loopbackChannel
+    +initialize()
+    +signIn(vendor)
+    +signOut(vendor)
+    +getAccessToken(vendor)
+    +getTokenSet(vendor)
+    +getApiHeaders(vendor)
+    +isSignedIn(vendor)
+    -_acquireLoopbackAuthorizationCode(vendor, config, expectedState, codeChallenge)
+    -_ensureRefreshed(vendor, tokenSet)
+    -_doRefresh(vendor, tokenSet)
+  }
+
+  class VSCloneOAuthLoopbackChannel {
+    -sessions
+    +call(_, command, arg, token)
+    +listen(_, event)
+    -startLoopback(request)
+    -waitForLoopback(request)
+    -stopLoopback(sessionId, silent)
+    -tokenExchange(request)
+    -handleLoopbackRequest(sessionId, request, response)
+  }
+
+  class IVSCloneOAuthTokenSet {
+    +vendor
+    +accessToken
+    +refreshToken
+    +idToken
+    +expiresAt
+    +scopes
+    +providerMetadata
+  }
+
+  class IVSCloneOAuthProviderState {
+    +vendor
+    +displayName
+    +status
+    +userDisplayName
+    +errorMessage
+    +isReady
+  }
+
+  class IVSCloneOAuthProviderConfig {
+    +vendor
+    +displayName
+    +clientId
+    +authUrl
+    +tokenUrl
+    +scopes
+    +redirectStrategy
+    +redirectUriTemplate
+    +preferredPort
+    +apiEndpoint
+  }
+
+  class defaultOAuthProviderConfig {
+    +openai
+    +anthropic
+    +google
+  }
+
+  IVSCloneOAuthService <|.. VSCloneOAuthService
+  VSCloneOAuthService --> VSCloneOAuthLoopbackChannel
+  VSCloneOAuthService --> IVSCloneOAuthTokenSet
+  VSCloneOAuthService --> IVSCloneOAuthProviderState
+  VSCloneOAuthService --> defaultOAuthProviderConfig
+  defaultOAuthProviderConfig --> IVSCloneOAuthProviderConfig

@@ -1,0 +1,8 @@
+flowchart TD
+  Runtime["Execution Services"] --> Facade["VSCloneChatHistoryService"]
+  Facade --> Backend["VSCloneUnifiedChatBackendService"]
+  Backend --> Reducer["reduceThreadTurns(...)"]
+  Backend --> Model["VSCloneChatHistoryModel"]
+  Backend --> Store["VSCloneChatHistoryStore"]
+  Store --> Serializer["VSCloneChatHistorySerializer"]
+  Store --> HostStorage[("IStorageService / state.vscdb")]

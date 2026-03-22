@@ -1,0 +1,45 @@
+classDiagram
+  class VSClonePlanModeService {
+    -composerMode
+    -initialized
+    -initializing
+    +initialize()
+    +getModeForThread(threadId)
+    +setModeForThread(threadId, mode)
+    +isToolAllowed(mode, toolName)
+  }
+
+  class VSCloneUnifiedChatBackendService {
+    +getPlanModeState()
+    +replacePlanModeState(state)
+  }
+
+  class VSCloneChatHistoryModel {
+    -modeByThread
+    +getPlanModeState()
+    +replacePlanModeState(state)
+  }
+
+  class VSCloneChatSessionService {
+    +submitPrompt(promptText, options)
+  }
+
+  class VSClonePromptAssemblyService {
+    +assembleSystemMessage(context, vendor, mode)
+  }
+
+  class VSCloneToolExecutionService {
+    +executeTool(toolName, params, mode)
+  }
+
+  class VSCLONE_TOOL_DEFINITIONS {
+    +planModeAllowed
+  }
+
+  VSClonePlanModeService --> VSCloneUnifiedChatBackendService
+  VSCloneUnifiedChatBackendService --> VSCloneChatHistoryModel
+  VSCloneChatSessionService --> VSClonePlanModeService
+  VSCloneChatSessionService --> VSClonePromptAssemblyService
+  VSClonePromptAssemblyService --> VSCLONE_TOOL_DEFINITIONS
+  VSCloneToolExecutionService --> VSClonePlanModeService
+  VSCloneToolExecutionService --> VSCLONE_TOOL_DEFINITIONS
