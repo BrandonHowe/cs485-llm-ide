@@ -264,7 +264,13 @@ function buildApiHeaders(vendor: VSCloneModelVendor, tokenSet: IVSCloneOAuthToke
 			break;
 		}
 		case 'anthropic': {
-			headers['anthropic-beta'] = 'oauth-2025-04-20,interleaved-thinking-2025-05-14';
+			// Anthropic rejects every Messages API request without an explicit version header, even when
+			// the request is otherwise authenticated through OAuth instead of a raw API key.
+			headers['anthropic-version'] = '2023-06-01';
+			// Keep provider-wide headers scoped to the OAuth transport contract. Feature betas such as
+			// interleaved thinking must be added by the individual request path that actually needs them,
+			// otherwise plain chat requests advertise unsupported behavior and are easier to break.
+			headers['anthropic-beta'] = 'oauth-2025-04-20';
 			break;
 		}
 		case 'google': {

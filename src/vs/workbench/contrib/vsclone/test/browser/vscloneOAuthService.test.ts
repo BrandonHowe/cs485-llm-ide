@@ -135,4 +135,31 @@ suite('VSCloneOAuthService', () => {
 		assert.strictEqual(service.isSignedIn('openai'), false);
 		assert.strictEqual(service.state.providers.openai.status, 'signed_out');
 	});
+
+	test('getApiHeaders includes the required Anthropic version header', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const secretStorageService = testDisposables.add(new TestSecretStorageService());
+		await secretStorageService.set(oauthSecretKey('anthropic'), JSON.stringify(createTokenSet({
+			vendor: 'anthropic',
+			accessToken: 'anthropic-access-token',
+		})));
+
+		const service = testDisposables.add(new VSCloneOAuthService(
+			secretStorageService,
+			new NullLogService(),
+			createNotificationService(),
+			createQuickInputService(),
+			createMainProcessService(),
+		));
+
+		await service.initialize();
+		const headers = await service.getApiHeaders('anthropic');
+
+		// Guard the exact header contract so the main-process fetch path cannot regress back to the
+		// 400 response Anthropic returns when `anthropic-version` is omitted, while keeping feature
+		// betas off the global header contract unless a request path explicitly opts into them.
+		assert.strictEqual(headers?.Authorization, 'Bearer anthropic-access-token');
+		assert.strictEqual(headers?.['anthropic-version'], '2023-06-01');
+		assert.strictEqual(headers?.['anthropic-beta'], 'oauth-2025-04-20');
+	});
 });

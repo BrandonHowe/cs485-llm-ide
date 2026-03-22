@@ -38,9 +38,20 @@ suite('VSCloneModelCatalogService', () => {
 		assert.ok(openAIModel);
 		assert.deepStrictEqual(openAIModel?.reasoningEffortLevels, ['xhigh', 'high', 'medium', 'low']);
 		assert.strictEqual(openAIModel?.defaultReasoningEffort, 'medium');
-		// Assert the picker exposes the upgraded model IDs so older 4.5 entries do not regress back in.
+		const anthropicModels = state.models.filter(model => model.vendor === 'anthropic');
+		// The OAuth-backed Anthropic transport currently limits the picker to the Haiku models we
+		// have verified against live `POST /v1/messages` sends, despite `/v1/models` listing more.
+		assert.deepStrictEqual(
+			anthropicModels.map(model => ({ id: model.modelId, name: model.modelName, reasoning: model.reasoningEffortLevels })),
+			[
+				{ id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', reasoning: undefined },
+				{ id: 'claude-3-haiku-20240307', name: 'Haiku 3', reasoning: undefined },
+			]
+		);
+		// Assert the picker exposes the verified Anthropic IDs so older Sonnet/Opus entries do not
+		// silently reappear and route users back onto the broken OAuth path.
 		assert.ok(state.models.some(model => model.identifier === 'openai/gpt-5.4'));
-		assert.ok(state.models.some(model => model.identifier === 'anthropic/claude-opus-4.6'));
+		assert.ok(state.models.some(model => model.identifier === 'anthropic/claude-haiku-4-5-20251001'));
 	});
 
 	test('provider status projects requires_sign_in when enabled but signed out', async () => {

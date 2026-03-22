@@ -88,11 +88,12 @@ const modelDefinitionsByProvider: Record<VSCloneModelVendor, readonly IModelDefi
 		{ vendor: 'openai', modelId: 'gpt-5-nano', modelName: 'GPT-5 Nano', reasoningEffortLevels: ['high', 'low'], defaultReasoningEffort: 'high' },
 	],
 	anthropic: [
-		// These entries intentionally track the marketed picker labels while the adapter resolves the
-		// concrete provider-facing version aliases separately.
-		{ vendor: 'anthropic', modelId: 'claude-opus-4.6', modelName: 'Claude Opus 4.6', reasoningEffortLevels: ['max', 'high', 'standard'], defaultReasoningEffort: 'high' },
-		{ vendor: 'anthropic', modelId: 'claude-sonnet-4.6', modelName: 'Claude Sonnet 4.6', reasoningEffortLevels: ['max', 'high', 'medium'], defaultReasoningEffort: 'high' },
-		{ vendor: 'anthropic', modelId: 'claude-sonnet-4.0', modelName: 'Claude Sonnet 4.0', reasoningEffortLevels: ['high', 'low'], defaultReasoningEffort: 'high' },
+		// Anthropic's OAuth beta currently lists the Claude 4 Sonnet/Opus families in `/v1/models`,
+		// but live `POST /v1/messages` requests for those models still fail with a generic 400 while
+		// the Haiku families succeed. Keep the picker on the verified Haiku subset until Anthropic's
+		// OAuth Messages contract is documented and stable enough to broaden safely.
+		{ vendor: 'anthropic', modelId: 'claude-haiku-4-5-20251001', modelName: 'Haiku 4.5' },
+		{ vendor: 'anthropic', modelId: 'claude-3-haiku-20240307', modelName: 'Haiku 3' },
 	],
 	google: [
 		{ vendor: 'google', modelId: 'gemini-3-pro', modelName: 'Gemini 3 Pro', reasoningEffortLevels: ['high', 'standard'], defaultReasoningEffort: 'standard' },

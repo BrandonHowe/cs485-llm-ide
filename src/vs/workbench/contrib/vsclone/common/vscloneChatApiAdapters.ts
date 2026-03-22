@@ -36,10 +36,13 @@ export interface IVSCloneVendorAdapter {
 // -- Catalog-to-API model ID mappings --
 
 const anthropicModelMap: Record<string, string> = {
-	// The picker uses stable catalog IDs while Anthropic expects the provider's rolling alias.
-	'claude-opus-4.6': 'claude-opus-4-6-latest',
-	'claude-sonnet-4.6': 'claude-sonnet-4-6-latest',
+	// Keep translating older picker IDs to Anthropic's current provider-facing model IDs so restored
+	// selections and completion transports do not depend on legacy aliases that the live API no
+	// longer documents in `/v1/models`.
+	'claude-opus-4.6': 'claude-opus-4-6',
+	'claude-sonnet-4.6': 'claude-sonnet-4-6',
 	'claude-sonnet-4.0': 'claude-sonnet-4-20250514',
+	'claude-haiku-4.5': 'claude-haiku-4-5-20251001',
 };
 
 const googleModelMap: Record<string, string> = {
@@ -48,6 +51,11 @@ const googleModelMap: Record<string, string> = {
 	'gemini-2.5-flash': 'gemini-2.5-flash',
 	'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',
 };
+
+const supportedAnthropicOAuthMessagesModelIds = new Set<string>([
+	'claude-haiku-4-5-20251001',
+	'claude-3-haiku-20240307',
+]);
 
 /**
  * Provider-facing IDs occasionally drift from the catalog IDs exposed in the picker. Keeping the
@@ -59,6 +67,18 @@ export function resolveVSCloneApiModelId(vendor: VSCloneModelVendor, catalogMode
 		case 'anthropic': return anthropicModelMap[catalogModelId] ?? catalogModelId;
 		case 'google': return googleModelMap[catalogModelId] ?? catalogModelId;
 		default: return catalogModelId;
+	}
+}
+
+/**
+ * VSClone's Anthropic integration currently authenticates through the OAuth beta rather than
+ * standard API keys. Live probing shows that this path accepts Haiku models but rejects the
+ * Claude 4 Sonnet/Opus families with a generic 400, so we fail fast with an actionable message
+ * whenever a stale selection bypasses catalog reconciliation.
+ */
+export function assertSupportsAnthropicOAuthMessagesModel(modelId: string): void {
+	if (!supportedAnthropicOAuthMessagesModelIds.has(modelId)) {
+		throw new Error('Anthropic OAuth messages currently support only Claude Haiku 4.5 and Claude Haiku 3 in VSClone. Re-select an Anthropic Haiku model.');
 	}
 }
 
@@ -153,44 +173,23 @@ const openaiAdapter: IVSCloneVendorAdapter = {
 	},
 };
 
-/**
- * Anthropic extended thinking is controlled via a token budget rather than a string level.
- * Returns undefined when thinking should be disabled.
- */
-function toAnthropicThinkingBudget(level: VSCloneReasoningEffortLevel, maxTokens: number): number | undefined {
-	switch (level) {
-		case 'max': return Math.round(maxTokens * 0.9);
-		case 'high': return Math.round(maxTokens * 0.8);
-		case 'medium': return Math.round(maxTokens * 0.5);
-		case 'standard': return Math.round(maxTokens * 0.5);
-		case 'low': return Math.round(maxTokens * 0.2);
-		default: return undefined;
-	}
-}
-
 const anthropicAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveVSCloneApiModelId('anthropic', options.modelId);
+		assertSupportsAnthropicOAuthMessagesModel(apiModelId);
 		const nonSystemMessages = buildMessages(options);
 
-		const anthropicMaxTokens = 16000;
-		const thinkingBudget = options.reasoningEffort
-			? toAnthropicThinkingBudget(options.reasoningEffort, anthropicMaxTokens)
-			: undefined;
-
+		const systemText = options.systemMessage?.trim() || defaultSystemMessage;
 		const body: Record<string, unknown> = {
 			model: apiModelId,
 			messages: nonSystemMessages,
-			max_tokens: thinkingBudget ? anthropicMaxTokens : 4096,
+			max_tokens: 16384,
 			stream: true,
+			// Keep the default chat transport on the stable Messages shape until we preserve Anthropic
+			// thinking/tool blocks end-to-end. Sending `thinking` here opts every request into a more
+			// complex response contract that the rest of this pipeline does not yet round-trip safely.
+			system: systemText,
 		};
-
-		if (thinkingBudget) {
-			body.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
-			body.temperature = 1;
-		}
-
-		body.system = options.systemMessage?.trim() || defaultSystemMessage;
 
 		return {
 			url: defaultOAuthProviderConfig.anthropic.apiEndpoint,

@@ -95,6 +95,26 @@ suite('VSCloneModelSwitcherWidget', () => {
 		assert.ok(menuText.includes('ANTHROPIC'));
 	});
 
+	test('shows the full Anthropic model label in the switcher button', async () => {
+		const { catalogService, selectionService, widget, container } = await createHarness();
+		const anthropicModel = catalogService.getModels('anthropic')[0];
+		assert.ok(anthropicModel);
+		await selectionService.setSelectionForThread('thread-1', {
+			threadId: 'thread-1',
+			location: 'chat',
+			modelIdentifier: anthropicModel.identifier,
+			vendor: anthropicModel.vendor,
+			modelId: anthropicModel.modelId,
+			modelName: anthropicModel.modelName,
+			selectedAt: Date.now(),
+		});
+
+		widget.refresh();
+		const button = container.querySelector('.vsclone-model-switcher-button') as HTMLButtonElement;
+		assert.ok(button.textContent?.includes('Haiku 4.5'));
+		assert.ok(button.textContent?.includes('anthropic'));
+	});
+
 	test('escape closes the menu and restores focus to the switcher button', async () => {
 		const { widget, container } = await createHarness();
 		widget.open();

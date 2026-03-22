@@ -5,7 +5,7 @@
 
 import { IVSCloneCompletionPromptEnvelope } from '../vscloneCompletionTypes.js';
 import { IVSCloneModelSelection } from '../vscloneModelSelectionTypes.js';
-import { getVendorAdapter, resolveVSCloneApiModelId, toOpenAIReasoningEffort } from '../vscloneChatApiAdapters.js';
+import { assertSupportsAnthropicOAuthMessagesModel, getVendorAdapter, resolveVSCloneApiModelId, toOpenAIReasoningEffort } from '../vscloneChatApiAdapters.js';
 import { defaultOAuthProviderConfig, VSCloneModelVendor } from '../vscloneOAuthTypes.js';
 
 export type VSCloneCompletionEndpointMode = 'sse';
@@ -81,6 +81,7 @@ function buildOpenAIRequest(envelope: IVSCloneCompletionPromptEnvelope, selectio
 
 function buildAnthropicRequest(envelope: IVSCloneCompletionPromptEnvelope, selection: IVSCloneModelSelection): IVSCloneCompletionAdapterRequest {
 	const apiModelId = resolveVSCloneApiModelId('anthropic', selection.modelId);
+	assertSupportsAnthropicOAuthMessagesModel(apiModelId);
 
 	return {
 		url: defaultOAuthProviderConfig.anthropic.apiEndpoint,

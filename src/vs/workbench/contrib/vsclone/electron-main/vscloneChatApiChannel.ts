@@ -100,16 +100,32 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 		const { url, body } = adapter.buildRequest(options);
 
 		try {
+			// Preserve the generic header map shape after the object spread so debug logging can still
+			// inspect provider-specific keys such as Authorization without fighting excess narrowing.
+			const outgoingHeaders: Record<string, string> = {
+				...headers,
+				'Content-Type': 'application/json',
+				'Accept': 'text/event-stream',
+			};
+			const jsonBody = JSON.stringify(body);
 			this.logService.info(`[VSCloneChatApiChannel] Streaming request to ${options.vendor}: ${url}`);
+			// Log full headers (mask token to first/last 4 chars)
+			const debugHeaders = { ...outgoingHeaders };
+			if (debugHeaders['Authorization']) {
+				const token = debugHeaders['Authorization'].replace('Bearer ', '');
+				debugHeaders['Authorization'] = `Bearer ${token.substring(0, 4)}...${token.substring(token.length - 4)}`;
+			}
+			this.logService.info(`[VSCloneChatApiChannel] Headers: ${JSON.stringify(debugHeaders)}`);
+			this.logService.info(`[VSCloneChatApiChannel] Body (first 800): ${jsonBody.substring(0, 800)}`);
+			// Emit a curl command for manual debugging (token unmasked so user can paste it in terminal)
+			const curlHeaders = Object.entries(outgoingHeaders).map(([k, v]) => `-H '${k}: ${v}'`).join(' \\\n  ');
+			const minimalBody = JSON.stringify({ model: body.model, messages: [{ role: 'user', content: 'test' }], max_tokens: 1024, stream: false });
+			this.logService.info(`[VSCloneChatApiChannel] DEBUG curl (minimal):\ncurl -X POST '${url}' \\\n  ${curlHeaders} \\\n  -d '${minimalBody}'`);
 
 			const response = await fetch(url, {
 				method: 'POST',
-				headers: {
-					...headers,
-					'Content-Type': 'application/json',
-					'Accept': 'text/event-stream',
-				},
-				body: JSON.stringify(body),
+				headers: outgoingHeaders,
+				body: jsonBody,
 				signal,
 			});
 
