@@ -23,6 +23,7 @@ export interface IVSCloneChatSubmitOptions {
 	threadId?: string;
 	sessionResource?: string;
 	modelSelection?: IVSCloneModelSelection;
+	imageAttachments?: readonly { mimeType: string; base64Data: string }[];
 }
 
 export interface IVSCloneChatSubmitResult {
@@ -150,6 +151,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			reasoningEffort: resolvedSelection?.reasoningEffort,
 			previousTurns,
 			systemMessage,
+			imageAttachments: options.imageAttachments,
 		});
 
 		this.apiRequestHandles.set(turnId, handle);

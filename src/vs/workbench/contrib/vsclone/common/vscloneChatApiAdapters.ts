@@ -16,6 +16,11 @@ import type { VSCloneReasoningEffortLevel } from "./vscloneModelCatalogService.j
 
 // -- Public types --
 
+export interface IVSCloneImageAttachment {
+	readonly mimeType: string;
+	readonly base64Data: string;
+}
+
 export interface IVSCloneApiSubmitOptions {
 	readonly threadId: string;
 	readonly turnId: string;
@@ -31,6 +36,7 @@ export interface IVSCloneApiSubmitOptions {
 		content: string;
 	}[];
 	readonly systemMessage?: string;
+	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 }
 
 export interface IVSCloneVendorAdapterParsedLine {
@@ -131,6 +137,47 @@ function buildMessages(
 	return messages;
 }
 
+function buildOpenAIMultimodalContent(
+	text: string,
+	images: readonly IVSCloneImageAttachment[],
+): unknown[] {
+	const parts: unknown[] = [{ type: "input_text", text }];
+	for (const img of images) {
+		parts.push({
+			type: "input_image",
+			image_url: `data:${img.mimeType};base64,${img.base64Data}`,
+		});
+	}
+	return parts;
+}
+
+function buildAnthropicMultimodalContent(
+	text: string,
+	images: readonly IVSCloneImageAttachment[],
+): unknown[] {
+	const parts: unknown[] = [];
+	for (const img of images) {
+		parts.push({
+			type: "image",
+			source: { type: "base64", media_type: img.mimeType, data: img.base64Data },
+		});
+	}
+	parts.push({ type: "text", text });
+	return parts;
+}
+
+function buildGoogleMultimodalParts(
+	text: string,
+	images: readonly IVSCloneImageAttachment[],
+): unknown[] {
+	const parts: unknown[] = [];
+	for (const img of images) {
+		parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64Data } });
+	}
+	parts.push({ text });
+	return parts;
+}
+
 const defaultSystemMessage =
 	"You are VSClone, a helpful coding assistant. Answer clearly and concisely.";
 
@@ -174,10 +221,17 @@ export function toOpenAIReasoningEffort(
 const openaiAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveVSCloneApiModelId("openai", options.modelId);
-		const input = buildMessages(options).map((m) => ({
-			role: m.role,
-			content: m.content,
-		}));
+		const hasImages = options.imageAttachments && options.imageAttachments.length > 0;
+		const rawMessages = buildMessages(options);
+		const input = rawMessages.map((m, i) => {
+			const isLastUserMessage = i === rawMessages.length - 1 && m.role === "user" && hasImages;
+			return {
+				role: m.role,
+				content: isLastUserMessage
+					? buildOpenAIMultimodalContent(m.content, options.imageAttachments!)
+					: m.content,
+			};
+		});
 		// The Codex backend rejects requests without a non-empty instructions field.
 		// We always provide one so routing stays vendor-agnostic for callers.
 		const instructions = options.systemMessage?.trim() || defaultSystemMessage;
@@ -242,7 +296,17 @@ const anthropicAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveVSCloneApiModelId("anthropic", options.modelId);
 		assertSupportsAnthropicOAuthMessagesModel(apiModelId);
-		const nonSystemMessages = buildMessages(options);
+		const hasImages = options.imageAttachments && options.imageAttachments.length > 0;
+		const rawMessages = buildMessages(options);
+		const nonSystemMessages = rawMessages.map((m, i) => {
+			const isLastUserMessage = i === rawMessages.length - 1 && m.role === "user" && hasImages;
+			return {
+				role: m.role,
+				content: isLastUserMessage
+					? buildAnthropicMultimodalContent(m.content, options.imageAttachments!)
+					: m.content,
+			};
+		});
 
 		const systemText = options.systemMessage?.trim() || defaultSystemMessage;
 		const body: Record<string, unknown> = {
@@ -327,11 +391,17 @@ const googleAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveVSCloneApiModelId("google", options.modelId);
 		const messages = buildMessages(options);
+		const hasImages = options.imageAttachments && options.imageAttachments.length > 0;
 		const systemPrompt = options.systemMessage?.trim() || defaultSystemMessage;
-		const contents = messages.map((m) => ({
-			role: m.role === "assistant" ? "model" : "user",
-			parts: [{ text: m.content }],
-		}));
+		const contents = messages.map((m, i) => {
+			const isLastUserMessage = i === messages.length - 1 && m.role === "user" && hasImages;
+			return {
+				role: m.role === "assistant" ? "model" : "user",
+				parts: isLastUserMessage
+					? buildGoogleMultimodalParts(m.content, options.imageAttachments!)
+					: [{ text: m.content }],
+			};
+		});
 
 		const baseUrl = defaultOAuthProviderConfig.google.apiEndpoint;
 		// The public Gemini REST API addresses models under `/models/{model}:streamGenerateContent`

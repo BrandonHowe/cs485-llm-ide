@@ -40,6 +40,7 @@ export interface IVSCloneAgentLoopOptions {
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
 	readonly previousTurns?: readonly { role: 'user' | 'assistant'; content: string }[];
 	readonly systemMessage?: string;
+	readonly imageAttachments?: readonly { mimeType: string; base64Data: string }[];
 }
 
 export interface IVSCloneAgentLoopHandle {
@@ -243,6 +244,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			reasoningEffort: options.reasoningEffort,
 			previousTurns: messages.slice(0, -1),
 			systemMessage: options.systemMessage,
+			imageAttachments: iteration === 1 ? options.imageAttachments : undefined,
 		}, {
 			onDelta: delta => {
 				responseText += delta;

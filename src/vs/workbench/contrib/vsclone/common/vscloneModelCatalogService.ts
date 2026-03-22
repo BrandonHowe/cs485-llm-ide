@@ -40,6 +40,7 @@ export interface IVSCloneModelCatalogModelDescriptor {
 	 */
 	readonly reasoningEffortLevels?: readonly VSCloneReasoningEffortLevel[];
 	readonly defaultReasoningEffort?: VSCloneReasoningEffortLevel;
+	readonly supportsImages: boolean;
 	readonly isSelectable: boolean;
 	readonly unavailableReason?: VSCloneModelUnavailableReason;
 }
@@ -74,6 +75,7 @@ interface IModelDefinition {
 	readonly modelName: string;
 	readonly reasoningEffortLevels?: readonly VSCloneReasoningEffortLevel[];
 	readonly defaultReasoningEffort?: VSCloneReasoningEffortLevel;
+	readonly supportsImages?: boolean;
 }
 
 export type VSCloneReasoningEffortLevel =
@@ -125,6 +127,7 @@ const modelDefinitionsByProvider: Record<
 			modelName: "GPT-5.3-Codex-Spark",
 			reasoningEffortLevels: ["standard", "lite"],
 			defaultReasoningEffort: "standard",
+			supportsImages: false,
 		},
 		{
 			vendor: "openai",
@@ -389,6 +392,7 @@ export class VSCloneModelCatalogService
 					modelName: model.modelName,
 					reasoningEffortLevels: model.reasoningEffortLevels,
 					defaultReasoningEffort: model.defaultReasoningEffort,
+					supportsImages: model.supportsImages !== false,
 					isSelectable: providerReady,
 					unavailableReason: providerReady
 						? undefined

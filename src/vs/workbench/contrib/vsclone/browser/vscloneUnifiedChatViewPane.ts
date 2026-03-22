@@ -201,6 +201,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private addContextMenuToggle: HTMLSpanElement | undefined;
 	private reasoningEffortContainer: HTMLElement | undefined;
 	private reasoningEffortSelect: HTMLSelectElement | undefined;
+	private composerImageStrip: HTMLElement | undefined;
+	private pendingImages: { mimeType: string; base64Data: string; dataUrl: string }[] = [];
 
 	private readonly rail = this._register(
 		this.instantiationService.createInstance(VSCloneChatHistoryRail),
@@ -751,6 +753,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		toolbar.appendChild(controls);
 		toolbar.appendChild(send);
 
+		const imageStrip = document.createElement('div');
+		imageStrip.className = 'vsclone-composer-image-strip hidden';
+		this.composerImageStrip = imageStrip;
+
+		const imageFileInput = document.createElement('input');
+		imageFileInput.type = 'file';
+		imageFileInput.accept = 'image/png,image/jpeg,image/gif,image/webp';
+		imageFileInput.multiple = true;
+		imageFileInput.className = 'vsclone-composer-image-file-input';
+
+		composer.appendChild(imageStrip);
 		composer.appendChild(input);
 		composer.appendChild(toolbar);
 		composer.appendChild(hint);
@@ -887,7 +900,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this._register(
 			addDisposableListener(addImageItem, EventType.CLICK, () => {
 				toggleAddContextMenu(false);
-				// TODO: implement image picker
+				imageFileInput.click();
+			}),
+		);
+		this._register(
+			addDisposableListener(imageFileInput, EventType.CHANGE, () => {
+				if (imageFileInput.files) {
+					void this.handleImageFiles(imageFileInput.files);
+				}
+				imageFileInput.value = '';
 			}),
 		);
 		this._register(
@@ -963,10 +984,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.updateComposerState();
 
 		try {
+			const imageAttachments = this.pendingImages.length > 0
+				? this.pendingImages.map(img => ({ mimeType: img.mimeType, base64Data: img.base64Data }))
+				: undefined;
 			const submission = await this.sessionService.submitPrompt(promptText, {
 				threadId: activeThreadId,
 				sessionResource: existingThread?.sessionResource,
 				modelSelection: selectedModel,
+				imageAttachments,
 			});
 			if (!submission) {
 				return;
@@ -988,6 +1013,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.rail.setSelectedThread(submission.threadId);
 			this.railVisible = false;
 			this.composerInput.value = "";
+			this.pendingImages = [];
+			this.renderImageStrip();
 			this.updateComposerMetrics();
 			this.refreshModelControls();
 			this.refreshConversation();
@@ -996,6 +1023,107 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.submittingPrompt = false;
 			this.updateComposerState();
 		}
+	}
+
+	private async handleImageFiles(files: FileList): Promise<void> {
+		const selectedModel = this.getCurrentComposerModelSelection(this.activeThreadId);
+		if (selectedModel) {
+			const modelDescriptor = this.modelCatalogService.getModel(selectedModel.modelIdentifier);
+			if (modelDescriptor && !modelDescriptor.supportsImages) {
+				this.notificationService.warn(
+					localize("vsclone.composer.imageNotSupported", "The selected model does not support image attachments."),
+				);
+				return;
+			}
+		}
+
+		for (const file of Array.from(files)) {
+			if (!file.type.startsWith('image/')) {
+				continue;
+			}
+			try {
+				const base64Data = await this.readFileAsBase64(file);
+				const dataUrl = `data:${file.type};base64,${base64Data}`;
+				this.pendingImages.push({ mimeType: file.type, base64Data, dataUrl });
+			} catch {
+				// Skip files that fail to read
+			}
+		}
+		this.renderImageStrip();
+	}
+
+	private readFileAsBase64(file: File): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => {
+				const result = reader.result as string;
+				const base64 = result.split(',')[1];
+				resolve(base64);
+			};
+			reader.onerror = reject;
+			reader.readAsDataURL(file);
+		});
+	}
+
+	private renderImageStrip(): void {
+		if (!this.composerImageStrip) {
+			return;
+		}
+		this.composerImageStrip.replaceChildren();
+		if (this.pendingImages.length === 0) {
+			this.composerImageStrip.classList.add('hidden');
+			return;
+		}
+		this.composerImageStrip.classList.remove('hidden');
+
+		for (let i = 0; i < this.pendingImages.length; i++) {
+			const img = this.pendingImages[i];
+			const thumb = document.createElement('div');
+			thumb.className = 'vsclone-composer-image-thumb';
+
+			const preview = document.createElement('img');
+			preview.src = img.dataUrl;
+			preview.alt = localize("vsclone.composer.imageAttachment", "Image attachment");
+			preview.className = 'vsclone-composer-image-thumb-img';
+			this._register(
+				addDisposableListener(preview, EventType.CLICK, () => {
+					// Open image in a new editor tab for full-resolution viewing
+					const blob = this.base64ToBlob(img.base64Data, img.mimeType);
+					const url = URL.createObjectURL(blob);
+					window.open(url, '_blank');
+				}),
+			);
+
+			const removeBtn = document.createElement('button');
+			removeBtn.type = 'button';
+			removeBtn.className = 'vsclone-composer-image-thumb-remove';
+			removeBtn.setAttribute('aria-label', localize("vsclone.composer.removeImage", "Remove image"));
+			const removeIcon = document.createElement('span');
+			removeIcon.className = 'codicon codicon-close';
+			removeIcon.setAttribute('aria-hidden', 'true');
+			removeBtn.appendChild(removeIcon);
+			const index = i;
+			this._register(
+				addDisposableListener(removeBtn, EventType.CLICK, (e) => {
+					e.stopPropagation();
+					this.pendingImages.splice(index, 1);
+					this.renderImageStrip();
+				}),
+			);
+
+			thumb.appendChild(preview);
+			thumb.appendChild(removeBtn);
+			this.composerImageStrip.appendChild(thumb);
+		}
+	}
+
+	private base64ToBlob(base64: string, mimeType: string): Blob {
+		const bytes = atob(base64);
+		const buffer = new Uint8Array(bytes.length);
+		for (let i = 0; i < bytes.length; i++) {
+			buffer[i] = bytes.charCodeAt(i);
+		}
+		return new Blob([buffer], { type: mimeType });
 	}
 
 	private applyResponsiveLayout(width: number): void {
