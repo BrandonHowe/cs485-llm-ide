@@ -712,7 +712,10 @@ suite('LanguageModelToolsService', () => {
 			'internalToolSetRefName/internalToolSetTool1RefName',
 			'vscode',
 			'execute',
+			'edit',
+			'search',
 			'read',
+			'web',
 			'agent'
 		];
 		const numOfTools = allFullReferenceNames.length + 1; // +1 for userToolSet which has no full reference name but is a tool set
@@ -727,7 +730,10 @@ suite('LanguageModelToolsService', () => {
 		const userToolSet = service.getToolSet('userToolSet');
 		const vscodeToolSet = service.getToolSet('vscode');
 		const executeToolSet = service.getToolSet('execute');
+		const editToolSet = service.getToolSet('edit');
+		const searchToolSet = service.getToolSet('search');
 		const readToolSet = service.getToolSet('read');
+		const webToolSet = service.getToolSet('web');
 		const agentToolSet = service.getToolSet('agent');
 		assert.ok(tool1);
 		assert.ok(tool2);
@@ -739,7 +745,10 @@ suite('LanguageModelToolsService', () => {
 		assert.ok(userToolSet);
 		assert.ok(vscodeToolSet);
 		assert.ok(executeToolSet);
+		assert.ok(editToolSet);
+		assert.ok(searchToolSet);
 		assert.ok(readToolSet);
+		assert.ok(webToolSet);
 		assert.ok(agentToolSet);
 		// Test with enabled tool
 		{
@@ -3376,14 +3385,6 @@ suite('LanguageModelToolsService', () => {
 		// Disable agent mode
 		configurationService.setUserConfiguration(ChatConfiguration.AgentEnabled, false);
 
-		// Create a 'search' toolset (permitted when agent mode is disabled)
-		const searchToolSet = store.add(service.createToolSet(
-			ToolDataSource.Internal,
-			'search',
-			SpecedToolAliases.search,
-			{ description: 'Search Tool Set' }
-		));
-
 		const searchTool: IToolData = {
 			id: 'searchToolInSet',
 			toolReferenceName: 'searchToolRef',
@@ -3392,7 +3393,7 @@ suite('LanguageModelToolsService', () => {
 			source: ToolDataSource.Internal,
 		};
 		store.add(service.registerToolData(searchTool));
-		store.add(searchToolSet.addTool(searchTool));
+		store.add(service.searchToolSet.addTool(searchTool));
 
 		// Get tools - search tool should be available when agent mode is disabled
 		const tools = Array.from(service.getTools(undefined));
@@ -3405,14 +3406,6 @@ suite('LanguageModelToolsService', () => {
 		// Disable agent mode
 		configurationService.setUserConfiguration(ChatConfiguration.AgentEnabled, false);
 
-		// Create a 'web' toolset (permitted when agent mode is disabled)
-		const webToolSet = store.add(service.createToolSet(
-			ToolDataSource.Internal,
-			'web',
-			SpecedToolAliases.web,
-			{ description: 'Web Tool Set' }
-		));
-
 		const webTool: IToolData = {
 			id: 'webToolInSet',
 			toolReferenceName: 'webToolRef',
@@ -3421,7 +3414,7 @@ suite('LanguageModelToolsService', () => {
 			source: ToolDataSource.Internal,
 		};
 		store.add(service.registerToolData(webTool));
-		store.add(webToolSet.addTool(webTool));
+		store.add(service.webToolSet.addTool(webTool));
 
 		// Get tools - web tool should be available when agent mode is disabled
 		const tools = Array.from(service.getTools(undefined));

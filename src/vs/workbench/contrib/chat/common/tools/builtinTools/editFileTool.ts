@@ -19,9 +19,11 @@ export const ExtensionEditToolId = 'vscode_editFile';
 export const InternalEditToolId = 'vscode_editFile_internal';
 export const EditToolData: IToolData = {
 	id: InternalEditToolId,
-	displayName: '', // not used
-	modelDescription: '', // Not used
+	toolReferenceName: 'editFiles',
+	displayName: 'Edit Files',
+	modelDescription: 'Apply targeted edits to an existing file that is already part of the editing session.',
 	source: ToolDataSource.Internal,
+	runsInWorkspace: true,
 };
 
 export interface EditToolParams {

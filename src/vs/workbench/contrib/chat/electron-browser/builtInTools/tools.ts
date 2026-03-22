@@ -4,13 +4,18 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../../../../base/common/lifecycle.js';
+import { isAbsolute } from '../../../../../base/common/path.js';
+import { joinPath } from '../../../../../base/common/resources.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkbenchContribution } from '../../../../common/contributions.js';
 import { ChatExternalPathConfirmationContribution } from '../../common/tools/builtinTools/chatExternalPathConfirmation.js';
 import { ChatUrlFetchingConfirmationContribution } from '../../common/tools/builtinTools/chatUrlFetchingConfirmation.js';
 import { ILanguageModelToolsConfirmationService } from '../../common/tools/languageModelToolsConfirmationService.js';
 import { ILanguageModelToolsService } from '../../common/tools/languageModelToolsService.js';
 import { InternalFetchWebPageToolId } from '../../common/tools/builtinTools/tools.js';
+import { FileSearchToolId, ListDirectoryToolId, ReadFileToolId, TextSearchToolId } from '../../common/tools/builtinTools/workspaceTools.js';
 import { FetchWebPageTool, FetchWebPageToolData, IFetchWebPageToolParams } from './fetchPageTool.js';
 
 export class NativeBuiltinToolsContribution extends Disposable implements IWorkbenchContribution {
@@ -21,11 +26,13 @@ export class NativeBuiltinToolsContribution extends Disposable implements IWorkb
 		@ILanguageModelToolsService toolsService: ILanguageModelToolsService,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@ILanguageModelToolsConfirmationService confirmationService: ILanguageModelToolsConfirmationService,
+		@IWorkspaceContextService workspaceContextService: IWorkspaceContextService,
 	) {
 		super();
 
 		const editTool = instantiationService.createInstance(FetchWebPageTool);
 		this._register(toolsService.registerTool(FetchWebPageToolData, editTool));
+		this._register(toolsService.webToolSet.addTool(FetchWebPageToolData));
 
 		this._register(confirmationService.registerConfirmationContribution(
 			InternalFetchWebPageToolId,
@@ -35,19 +42,32 @@ export class NativeBuiltinToolsContribution extends Disposable implements IWorkb
 			)
 		));
 
-		// Register external path confirmation contribution for read_file and list_dir
-		// They share the same allowlist so approving a folder for reading files also allows listing that directory
+		// Read and search tools all share the same session-scoped folder allowlist so an approval
+		// for one folder can cover subsequent reads/searches in that location without creating a
+		// second source of truth for path permissions.
 		const externalPathConfirmation = new ChatExternalPathConfirmationContribution(
 			(ref) => {
 				const params = ref.parameters as { filePath?: string; path?: string };
-				// read_file uses filePath (it's a file), list_dir uses path (it's a directory)
-				if (params?.filePath) {
-					return { path: params.filePath, isDirectory: false };
+				const rawPath = params?.filePath ?? params?.path;
+				if (!rawPath) {
+					return undefined;
 				}
-				if (params?.path) {
-					return { path: params.path, isDirectory: true };
+
+				let resolvedPath: URI | undefined;
+				if (isAbsolute(rawPath)) {
+					resolvedPath = URI.file(rawPath);
+				} else {
+					const workspace = workspaceContextService.getWorkspace();
+					if (workspace.folders.length !== 1) {
+						return undefined;
+					}
+					resolvedPath = joinPath(workspace.folders[0].uri, ...rawPath.split(/[\\/]+/).filter(Boolean));
 				}
-				return undefined;
+
+				return {
+					path: resolvedPath.fsPath,
+					isDirectory: !params?.filePath,
+				};
 			}
 		);
 
@@ -58,6 +78,26 @@ export class NativeBuiltinToolsContribution extends Disposable implements IWorkb
 
 		this._register(confirmationService.registerConfirmationContribution(
 			'copilot_listDirectory',
+			externalPathConfirmation
+		));
+
+		this._register(confirmationService.registerConfirmationContribution(
+			ReadFileToolId,
+			externalPathConfirmation
+		));
+
+		this._register(confirmationService.registerConfirmationContribution(
+			ListDirectoryToolId,
+			externalPathConfirmation
+		));
+
+		this._register(confirmationService.registerConfirmationContribution(
+			FileSearchToolId,
+			externalPathConfirmation
+		));
+
+		this._register(confirmationService.registerConfirmationContribution(
+			TextSearchToolId,
 			externalPathConfirmation
 		));
 	}

@@ -90,7 +90,10 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 	_serviceBrand: undefined;
 	readonly vscodeToolSet: ToolSet;
 	readonly executeToolSet: ToolSet;
+	readonly editToolSet: ToolSet;
+	readonly searchToolSet: ToolSet;
 	readonly readToolSet: ToolSet;
+	readonly webToolSet: ToolSet;
 	readonly agentToolSet: ToolSet;
 
 	private readonly _onDidChangeTools = this._register(new Emitter<void>());
@@ -179,6 +182,28 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 			}
 		));
 
+		// Create the internal Edit tool set
+		this.editToolSet = this._register(this.createToolSet(
+			ToolDataSource.Internal,
+			'edit',
+			SpecedToolAliases.edit,
+			{
+				icon: ThemeIcon.fromId(Codicon.edit.id),
+				description: localize('copilot.toolSet.edit.description', 'Create and modify files in your workspace'),
+			}
+		));
+
+		// Create the internal Search tool set
+		this.searchToolSet = this._register(this.createToolSet(
+			ToolDataSource.Internal,
+			'search',
+			SpecedToolAliases.search,
+			{
+				icon: ThemeIcon.fromId(Codicon.search.id),
+				description: localize('copilot.toolSet.search.description', 'Search for files and text in your workspace'),
+			}
+		));
+
 		// Create the internal Read tool set
 		this.readToolSet = this._register(this.createToolSet(
 			ToolDataSource.Internal,
@@ -187,6 +212,17 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 			{
 				icon: ThemeIcon.fromId(Codicon.book.id),
 				description: localize('copilot.toolSet.read.description', 'Read files in your workspace'),
+			}
+		));
+
+		// Create the internal Web tool set
+		this.webToolSet = this._register(this.createToolSet(
+			ToolDataSource.Internal,
+			'web',
+			SpecedToolAliases.web,
+			{
+				icon: ThemeIcon.fromId(Codicon.globe.id),
+				description: localize('copilot.toolSet.web.description', 'Fetch and inspect web content'),
 			}
 		));
 

@@ -494,7 +494,10 @@ export interface ILanguageModelToolsService {
 	_serviceBrand: undefined;
 	readonly vscodeToolSet: ToolSet;
 	readonly executeToolSet: ToolSet;
+	readonly editToolSet: ToolSet;
+	readonly searchToolSet: ToolSet;
 	readonly readToolSet: ToolSet;
+	readonly webToolSet: ToolSet;
 	readonly agentToolSet: ToolSet;
 	readonly onDidChangeTools: Event<void>;
 	readonly onDidPrepareToolCallBecomeUnresponsive: Event<{ readonly sessionResource: URI; readonly toolData: IToolData }>;
