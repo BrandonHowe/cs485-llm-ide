@@ -47,6 +47,26 @@ suite('VSCloneChatHistoryStateMachine', () => {
 		assert.strictEqual(thread.status, 'completed');
 	});
 
+	test('prompt images survive later stream updates', () => {
+		let thread: IVSCloneChatHistoryThread | undefined;
+		let turns: readonly IVSCloneChatHistoryTurn[] | undefined;
+		const promptImages = [{ mimeType: 'image/png', base64Data: 'ZmFrZQ==' }];
+
+		({ thread, turns } = reduceThreadTurns(thread, turns, update({
+			phase: 'prompt',
+			occurredAt: 1,
+			promptImages,
+		}), { sessionResource, maxTurnsPerThread: 100 }));
+		({ thread, turns } = reduceThreadTurns(thread, turns, update({
+			phase: 'stream',
+			occurredAt: 2,
+			responsePlainTextDelta: 'working',
+		}), { sessionResource, maxTurnsPerThread: 100 }));
+
+		assert.deepStrictEqual(turns[0].promptImages, promptImages);
+		assert.strictEqual(thread.status, 'active');
+	});
+
 	test('prompt -> stream -> error', () => {
 		let thread: IVSCloneChatHistoryThread | undefined;
 		let turns: readonly IVSCloneChatHistoryTurn[] | undefined;

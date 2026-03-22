@@ -226,13 +226,6 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		return model;
 	}
 
-	private createButtonProviderLabel(provider: string): HTMLElement {
-		const providerLabel = document.createElement('span');
-		providerLabel.className = 'vsclone-model-switcher-button-provider';
-		providerLabel.textContent = provider;
-		return providerLabel;
-	}
-
 	private createButtonChevron(): HTMLElement {
 		const chevron = document.createElement('span');
 		chevron.className = `vsclone-model-switcher-button-chevron codicon ${this.isOpen ? 'codicon-chevron-up' : 'codicon-chevron-down'}`;

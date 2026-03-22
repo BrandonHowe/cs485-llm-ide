@@ -5,6 +5,7 @@
 
 import type { IVSCloneUnifiedChatSelectionState } from './vscloneModelSelectionTypes.js';
 import type { IVSCloneUnifiedChatPlanModeState, VSCloneChatMode } from './vsclonePlanModeTypes.js';
+import type { IVSCloneImageAttachment } from './vscloneImageAttachmentTypes.js';
 
 export type VSCloneChatHistoryScope = 'workspace' | 'profile';
 
@@ -32,6 +33,7 @@ export interface IVSCloneChatHistoryTurn {
 	modelIdentifier?: string;
 	providerId?: string;
 	promptText: string;
+	promptImages?: readonly IVSCloneImageAttachment[];
 	responseMarkdown: string;
 	responsePlainText: string;
 	startedAt: number;
@@ -76,6 +78,7 @@ export interface IVSCloneChatTurnUpdate {
 	executionMode?: VSCloneChatMode;
 	modelIdentifier?: string;
 	providerId?: string;
+	promptImages?: readonly IVSCloneImageAttachment[];
 	responseMarkdownDelta?: string;
 	responsePlainTextDelta?: string;
 	responseMarkdownReplace?: string;

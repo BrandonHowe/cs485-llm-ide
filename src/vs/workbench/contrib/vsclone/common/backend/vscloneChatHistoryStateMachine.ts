@@ -96,6 +96,7 @@ export function reduceThreadTurns(
 			modelIdentifier: update.modelIdentifier,
 			providerId: update.providerId,
 			promptText: update.promptText ?? '',
+			promptImages: update.promptImages,
 			responseMarkdown: '',
 			responsePlainText: '',
 			startedAt: update.occurredAt,
@@ -135,6 +136,7 @@ export function reduceThreadTurns(
 		executionMode: update.executionMode ?? existingTurn.executionMode,
 		modelIdentifier: update.modelIdentifier ?? existingTurn.modelIdentifier,
 		providerId: update.providerId ?? existingTurn.providerId,
+		promptImages: update.promptImages ?? existingTurn.promptImages,
 		lastEventAt: Math.max(lastEventAt, update.occurredAt),
 	};
 

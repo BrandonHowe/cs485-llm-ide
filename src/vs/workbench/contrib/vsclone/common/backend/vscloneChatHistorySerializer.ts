@@ -6,6 +6,7 @@
 import type { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../vscloneChatHistoryTypes.js';
 import { allVSCloneChatLocations, type IVSCloneChatLocation, type IVSCloneModelSelection } from '../vscloneModelSelectionTypes.js';
 import { isVSCloneChatMode, type VSCloneChatMode } from '../vsclonePlanModeTypes.js';
+import type { IVSCloneImageAttachment } from '../vscloneImageAttachmentTypes.js';
 
 const threadStatuses = new Set<IVSCloneChatHistoryThread['status']>(['active', 'completed', 'failed', 'archived']);
 const turnStatuses = new Set<IVSCloneChatHistoryTurn['status']>(['pending', 'streaming', 'completed', 'failed', 'cancelled']);
@@ -49,6 +50,15 @@ function isThread(value: unknown): value is IVSCloneChatHistoryThread {
 		&& threadStatuses.has(value.status as IVSCloneChatHistoryThread['status']);
 }
 
+function isImageAttachment(value: unknown): value is IVSCloneImageAttachment {
+	if (!isObject(value)) {
+		return false;
+	}
+
+	return typeof value.mimeType === 'string'
+		&& typeof value.base64Data === 'string';
+}
+
 function isTurn(value: unknown): value is IVSCloneChatHistoryTurn {
 	if (!isObject(value)) {
 		return false;
@@ -61,6 +71,7 @@ function isTurn(value: unknown): value is IVSCloneChatHistoryTurn {
 		&& (value.modelIdentifier === undefined || typeof value.modelIdentifier === 'string')
 		&& (value.providerId === undefined || typeof value.providerId === 'string')
 		&& typeof value.promptText === 'string'
+		&& (value.promptImages === undefined || (Array.isArray(value.promptImages) && value.promptImages.every(isImageAttachment)))
 		&& typeof value.responseMarkdown === 'string'
 		&& typeof value.responsePlainText === 'string'
 		&& typeof value.startedAt === 'number'

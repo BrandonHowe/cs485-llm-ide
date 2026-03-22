@@ -32,6 +32,7 @@ suite('VSCloneChatHistorySerializer', () => {
 		sequence: 1,
 		executionMode: 'plan',
 		promptText: 'hello',
+		promptImages: [{ mimeType: 'image/png', base64Data: 'ZmFrZQ==' }],
 		responseMarkdown: 'hi',
 		responsePlainText: 'hi',
 		startedAt: 1,
@@ -79,6 +80,7 @@ suite('VSCloneChatHistorySerializer', () => {
 		assert.strictEqual(thread.turns.length, 2);
 		assert.strictEqual(thread.turns[1].turnId, 'a2');
 		assert.strictEqual(thread.turns[0].executionMode, 'plan');
+		assert.deepStrictEqual(thread.turns[0].promptImages, turnA1.promptImages);
 		assert.strictEqual(thread.selection?.modelIdentifier, 'openai/gpt-5.3-codex');
 	});
 

@@ -44,6 +44,8 @@ suite('VSClonePromptAssemblyService', () => {
 		assert.ok(message.includes('Lines 2-2:'));
 		assert.ok(message.includes('## Available Tools'));
 		assert.ok(message.includes('Never ask the user to open, share, or paste files'));
+		assert.ok(message.includes('User turns may also include image attachments.'));
+		assert.ok(message.includes('Do not claim that the current request was text-only'));
 		assert.ok(message.includes('## Diagnostics'));
 		assert.ok(message.includes('Unexpected any'));
 		assert.ok(message.includes('<<<<<<< SEARCH'));

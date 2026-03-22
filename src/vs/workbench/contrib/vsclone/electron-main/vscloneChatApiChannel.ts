@@ -108,7 +108,7 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 				'Accept': 'text/event-stream',
 			};
 			const jsonBody = JSON.stringify(body);
-			this.logService.info(`[VSCloneChatApiChannel] Streaming request to ${options.vendor}: ${url}`);
+			this.logService.info(`[VSCloneChatApiChannel] Streaming request to ${options.vendor}: ${url} (body size: ${jsonBody.length} bytes)`);
 			// Log full headers (mask token to first/last 4 chars)
 			const debugHeaders = { ...outgoingHeaders };
 			if (debugHeaders['Authorization']) {
@@ -117,6 +117,22 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 			}
 			this.logService.info(`[VSCloneChatApiChannel] Headers: ${JSON.stringify(debugHeaders)}`);
 			this.logService.info(`[VSCloneChatApiChannel] Body (first 800): ${jsonBody.substring(0, 800)}`);
+			// Log image attachment presence so we can diagnose multimodal delivery failures.
+			const imageCount = options.imageAttachments?.length ?? 0;
+			const prevImageCount = options.previousTurns?.reduce((acc, t) => acc + (t.imageAttachments?.length ?? 0), 0) ?? 0;
+			if (imageCount > 0 || prevImageCount > 0) {
+				this.logService.info(`[VSCloneChatApiChannel] Image attachments: ${imageCount} on current turn, ${prevImageCount} on previous turns`);
+				const inputArray = body.input as Array<{ content?: unknown }> | undefined;
+				if (Array.isArray(inputArray)) {
+					const multimodalTurns = inputArray.filter(m => Array.isArray(m.content));
+					this.logService.info(`[VSCloneChatApiChannel] Multimodal turns in body.input: ${multimodalTurns.length}/${inputArray.length}`);
+					for (const turn of multimodalTurns) {
+						const parts = turn.content as Array<{ type?: string }>;
+						const imageParts = parts.filter(p => p.type === 'input_image');
+						this.logService.info(`[VSCloneChatApiChannel] Turn has ${parts.length} content parts (${imageParts.length} images)`);
+					}
+				}
+			}
 			// Emit a curl command for manual debugging (token unmasked so user can paste it in terminal)
 			const curlHeaders = Object.entries(outgoingHeaders).map(([k, v]) => `-H '${k}: ${v}'`).join(' \\\n  ');
 			const minimalBody = JSON.stringify({ model: body.model, messages: [{ role: 'user', content: 'test' }], max_tokens: 1024, stream: false });

@@ -13,6 +13,8 @@ import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../
 import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
 import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
 import { IVSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
+import type { IVSCloneApiConversationMessage } from '../common/vscloneChatApiAdapters.js';
+import type { IVSCloneImageAttachment } from '../common/vscloneImageAttachmentTypes.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
 import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopService } from './vscloneAgentLoopService.js';
 import { IVSCloneContextGatheringService } from './vscloneContextGatheringService.js';
@@ -23,7 +25,7 @@ export interface IVSCloneChatSubmitOptions {
 	threadId?: string;
 	sessionResource?: string;
 	modelSelection?: IVSCloneModelSelection;
-	imageAttachments?: readonly { mimeType: string; base64Data: string }[];
+	imageAttachments?: readonly IVSCloneImageAttachment[];
 }
 
 export interface IVSCloneChatSubmitResult {
@@ -116,10 +118,14 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 
 		// Gather previous turns for multi-turn conversation context
 		const existingTurns = this.historyService.getTurns(threadId);
-		const previousTurns: { role: 'user' | 'assistant'; content: string }[] = [];
+		const previousTurns: IVSCloneApiConversationMessage[] = [];
 		for (const turn of existingTurns) {
 			if (turn.status === 'completed' || turn.status === 'streaming') {
-				previousTurns.push({ role: 'user', content: turn.promptText });
+				previousTurns.push({
+					role: 'user',
+					content: turn.promptText,
+					imageAttachments: turn.promptImages,
+				});
 				if (turn.responsePlainText) {
 					previousTurns.push({ role: 'assistant', content: turn.responsePlainText });
 				}
@@ -195,7 +201,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		};
 	}
 
-	private injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string; mode: VSCloneChatMode; modelSelection?: IVSCloneModelSelection }): void {
+	private injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string; mode: VSCloneChatMode; modelSelection?: IVSCloneModelSelection; imageAttachments?: readonly IVSCloneImageAttachment[] }): void {
 		const turns = this.historyService.getTurns(options.threadId);
 		const sequence = turns.length + 1;
 		const turnId = `${options.threadId}:rejected:${Date.now()}`;
@@ -209,6 +215,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			phase: 'prompt',
 			occurredAt,
 			promptText: options.promptText,
+			promptImages: options.imageAttachments,
 			executionMode: options.mode,
 			modelIdentifier: options.modelSelection?.modelIdentifier,
 			providerId: options.modelSelection?.vendor,
@@ -263,6 +270,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			reason: 'Sign in to a provider and choose a model before sending messages through VSClone.',
 			mode,
 			modelSelection,
+			imageAttachments: options.imageAttachments,
 		});
 
 		return {

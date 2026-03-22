@@ -409,16 +409,21 @@ export class VSCloneChatHistoryRail extends Disposable {
 
 		event.preventDefault();
 		event.stopPropagation();
+		// The row context menu is opened repeatedly, so its temporary Action instances must be
+		// released on hide rather than accumulating on the long-lived rail object.
+		const menuActions = new DisposableStore();
+		const actions = [
+			menuActions.add(new Action('vsclone.chatHistory.open', localize('vsclone.rail.action.open', 'Open'), undefined, true, () => this._onDidRequestAction.fire({ action: 'open', threadId: row.threadId }))),
+			menuActions.add(new Action('vsclone.chatHistory.copyPrompt', localize('vsclone.rail.action.copyPrompt', 'Copy Prompt'), undefined, true, () => this._onDidRequestAction.fire({ action: 'copyPrompt', threadId: row.threadId }))),
+			menuActions.add(new Action('vsclone.chatHistory.copyResponse', localize('vsclone.rail.action.copyResponse', 'Copy Response'), undefined, true, () => this._onDidRequestAction.fire({ action: 'copyResponse', threadId: row.threadId }))),
+			menuActions.add(new Action('vsclone.chatHistory.reusePrompt', localize('vsclone.rail.action.reusePrompt', 'Reuse Prompt'), undefined, true, () => this._onDidRequestAction.fire({ action: 'reusePrompt', threadId: row.threadId }))),
+			menuActions.add(new Action('vsclone.chatHistory.toggleArchive', row.archived ? localize('vsclone.rail.action.unarchive', 'Unarchive') : localize('vsclone.rail.action.archive', 'Archive'), undefined, true, () => this._onDidRequestAction.fire({ action: 'toggleArchive', threadId: row.threadId, archived: !row.archived }))),
+			menuActions.add(new Action('vsclone.chatHistory.delete', localize('vsclone.rail.action.delete', 'Delete'), undefined, true, () => this.confirmDeleteThread(row.threadId, row.title))),
+		];
 		this.contextMenuService.showContextMenu({
 			getAnchor: () => ({ x: event.clientX, y: event.clientY }),
-			getActions: () => [
-				new Action('vsclone.chatHistory.open', localize('vsclone.rail.action.open', 'Open'), undefined, true, () => this._onDidRequestAction.fire({ action: 'open', threadId: row.threadId })),
-				new Action('vsclone.chatHistory.copyPrompt', localize('vsclone.rail.action.copyPrompt', 'Copy Prompt'), undefined, true, () => this._onDidRequestAction.fire({ action: 'copyPrompt', threadId: row.threadId })),
-				new Action('vsclone.chatHistory.copyResponse', localize('vsclone.rail.action.copyResponse', 'Copy Response'), undefined, true, () => this._onDidRequestAction.fire({ action: 'copyResponse', threadId: row.threadId })),
-				new Action('vsclone.chatHistory.reusePrompt', localize('vsclone.rail.action.reusePrompt', 'Reuse Prompt'), undefined, true, () => this._onDidRequestAction.fire({ action: 'reusePrompt', threadId: row.threadId })),
-				new Action('vsclone.chatHistory.toggleArchive', row.archived ? localize('vsclone.rail.action.unarchive', 'Unarchive') : localize('vsclone.rail.action.archive', 'Archive'), undefined, true, () => this._onDidRequestAction.fire({ action: 'toggleArchive', threadId: row.threadId, archived: !row.archived })),
-				new Action('vsclone.chatHistory.delete', localize('vsclone.rail.action.delete', 'Delete'), undefined, true, () => this.confirmDeleteThread(row.threadId, row.title)),
-			],
+			getActions: () => actions,
+			onHide: () => menuActions.dispose(),
 		});
 	}
 

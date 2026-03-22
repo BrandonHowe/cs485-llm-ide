@@ -9,12 +9,14 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IVSCloneApiRequestHandle, IVSCloneChatApiService } from './vscloneChatApiService.js';
 import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
+import type { IVSCloneApiConversationMessage } from '../common/vscloneChatApiAdapters.js';
 import type { VSCloneReasoningEffortLevel } from '../common/vscloneModelCatalogService.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
 import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
 import { sanitizeAgentModelOutput } from '../common/vscloneAgentTranscriptSanitizer.js';
 import { formatToolResult } from '../common/vscloneToolDefinitions.js';
 import { parseToolCalls } from '../common/vscloneToolCallParser.js';
+import type { IVSCloneImageAttachment } from '../common/vscloneImageAttachmentTypes.js';
 import { IVSCloneToolExecutionService } from './vscloneToolExecutionService.js';
 
 const maxAgentIterations = 25;
@@ -38,9 +40,9 @@ export interface IVSCloneAgentLoopOptions {
 	readonly modelId: string;
 	readonly modelIdentifier: string;
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
-	readonly previousTurns?: readonly { role: 'user' | 'assistant'; content: string }[];
+	readonly previousTurns?: readonly IVSCloneApiConversationMessage[];
 	readonly systemMessage?: string;
-	readonly imageAttachments?: readonly { mimeType: string; base64Data: string }[];
+	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 }
 
 export interface IVSCloneAgentLoopHandle {
@@ -57,6 +59,7 @@ interface ILoopState {
 interface ILoopMessage {
 	readonly role: 'user' | 'assistant';
 	readonly content: string;
+	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 }
 
 interface ILoopIterationResult {
@@ -117,12 +120,20 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			phase: 'prompt',
 			occurredAt: Date.now(),
 			promptText: options.promptText,
+			promptImages: options.imageAttachments,
 			executionMode: options.mode,
 			modelIdentifier: options.modelIdentifier,
 			providerId: options.vendor,
 		});
 
-		const messages: ILoopMessage[] = [...(options.previousTurns ?? []), { role: 'user', content: options.promptText }];
+		const messages: ILoopMessage[] = [
+			...(options.previousTurns ?? []),
+			{
+				role: 'user',
+				content: options.promptText,
+				imageAttachments: options.imageAttachments,
+			},
+		];
 		let toolUsageRepromptCount = 0;
 		for (let iteration = 1; iteration <= maxAgentIterations; iteration++) {
 			this.logTrace('debug', `Agent iteration ${iteration} for thread ${options.threadId}`);
@@ -139,7 +150,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			// obeyed the tool protocol. Capture the transcript prefix now so we can replace only this
 			// iteration's segment with a sanitized version once the model finishes.
 			const responsePrefix = this.getCurrentTurnResponseText(options.threadId, options.turnId);
-			const iterationResult = await this.runModelIteration(options, messages, state, iteration === 1);
+			const iterationResult = await this.runModelIteration(options, messages, state);
 			if (iterationResult.errorMessage) {
 				this.applyError(options, state, iterationResult.errorMessage);
 				return;
@@ -222,7 +233,6 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 		options: IVSCloneAgentLoopOptions,
 		messages: readonly ILoopMessage[],
 		state: ILoopState,
-		includeImageAttachments: boolean,
 	): Promise<ILoopIterationResult> {
 		const lastMessage = messages.at(-1);
 		if (!lastMessage || lastMessage.role !== 'user') {
@@ -249,10 +259,9 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			reasoningEffort: options.reasoningEffort,
 			previousTurns: messages.slice(0, -1),
 			systemMessage: options.systemMessage,
-			// Composer images belong only to the original user prompt. Tool-result follow-up turns
-			// already preserve that context in the conversation transcript, so re-sending the same
-			// binary payload would waste tokens and can skew provider-side multimodal routing.
-			imageAttachments: includeImageAttachments ? options.imageAttachments : undefined,
+			// The current user message owns its attachments. Earlier multimodal turns are replayed from
+			// `previousTurns`, which keeps later tool iterations and restored threads aligned.
+			imageAttachments: lastMessage.imageAttachments,
 		}, {
 			onDelta: delta => {
 				responseText += delta;

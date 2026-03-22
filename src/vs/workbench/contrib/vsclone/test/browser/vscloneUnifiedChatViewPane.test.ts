@@ -77,6 +77,12 @@ interface IRenderAssistantMessageTarget {
 	renderAssistantMessage: (turn: IVSCloneChatHistoryTurn) => HTMLElement;
 }
 
+interface IRenderUserMessageTarget {
+	[key: string]: unknown;
+	renderUserMessage: (turn: IVSCloneChatHistoryTurn) => HTMLElement;
+	showImagePreviewOverlay: (dataUrl: string) => void;
+}
+
 function createPlainTextMarkdownRendererStub() {
 	return {
 		render: (markdown: { value?: string }, _options: unknown, outElement?: HTMLElement) => {
@@ -462,11 +468,13 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		composerInput.value = 'hello';
 		target.composerInput = composerInput;
 		target.composerSendButton = document.createElement('button');
+		target.pendingImages = [{ mimeType: 'image/png', base64Data: 'ZmFrZQ==', dataUrl: 'data:image/png;base64,ZmFrZQ==' }];
 		target.rail = { setSelectedThread: () => undefined };
 		target.threadsById = new Map();
 		target.historyService = { getThreads: () => [] };
 		target.updateComposerState = () => undefined;
 		target.updateComposerMetrics = () => undefined;
+		target.renderImageStrip = () => undefined;
 		target.refreshConversation = () => undefined;
 		target.applyRailLayout = () => undefined;
 		target.modelSwitcher = { refresh: () => undefined };
@@ -496,6 +504,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		assert.strictEqual(capturedOptions?.modelSelection?.modelIdentifier, 'openai/gpt-5.3-codex');
 		assert.strictEqual(capturedOptions?.modelSelection?.reasoningEffort, 'high');
+		assert.deepStrictEqual(capturedOptions?.imageAttachments, [{ mimeType: 'image/png', base64Data: 'ZmFrZQ==' }]);
 		assert.strictEqual(boundThreadId, 'thread-new');
 	});
 
@@ -666,6 +675,35 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		assert.strictEqual(planRendered.querySelector('.vsclone-thread-message-apply'), null);
 		assert.ok(actRendered.querySelector('.vsclone-thread-message-apply'));
+	});
+
+	test('user turns render persisted prompt images', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IRenderUserMessageTarget;
+		let previewDataUrl: string | undefined;
+		target.showImagePreviewOverlay = dataUrl => {
+			previewDataUrl = dataUrl;
+		};
+
+		const rendered = target.renderUserMessage({
+			turnId: 'turn-image',
+			threadId: 'thread-image',
+			sequence: 1,
+			promptText: 'Describe this image',
+			promptImages: [{ mimeType: 'image/png', base64Data: 'ZmFrZQ==' }],
+			responseMarkdown: '',
+			responsePlainText: '',
+			startedAt: 1,
+			status: 'pending',
+		});
+
+		const thumb = rendered.querySelector('.vsclone-thread-image-thumb') as HTMLButtonElement;
+		const image = rendered.querySelector('.vsclone-thread-image-thumb-img') as HTMLImageElement;
+		assert.ok(thumb);
+		assert.strictEqual(image.src, 'data:image/png;base64,ZmFrZQ==');
+
+		thumb.click();
+		assert.strictEqual(previewDataUrl, 'data:image/png;base64,ZmFrZQ==');
 	});
 
 	test('tool-aware renderer opens the file at the rendered diff line', () => {

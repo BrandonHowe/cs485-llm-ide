@@ -72,6 +72,50 @@ suite('VSCloneChatApiAdapters', () => {
 		}]);
 	});
 
+	test('openai requests preserve images on earlier user turns when rebuilding conversation history', () => {
+		const request = getVendorAdapter('openai').buildRequest(createSubmitOptions({
+			vendor: 'openai',
+			modelId: 'gpt-5.3-codex',
+			modelIdentifier: 'openai/gpt-5.3-codex',
+			previousTurns: [
+				{
+					role: 'user',
+					content: 'Describe the screenshot',
+					imageAttachments: [{ mimeType: 'image/png', base64Data: 'Zmlyc3Q=' }],
+				},
+				{
+					role: 'assistant',
+					content: 'I see a game menu.',
+				},
+			],
+			imageAttachments: [{ mimeType: 'image/jpeg', base64Data: 'c2Vjb25k' }],
+		}));
+
+		assert.deepStrictEqual(request.body.input, [
+			{
+				type: 'message',
+				role: 'user',
+				content: [
+					{ type: 'input_text', text: 'This user turn includes 1 image attachment. Inspect it directly when answering.\n\nDescribe the screenshot' },
+					{ type: 'input_image', image_url: 'data:image/png;base64,Zmlyc3Q=', detail: 'auto' },
+				],
+			},
+			{
+				type: 'message',
+				role: 'assistant',
+				content: 'I see a game menu.',
+			},
+			{
+				type: 'message',
+				role: 'user',
+				content: [
+					{ type: 'input_text', text: 'This user turn includes 1 image attachment. Inspect it directly when answering.\n\nwhat model are you' },
+					{ type: 'input_image', image_url: 'data:image/jpeg;base64,c2Vjb25k', detail: 'auto' },
+				],
+			},
+		]);
+	});
+
 	test('google parser surfaces prompt feedback blocks as explicit errors', () => {
 		const parsed = getVendorAdapter('google').parseLine(`data: ${JSON.stringify({
 			promptFeedback: {

@@ -78,6 +78,11 @@ export class VSClonePromptAssemblyService implements IVSClonePromptAssemblyServi
 				? 'You have direct tool access to read, search, and list files inside the workspace for this read-only turn.'
 				: 'You have direct tool access to read/search/list/edit/create files inside the workspace.',
 			'Never ask the user to open, share, or paste files when a tool can fetch that information.',
+			// The agent prompt is strongly workspace/tool oriented, so we must state the multimodal
+			// contract explicitly or the model tends to incorrectly assume image-bearing turns arrived
+			// as plain text only.
+			'User turns may also include image attachments. Inspect attached images directly when they are present and use them as part of your answer.',
+			'Do not claim that the current request was text-only unless no image attachments were provided or the runtime explicitly reports an image-processing failure.',
 			'',
 			'## System Information',
 			`- Vendor: ${vendor}`,

@@ -75,12 +75,20 @@ import { IVSCloneProviderConfigurationBridge } from "./vscloneProviderConfigurat
 import { toVSCloneRailRows } from "./vscloneChatHistoryRailTree.js";
 import { IVSCloneEditApplicationService } from "./vscloneEditApplicationService.js";
 import { parseToolResultDiff } from "../common/vscloneToolResultDiff.js";
+import {
+	toVSCloneImageDataUrl,
+	type IVSCloneImageAttachment,
+} from "../common/vscloneImageAttachmentTypes.js";
 
 const railWidthSetting = "vsclone.chatHistory.railWidth";
 const modelSwitcherEnabledSetting = "vsclone.modelSwitcher.enabled";
 const railMinWidth = 220;
 const railMaxWidth = 520;
 const compactRailBreakpoint = 900;
+
+interface IPendingImageAttachment extends IVSCloneImageAttachment {
+	readonly dataUrl: string;
+}
 
 export function toVSCloneHistoryQuery(
 	query: string,
@@ -200,7 +208,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private conversationEmptyState: HTMLElement | undefined;
 	private composerInput: HTMLTextAreaElement | undefined;
 	private composerSendButton: HTMLButtonElement | undefined;
-	private composerSendIcon: HTMLSpanElement | undefined;
 	private modelSwitcher: VSCloneModelSwitcherWidget | undefined;
 	private planModeContainer: HTMLElement | undefined;
 	private planModeSwitchButton: HTMLButtonElement | undefined;
@@ -208,7 +215,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private reasoningEffortContainer: HTMLElement | undefined;
 	private reasoningEffortSelect: HTMLSelectElement | undefined;
 	private composerImageStrip: HTMLElement | undefined;
-	private pendingImages: { mimeType: string; base64Data: string; dataUrl: string }[] = [];
+	private pendingImages: IPendingImageAttachment[] = [];
 
 	private readonly rail = this._register(
 		this.instantiationService.createInstance(VSCloneChatHistoryRail),
@@ -509,6 +516,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 		this.composerInput.value = latestTurn.promptText;
+		// Rehydrating stored images here makes "reuse prompt" faithful for multimodal turns instead
+		// of silently dropping the visual context that the original request depended on.
+		this.pendingImages = this.toPendingImages(latestTurn.promptImages);
+		this.renderImageStrip();
 		this.updateComposerMetrics();
 		this.focusInput();
 	}
@@ -635,7 +646,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		sendIcon.setAttribute('aria-hidden', 'true');
 		send.appendChild(sendIcon);
 		this.composerSendButton = send;
-		this.composerSendIcon = sendIcon;
 
 		const controls = document.createElement('div');
 		controls.className = 'vsclone-thread-composer-controls';
@@ -782,44 +792,49 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				EventType.CLICK,
 				(event: MouseEvent) => {
 					event.stopPropagation();
+					// Context menus allocate Action disposables on every open, so we tie their lifetime to
+					// the menu instance instead of registering them on the long-lived view.
+					const menuActions = new DisposableStore();
+					const actions = [
+						menuActions.add(new Action(
+							"vsclone.chatHistory.copyPrompt",
+							localize("vsclone.thread.actions.copyPrompt", "Copy Prompt"),
+							undefined,
+							true,
+							() => this.copyPrompt(),
+						)),
+						menuActions.add(new Action(
+							"vsclone.chatHistory.copyResponse",
+							localize(
+								"vsclone.thread.actions.copyResponse",
+								"Copy Response",
+							),
+							undefined,
+							true,
+							() => this.copyResponse(),
+						)),
+						menuActions.add(new Action(
+							"vsclone.chatHistory.reusePrompt",
+							localize("vsclone.thread.actions.reusePrompt", "Reuse Prompt"),
+							undefined,
+							true,
+							() => this.reusePrompt(),
+						)),
+						menuActions.add(new Action(
+							"vsclone.chatHistory.deleteThread",
+							localize(
+								"vsclone.thread.actions.deleteThread",
+								"Delete Thread",
+							),
+							undefined,
+							true,
+							() => this.deleteActiveThread(),
+						)),
+					];
 					this.contextMenuService.showContextMenu({
 						getAnchor: () => ({ x: event.clientX, y: event.clientY }),
-						getActions: () => [
-							new Action(
-								"vsclone.chatHistory.copyPrompt",
-								localize("vsclone.thread.actions.copyPrompt", "Copy Prompt"),
-								undefined,
-								true,
-								() => this.copyPrompt(),
-							),
-							new Action(
-								"vsclone.chatHistory.copyResponse",
-								localize(
-									"vsclone.thread.actions.copyResponse",
-									"Copy Response",
-								),
-								undefined,
-								true,
-								() => this.copyResponse(),
-							),
-							new Action(
-								"vsclone.chatHistory.reusePrompt",
-								localize("vsclone.thread.actions.reusePrompt", "Reuse Prompt"),
-								undefined,
-								true,
-								() => this.reusePrompt(),
-							),
-							new Action(
-								"vsclone.chatHistory.deleteThread",
-								localize(
-									"vsclone.thread.actions.deleteThread",
-									"Delete Thread",
-								),
-								undefined,
-								true,
-								() => this.deleteActiveThread(),
-							),
-						],
+						getActions: () => actions,
+						onHide: () => menuActions.dispose(),
 					});
 				},
 			),
@@ -1054,7 +1069,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}
 			try {
 				const base64Data = await this.readFileAsBase64(file);
-				const dataUrl = `data:${file.type};base64,${base64Data}`;
+				const dataUrl = toVSCloneImageDataUrl({ mimeType: file.type, base64Data });
 				this.pendingImages.push({ mimeType: file.type, base64Data, dataUrl });
 			} catch {
 				// Skip files that fail to read
@@ -1074,6 +1089,21 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			reader.onerror = reject;
 			reader.readAsDataURL(file);
 		});
+	}
+
+	/**
+	 * Composer previews need browser-safe data URLs, but history persists base64 payloads so the
+	 * same attachment metadata can round-trip through storage and API replay.
+	 */
+	private toPendingImages(images: readonly IVSCloneImageAttachment[] | undefined): IPendingImageAttachment[] {
+		if (!images || images.length === 0) {
+			return [];
+		}
+
+		return images.map(image => ({
+			...image,
+			dataUrl: toVSCloneImageDataUrl(image),
+		}));
 	}
 
 	private renderImageStrip(): void {
@@ -1096,11 +1126,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			preview.src = img.dataUrl;
 			preview.alt = localize("vsclone.composer.imageAttachment", "Image attachment");
 			preview.className = 'vsclone-composer-image-thumb-img';
-			this._register(
-				addDisposableListener(preview, EventType.CLICK, () => {
-					this.showImagePreviewOverlay(img.dataUrl);
-				}),
-			);
+			preview.addEventListener(EventType.CLICK, () => {
+				this.showImagePreviewOverlay(img.dataUrl);
+			});
 
 			const removeBtn = document.createElement('button');
 			removeBtn.type = 'button';
@@ -1111,13 +1139,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			removeIcon.setAttribute('aria-hidden', 'true');
 			removeBtn.appendChild(removeIcon);
 			const index = i;
-			this._register(
-				addDisposableListener(removeBtn, EventType.CLICK, (e) => {
-					e.stopPropagation();
-					this.pendingImages.splice(index, 1);
-					this.renderImageStrip();
-				}),
-			);
+			removeBtn.addEventListener(EventType.CLICK, e => {
+				e.stopPropagation();
+				this.pendingImages.splice(index, 1);
+				this.renderImageStrip();
+			});
 
 			thumb.appendChild(preview);
 			thumb.appendChild(removeBtn);
@@ -1266,10 +1292,48 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const body = document.createElement("div");
 		body.className = "vsclone-thread-message-body";
-		body.textContent = turn.promptText;
+		if (turn.promptText.trim().length > 0) {
+			const promptText = document.createElement("div");
+			promptText.className = "vsclone-thread-message-user-text";
+			promptText.textContent = turn.promptText;
+			body.appendChild(promptText);
+		}
+		if (turn.promptImages && turn.promptImages.length > 0) {
+			body.appendChild(this.renderPromptImageStrip(turn.promptImages));
+		}
 		item.appendChild(body);
 
 		return item;
+	}
+
+	/**
+	 * User-turn images are rendered from persisted turn state so restored threads keep showing the
+	 * same attachments that were actually sent to the provider.
+	 */
+	private renderPromptImageStrip(images: readonly IVSCloneImageAttachment[]): HTMLElement {
+		const strip = document.createElement('div');
+		strip.className = 'vsclone-thread-image-strip';
+
+		for (const image of images) {
+			const dataUrl = toVSCloneImageDataUrl(image);
+			const thumb = document.createElement('button');
+			thumb.type = 'button';
+			thumb.className = 'vsclone-thread-image-thumb';
+			thumb.setAttribute('aria-label', localize("vsclone.thread.openImage", "Open Attached Image"));
+
+			const preview = document.createElement('img');
+			preview.src = dataUrl;
+			preview.alt = localize("vsclone.composer.imageAttachment", "Image attachment");
+			preview.className = 'vsclone-thread-image-thumb-img';
+
+			thumb.appendChild(preview);
+			thumb.addEventListener(EventType.CLICK, () => {
+				this.showImagePreviewOverlay(dataUrl);
+			});
+			strip.appendChild(thumb);
+		}
+
+		return strip;
 	}
 
 	private renderAssistantMessage(turn: IVSCloneChatHistoryTurn): HTMLElement {

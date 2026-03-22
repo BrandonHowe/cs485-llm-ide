@@ -13,12 +13,14 @@ import {
 	VSCloneModelVendor,
 } from "./vscloneOAuthTypes.js";
 import type { VSCloneReasoningEffortLevel } from "./vscloneModelCatalogService.js";
+import type { IVSCloneImageAttachment } from "./vscloneImageAttachmentTypes.js";
 
 // -- Public types --
 
-export interface IVSCloneImageAttachment {
-	readonly mimeType: string;
-	readonly base64Data: string;
+export interface IVSCloneApiConversationMessage {
+	readonly role: "user" | "assistant";
+	readonly content: string;
+	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 }
 
 export interface IVSCloneApiSubmitOptions {
@@ -31,10 +33,7 @@ export interface IVSCloneApiSubmitOptions {
 	readonly modelId: string;
 	readonly modelIdentifier: string;
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
-	readonly previousTurns?: readonly {
-		role: "user" | "assistant";
-		content: string;
-	}[];
+	readonly previousTurns?: readonly IVSCloneApiConversationMessage[];
 	readonly systemMessage?: string;
 	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 }
@@ -126,14 +125,24 @@ export function assertSupportsAnthropicOAuthMessagesModel(
 
 function buildMessages(
 	options: IVSCloneApiSubmitOptions,
-): { role: string; content: string }[] {
-	const messages: { role: string; content: string }[] = [];
+): IVSCloneApiConversationMessage[] {
+	const messages: IVSCloneApiConversationMessage[] = [];
 	if (options.previousTurns) {
 		for (const turn of options.previousTurns) {
-			messages.push({ role: turn.role, content: turn.content });
+			messages.push({
+				role: turn.role,
+				content: turn.content,
+				imageAttachments: turn.imageAttachments,
+			});
 		}
 	}
-	messages.push({ role: "user", content: options.promptText });
+	// The transport rebuilds the whole conversation on every request, so the current user message
+	// keeps its attachments here instead of relying on a parallel "latest only" channel.
+	messages.push({
+		role: "user",
+		content: options.promptText,
+		imageAttachments: options.imageAttachments,
+	});
 	return messages;
 }
 
@@ -141,11 +150,15 @@ function buildOpenAIMultimodalContent(
 	text: string,
 	images: readonly IVSCloneImageAttachment[],
 ): unknown[] {
-	const parts: unknown[] = [{ type: "input_text", text }];
+	const parts: unknown[] = [{
+		type: "input_text",
+		text: `${buildImageAttachmentNotice(images.length)}\n\n${text}`,
+	}];
 	for (const img of images) {
 		parts.push({
 			type: "input_image",
 			image_url: `data:${img.mimeType};base64,${img.base64Data}`,
+			detail: "auto",
 		});
 	}
 	return parts;
@@ -162,7 +175,10 @@ function buildAnthropicMultimodalContent(
 			source: { type: "base64", media_type: img.mimeType, data: img.base64Data },
 		});
 	}
-	parts.push({ type: "text", text });
+	parts.push({
+		type: "text",
+		text: `${buildImageAttachmentNotice(images.length)}\n\n${text}`,
+	});
 	return parts;
 }
 
@@ -174,12 +190,22 @@ function buildGoogleMultimodalParts(
 	for (const img of images) {
 		parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64Data } });
 	}
-	parts.push({ text });
+	parts.push({ text: `${buildImageAttachmentNotice(images.length)}\n\n${text}` });
 	return parts;
 }
 
+function buildImageAttachmentNotice(imageCount: number): string {
+	const noun = imageCount === 1 ? "image attachment" : "image attachments";
+	const pronoun = imageCount === 1 ? "it" : "them";
+	return `This user turn includes ${imageCount} ${noun}. Inspect ${pronoun} directly when answering.`;
+}
+
 const defaultSystemMessage =
-	"You are VSClone, a helpful coding assistant. Answer clearly and concisely.";
+	[
+		"You are VSClone, a helpful coding assistant. Answer clearly and concisely.",
+		"User turns may include image attachments in addition to text. Inspect attached images directly when they are present.",
+		"Do not claim a request was text-only unless no image attachments were provided or the runtime reports an image-processing failure.",
+	].join(" ");
 
 /**
  * The OpenAI API only accepts these reasoning effort values.
@@ -221,14 +247,14 @@ export function toOpenAIReasoningEffort(
 const openaiAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveVSCloneApiModelId("openai", options.modelId);
-		const hasImages = options.imageAttachments && options.imageAttachments.length > 0;
 		const rawMessages = buildMessages(options);
-		const input = rawMessages.map((m, i) => {
-			const isLastUserMessage = i === rawMessages.length - 1 && m.role === "user" && hasImages;
+		const input = rawMessages.map(m => {
+			const hasImages = m.role === "user" && !!m.imageAttachments?.length;
 			return {
+				type: "message" as const,
 				role: m.role,
-				content: isLastUserMessage
-					? buildOpenAIMultimodalContent(m.content, options.imageAttachments!)
+				content: hasImages
+					? buildOpenAIMultimodalContent(m.content, m.imageAttachments!)
 					: m.content,
 			};
 		});
@@ -296,14 +322,13 @@ const anthropicAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveVSCloneApiModelId("anthropic", options.modelId);
 		assertSupportsAnthropicOAuthMessagesModel(apiModelId);
-		const hasImages = options.imageAttachments && options.imageAttachments.length > 0;
 		const rawMessages = buildMessages(options);
-		const nonSystemMessages = rawMessages.map((m, i) => {
-			const isLastUserMessage = i === rawMessages.length - 1 && m.role === "user" && hasImages;
+		const nonSystemMessages = rawMessages.map(m => {
+			const hasImages = m.role === "user" && !!m.imageAttachments?.length;
 			return {
 				role: m.role,
-				content: isLastUserMessage
-					? buildAnthropicMultimodalContent(m.content, options.imageAttachments!)
+				content: hasImages
+					? buildAnthropicMultimodalContent(m.content, m.imageAttachments!)
 					: m.content,
 			};
 		});
@@ -391,14 +416,13 @@ const googleAdapter: IVSCloneVendorAdapter = {
 	buildRequest(options: IVSCloneApiSubmitOptions) {
 		const apiModelId = resolveVSCloneApiModelId("google", options.modelId);
 		const messages = buildMessages(options);
-		const hasImages = options.imageAttachments && options.imageAttachments.length > 0;
 		const systemPrompt = options.systemMessage?.trim() || defaultSystemMessage;
-		const contents = messages.map((m, i) => {
-			const isLastUserMessage = i === messages.length - 1 && m.role === "user" && hasImages;
+		const contents = messages.map(m => {
+			const hasImages = m.role === "user" && !!m.imageAttachments?.length;
 			return {
 				role: m.role === "assistant" ? "model" : "user",
-				parts: isLastUserMessage
-					? buildGoogleMultimodalParts(m.content, options.imageAttachments!)
+				parts: hasImages
+					? buildGoogleMultimodalParts(m.content, m.imageAttachments!)
 					: [{ text: m.content }],
 			};
 		});

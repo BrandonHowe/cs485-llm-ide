@@ -277,4 +277,47 @@ suite('VSCloneChatSessionService', () => {
 		assert.strictEqual(agentLoopService.cancelCalls, 1);
 		agentLoopService.completeLastRun();
 	});
+
+	test('rehydrates stored prompt images into previous-turn context', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const historyService = new TestHistoryService();
+		historyService.turnsByThread.set('thread-images', [{
+			...createTurn('thread-images'),
+			promptImages: [{ mimeType: 'image/png', base64Data: 'ZmFrZQ==' }],
+		}]);
+
+		const agentLoopService = new TestAgentLoopService();
+		const selectionService = new TestSelectionService();
+		const planModeService = new TestPlanModeService();
+		await selectionService.setSelectionForThread('thread-images', createModelSelection());
+
+		const service = testDisposables.add(new VSCloneChatSessionService(
+			historyService,
+			selectionService,
+			planModeService,
+			new NullLogService(),
+			agentLoopService,
+			createContextGatheringService(),
+			createPromptAssemblyService(),
+		));
+
+		await service.submitPrompt('Follow-up question', {
+			threadId: 'thread-images',
+			sessionResource: 'vsclone://api/thread-images',
+			modelSelection: createModelSelection(),
+		});
+
+		assert.deepStrictEqual(agentLoopService.lastRunOptions?.previousTurns, [
+			{
+				role: 'user',
+				content: 'Existing prompt',
+				imageAttachments: [{ mimeType: 'image/png', base64Data: 'ZmFrZQ==' }],
+			},
+			{
+				role: 'assistant',
+				content: 'Existing response',
+			},
+		]);
+		agentLoopService.completeLastRun();
+	});
 });

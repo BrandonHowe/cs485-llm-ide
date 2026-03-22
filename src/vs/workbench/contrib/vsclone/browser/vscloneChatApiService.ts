@@ -108,6 +108,7 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 				phase: 'prompt',
 				occurredAt: Date.now(),
 				promptText: options.promptText,
+				promptImages: options.imageAttachments,
 				modelIdentifier: options.modelIdentifier,
 				providerId: options.vendor,
 			});
