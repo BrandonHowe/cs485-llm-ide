@@ -194,11 +194,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private conversationEmptyState: HTMLElement | undefined;
 	private composerInput: HTMLTextAreaElement | undefined;
 	private composerSendButton: HTMLButtonElement | undefined;
+	private composerSendIcon: HTMLSpanElement | undefined;
 	private modelSwitcher: VSCloneModelSwitcherWidget | undefined;
 	private planModeContainer: HTMLElement | undefined;
 	private planModeSwitchButton: HTMLButtonElement | undefined;
-	private planModeStateLabel: HTMLSpanElement | undefined;
-	private planModeDescriptionLabel: HTMLSpanElement | undefined;
+	private addContextMenuToggle: HTMLSpanElement | undefined;
 	private reasoningEffortContainer: HTMLElement | undefined;
 	private reasoningEffortSelect: HTMLSelectElement | undefined;
 
@@ -619,18 +619,21 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		);
 		this.composerInput = input;
 
-		const send = document.createElement("button");
-		send.type = "button";
-		send.className = "vsclone-thread-composer-send";
-		send.textContent = localize("vsclone.composer.send", "Send");
+		const send = document.createElement('button');
+		send.type = 'button';
+		send.className = 'vsclone-thread-composer-send';
+		const sendIcon = document.createElement('span');
+		sendIcon.className = 'codicon codicon-send';
+		sendIcon.setAttribute('aria-hidden', 'true');
+		send.appendChild(sendIcon);
 		this.composerSendButton = send;
+		this.composerSendIcon = sendIcon;
 
-		const controls = document.createElement("div");
-		controls.className = "vsclone-thread-composer-controls";
+		const controls = document.createElement('div');
+		controls.className = 'vsclone-thread-composer-controls';
 		this.planModeContainer = undefined;
 		this.planModeSwitchButton = undefined;
-		this.planModeStateLabel = undefined;
-		this.planModeDescriptionLabel = undefined;
+		this.addContextMenuToggle = undefined;
 		this.reasoningEffortContainer = undefined;
 		this.reasoningEffortSelect = undefined;
 
@@ -672,65 +675,84 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.reasoningEffortSelect = reasoningEffortSelect;
 		}
 
-		// Keep execution mode on its own row so provider/model controls stay compact, and pair the
-		// boolean switch with explicit copy because the thumb alone is less descriptive than Plan/Act.
-		const planModeHost = document.createElement("div");
-		planModeHost.className = "vsclone-thread-plan-mode";
-		const planModeCopy = document.createElement("div");
-		planModeCopy.className = "vsclone-thread-plan-mode-copy";
-		const planModeLabelRow = document.createElement("div");
-		planModeLabelRow.className = "vsclone-thread-plan-mode-label-row";
-		const planModeLabel = document.createElement("span");
-		planModeLabel.className = "vsclone-thread-plan-mode-label";
-		planModeLabel.textContent = localize(
-			"vsclone.composer.mode.title",
-			"Plan Mode",
-		);
-		planModeLabel.id = `${this.id}-composer-plan-mode-label`;
-		const planModeState = document.createElement("span");
-		planModeState.className = "vsclone-thread-plan-mode-state";
-		const planModeDescription = document.createElement("span");
-		planModeDescription.className = "vsclone-thread-plan-mode-description";
-		planModeDescription.id = `${this.id}-composer-plan-mode-description`;
-		planModeLabelRow.appendChild(planModeLabel);
-		planModeLabelRow.appendChild(planModeState);
-		planModeCopy.appendChild(planModeLabelRow);
-		planModeCopy.appendChild(planModeDescription);
-		const planModeSwitch = document.createElement("button");
-		planModeSwitch.type = "button";
-		planModeSwitch.className = "vsclone-thread-plan-mode-switch";
-		planModeSwitch.setAttribute("role", "switch");
-		planModeSwitch.setAttribute("aria-labelledby", planModeLabel.id);
-		planModeSwitch.setAttribute("aria-describedby", planModeDescription.id);
-		const planModeSwitchTrack = document.createElement("span");
-		planModeSwitchTrack.className = "vsclone-thread-plan-mode-switch-track";
-		planModeSwitchTrack.setAttribute("aria-hidden", "true");
-		const planModeSwitchThumb = document.createElement("span");
-		planModeSwitchThumb.className = "vsclone-thread-plan-mode-switch-thumb";
-		planModeSwitchThumb.setAttribute("aria-hidden", "true");
-		planModeSwitchTrack.appendChild(planModeSwitchThumb);
-		planModeSwitch.appendChild(planModeSwitchTrack);
-		planModeHost.appendChild(planModeCopy);
-		planModeHost.appendChild(planModeSwitch);
-		this.planModeContainer = planModeHost;
-		this.planModeSwitchButton = planModeSwitch;
-		this.planModeStateLabel = planModeState;
-		this.planModeDescriptionLabel = planModeDescription;
+		// "+" context menu button with popup for adding images, files, and toggling plan mode.
+		const addContextRoot = document.createElement('div');
+		addContextRoot.className = 'vsclone-add-context-root';
+		const addContextButton = document.createElement('button');
+		addContextButton.type = 'button';
+		addContextButton.className = 'vsclone-add-context-button';
+		addContextButton.setAttribute('aria-haspopup', 'menu');
+		addContextButton.setAttribute('aria-label', localize("vsclone.composer.addContext", "Add context"));
+		addContextButton.title = localize("vsclone.composer.addContextTooltip", "Add context");
+		const addContextIcon = document.createElement('span');
+		addContextIcon.className = 'codicon codicon-add';
+		addContextIcon.setAttribute('aria-hidden', 'true');
+		addContextButton.appendChild(addContextIcon);
+		addContextRoot.appendChild(addContextButton);
 
-		const hint = document.createElement("div");
-		hint.className = "vsclone-thread-composer-hint";
-		hint.textContent = localize(
-			"vsclone.composer.hint",
-			"Press Enter to send, Shift+Enter for new line",
-		);
-		// Associate keyboard-help text to the composer so instructions are available to assistive technology.
+		const addContextMenuId = `${this.id}-add-context-menu`;
+		const addContextMenu = document.createElement('div');
+		addContextMenu.className = 'vsclone-add-context-menu hidden';
+		addContextMenu.id = addContextMenuId;
+		addContextMenu.setAttribute('role', 'menu');
+		addContextButton.setAttribute('aria-controls', addContextMenuId);
+
+		const addImageItem = document.createElement('button');
+		addImageItem.type = 'button';
+		addImageItem.className = 'vsclone-add-context-menu-item';
+		addImageItem.setAttribute('role', 'menuitem');
+		const addImageIcon = document.createElement('span');
+		addImageIcon.className = 'codicon codicon-file-media';
+		addImageIcon.setAttribute('aria-hidden', 'true');
+		addImageItem.appendChild(addImageIcon);
+		addImageItem.appendChild(document.createTextNode(localize("vsclone.composer.addImage", "Add Image")));
+
+		const addFileItem = document.createElement('button');
+		addFileItem.type = 'button';
+		addFileItem.className = 'vsclone-add-context-menu-item';
+		addFileItem.setAttribute('role', 'menuitem');
+		const addFileIcon = document.createElement('span');
+		addFileIcon.className = 'codicon codicon-new-file';
+		addFileIcon.setAttribute('aria-hidden', 'true');
+		addFileItem.appendChild(addFileIcon);
+		addFileItem.appendChild(document.createTextNode(localize("vsclone.composer.addFile", "Add File")));
+
+		const planModeItem = document.createElement('button');
+		planModeItem.type = 'button';
+		planModeItem.className = 'vsclone-add-context-menu-item';
+		planModeItem.setAttribute('role', 'menuitemcheckbox');
+		const planModeItemIcon = document.createElement('span');
+		planModeItemIcon.className = 'codicon codicon-map';
+		planModeItemIcon.setAttribute('aria-hidden', 'true');
+		planModeItem.appendChild(planModeItemIcon);
+		planModeItem.appendChild(document.createTextNode(localize("vsclone.composer.mode.title", "Plan Mode")));
+		const planModeToggle = document.createElement('span');
+		planModeToggle.className = 'vsclone-add-context-menu-toggle';
+		planModeItem.appendChild(planModeToggle);
+
+		addContextMenu.appendChild(addImageItem);
+		addContextMenu.appendChild(addFileItem);
+		addContextMenu.appendChild(planModeItem);
+		addContextRoot.appendChild(addContextMenu);
+
+		this.planModeContainer = addContextRoot;
+		this.planModeSwitchButton = planModeItem;
+		this.addContextMenuToggle = planModeToggle;
+
+		const hint = document.createElement('div');
+		hint.className = 'vsclone-thread-composer-hint';
+		hint.textContent = localize("vsclone.composer.hint", "Press Enter to send, Shift+Enter for new line");
 		hint.id = `${this.id}-composer-hint`;
-		input.setAttribute("aria-describedby", hint.id);
+		input.setAttribute('aria-describedby', hint.id);
+
+		const toolbar = document.createElement('div');
+		toolbar.className = 'vsclone-thread-composer-toolbar';
+		toolbar.appendChild(addContextRoot);
+		toolbar.appendChild(controls);
+		toolbar.appendChild(send);
 
 		composer.appendChild(input);
-		composer.appendChild(send);
-		composer.appendChild(controls);
-		composer.appendChild(planModeHost);
+		composer.appendChild(toolbar);
 		composer.appendChild(hint);
 
 		parent.appendChild(actions);
@@ -827,19 +849,59 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				void this.submitPrompt();
 			}),
 		);
-		if (this.planModeSwitchButton) {
-			this._register(
-				addDisposableListener(
-					this.planModeSwitchButton,
-					EventType.CLICK,
-					() => {
-						const nextMode =
-							this.getCurrentComposerMode() === "plan" ? "act" : "plan";
-						void this.updatePlanModeSelection(nextMode);
-					},
-				),
-			);
-		}
+		// "+" context menu: open/close popup
+		let addContextMenuOpen = false;
+		const toggleAddContextMenu = (open?: boolean) => {
+			addContextMenuOpen = open ?? !addContextMenuOpen;
+			addContextMenu.classList.toggle('hidden', !addContextMenuOpen);
+			addContextRoot.classList.toggle('open', addContextMenuOpen);
+			addContextButton.setAttribute('aria-expanded', String(addContextMenuOpen));
+		};
+		this._register(
+			addDisposableListener(addContextButton, EventType.CLICK, () => {
+				toggleAddContextMenu();
+			}),
+		);
+		const targetWindow = getWindow(composer);
+		this._register(
+			addDisposableListener(targetWindow.document, EventType.MOUSE_DOWN, (event: MouseEvent) => {
+				if (!addContextMenuOpen) {
+					return;
+				}
+				const clickTarget = event.target as Node | null;
+				if (clickTarget && addContextRoot.contains(clickTarget)) {
+					return;
+				}
+				toggleAddContextMenu(false);
+			}),
+		);
+		this._register(
+			addDisposableListener(targetWindow.document, EventType.KEY_DOWN, (event: KeyboardEvent) => {
+				if (addContextMenuOpen && event.key === 'Escape') {
+					event.preventDefault();
+					toggleAddContextMenu(false);
+					addContextButton.focus();
+				}
+			}),
+		);
+		this._register(
+			addDisposableListener(addImageItem, EventType.CLICK, () => {
+				toggleAddContextMenu(false);
+				// TODO: implement image picker
+			}),
+		);
+		this._register(
+			addDisposableListener(addFileItem, EventType.CLICK, () => {
+				toggleAddContextMenu(false);
+				// TODO: implement file picker
+			}),
+		);
+		this._register(
+			addDisposableListener(planModeItem, EventType.CLICK, () => {
+				const nextMode = this.getCurrentComposerMode() === 'plan' ? 'act' : 'plan';
+				void this.updatePlanModeSelection(nextMode);
+			}),
+		);
 		if (this.reasoningEffortSelect) {
 			this._register(
 				addDisposableListener(
@@ -1200,13 +1262,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		type ActivityItem =
 			| { readonly kind: "thinking"; readonly message: string }
 			| {
-					readonly kind: "tool";
-					readonly toolName: string;
-					readonly displayMessage: string;
-					readonly status: "running" | "complete" | "success" | "error";
-					readonly output?: string;
-					readonly diffCard?: HTMLElement;
-			  };
+				readonly kind: "tool";
+				readonly toolName: string;
+				readonly displayMessage: string;
+				readonly status: "running" | "complete" | "success" | "error";
+				readonly output?: string;
+				readonly diffCard?: HTMLElement;
+			};
 
 		let cursor = 0;
 		let pendingActivity: ActivityItem[] = [];
@@ -1632,10 +1694,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		label.textContent = streaming
 			? localize("vsclone.thread.thinking.active", "Thinking...")
 			: localize(
-					"vsclone.thread.thinking.label",
-					"Thinking ({0} steps)",
-					messages.length.toString(),
-				);
+				"vsclone.thread.thinking.label",
+				"Thinking ({0} steps)",
+				messages.length.toString(),
+			);
 		summary.appendChild(label);
 
 		details.appendChild(summary);
@@ -1663,13 +1725,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		items: ReadonlyArray<
 			| { readonly kind: "thinking"; readonly message: string }
 			| {
-					readonly kind: "tool";
-					readonly toolName: string;
-					readonly displayMessage: string;
-					readonly status: "running" | "complete" | "success" | "error";
-					readonly output?: string;
-					readonly diffCard?: HTMLElement;
-			  }
+				readonly kind: "tool";
+				readonly toolName: string;
+				readonly displayMessage: string;
+				readonly status: "running" | "complete" | "success" | "error";
+				readonly output?: string;
+				readonly diffCard?: HTMLElement;
+			}
 		>,
 		streaming: boolean,
 	): HTMLElement {
@@ -1732,10 +1794,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				toolItems.length === 1
 					? localize("vsclone.activity.single", "Used 1 tool")
 					: localize(
-							"vsclone.activity.count",
-							"Used {0} tools",
-							toolItems.length.toString(),
-						);
+						"vsclone.activity.count",
+						"Used {0} tools",
+						toolItems.length.toString(),
+					);
 		}
 		summaryEl.appendChild(label);
 
@@ -2274,9 +2336,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		diff: string,
 	): Promise<
 		| {
-				readonly titleNavigation: IDiffLineNavigationState;
-				readonly lineNumbers: Map<number, number>;
-		  }
+			readonly titleNavigation: IDiffLineNavigationState;
+			readonly lineNumbers: Map<number, number>;
+		}
 		| undefined
 	> {
 		const diffLines = diff.split("\n");
@@ -2517,16 +2579,16 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			navigation.endLineNumber ?? navigation.startLineNumber;
 		return endLineNumber > navigation.startLineNumber
 			? localize(
-					"vsclone.thread.toolDiff.lineRange",
-					"Ln {0}-{1}",
-					navigation.startLineNumber.toString(),
-					endLineNumber.toString(),
-				)
+				"vsclone.thread.toolDiff.lineRange",
+				"Ln {0}-{1}",
+				navigation.startLineNumber.toString(),
+				endLineNumber.toString(),
+			)
 			: localize(
-					"vsclone.thread.toolDiff.lineNumber",
-					"Ln {0}",
-					navigation.startLineNumber.toString(),
-				);
+				"vsclone.thread.toolDiff.lineNumber",
+				"Ln {0}",
+				navigation.startLineNumber.toString(),
+			);
 	}
 
 	private openDiffTarget(
@@ -2547,14 +2609,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				resource,
 				options: sanitizedStartLineNumber
 					? {
-							selection: {
-								startLineNumber: sanitizedStartLineNumber,
-								startColumn: 1,
-								endLineNumber:
-									sanitizedEndLineNumber ?? sanitizedStartLineNumber,
-								endColumn: 1,
-							},
-						}
+						selection: {
+							startLineNumber: sanitizedStartLineNumber,
+							startColumn: 1,
+							endLineNumber:
+								sanitizedEndLineNumber ?? sanitizedStartLineNumber,
+							endColumn: 1,
+						},
+					}
 					: undefined,
 			})
 			.catch(() => {
@@ -2606,11 +2668,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			fileLabel.title =
 				titleNavigation.startLineNumber !== undefined
 					? localize(
-							"vsclone.thread.toolDiff.openAtLineTitle",
-							"Open {0} at line {1}",
-							filename,
-							titleNavigation.startLineNumber.toString(),
-						)
+						"vsclone.thread.toolDiff.openAtLineTitle",
+						"Open {0} at line {1}",
+						filename,
+						titleNavigation.startLineNumber.toString(),
+					)
 					: (fileUri ?? filename);
 			if (fileUri) {
 				fileLabel.href = "#";
@@ -3016,12 +3078,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private refreshPlanModeControl(composerBusy?: boolean): void {
-		if (
-			!this.planModeContainer ||
-			!this.planModeSwitchButton ||
-			!this.planModeStateLabel ||
-			!this.planModeDescriptionLabel
-		) {
+		if (!this.planModeContainer || !this.planModeSwitchButton) {
 			return;
 		}
 
@@ -3030,30 +3087,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			((this.activeThreadId ? this.isThreadBusy(this.activeThreadId) : false) ||
 				this.submittingPrompt);
 		const mode = this.getCurrentComposerMode();
-		this.planModeContainer.classList.toggle("plan-active", mode === "plan");
-		this.planModeContainer.classList.toggle("act-active", mode === "act");
-		this.planModeSwitchButton.classList.toggle("checked", mode === "plan");
+		this.planModeSwitchButton.classList.toggle('checked', mode === 'plan');
 		this.planModeSwitchButton.disabled = busy;
 		this.planModeSwitchButton.setAttribute(
-			"aria-checked",
-			mode === "plan" ? "true" : "false",
+			'aria-checked',
+			mode === 'plan' ? 'true' : 'false',
 		);
-		// Mirror the current mode in text so the toggle stays understandable even when the switch is
-		// glanced at quickly or presented to assistive technology outside the visual track.
-		this.planModeStateLabel.textContent =
-			mode === "plan"
-				? localize("vsclone.composer.mode.state.on", "On")
-				: localize("vsclone.composer.mode.state.off", "Off");
-		this.planModeDescriptionLabel.textContent =
-			mode === "plan"
-				? localize(
-						"vsclone.composer.mode.description.plan",
-						"Read-only planning",
-					)
-				: localize(
-						"vsclone.composer.mode.description.act",
-						"Tool use and file edits enabled",
-					);
+		if (this.addContextMenuToggle) {
+			this.addContextMenuToggle.classList.toggle('active', mode === 'plan');
+		}
 	}
 
 	private async updatePlanModeSelection(mode: VSCloneChatMode): Promise<void> {
@@ -3105,10 +3147,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			| undefined;
 		const resolvedReasoningEffort =
 			selectedFromControl &&
-			supportedReasoningLevels.includes(selectedFromControl)
+				supportedReasoningLevels.includes(selectedFromControl)
 				? selectedFromControl
 				: selectedModel.reasoningEffort &&
-					  supportedReasoningLevels.includes(selectedModel.reasoningEffort)
+					supportedReasoningLevels.includes(selectedModel.reasoningEffort)
 					? selectedModel.reasoningEffort
 					: (selectedModelDescriptor.defaultReasoningEffort ??
 						supportedReasoningLevels[0]);
@@ -3148,7 +3190,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const selectedReasoningEffort =
 			selectedModel.reasoningEffort &&
-			supportedReasoningLevels.includes(selectedModel.reasoningEffort)
+				supportedReasoningLevels.includes(selectedModel.reasoningEffort)
 				? selectedModel.reasoningEffort
 				: (selectedModelDescriptor.defaultReasoningEffort ??
 					supportedReasoningLevels[0]);
@@ -3213,7 +3255,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private toReasoningEffortLabel(level: VSCloneReasoningEffortLevel): string {
 		switch (level) {
 			case "xhigh":
-				return localize("vsclone.composer.reasoningEffort.xhigh", "xhigh");
+				return localize("vsclone.composer.reasoningEffort.xhigh", "Xhigh");
 			case "max":
 				return localize("vsclone.composer.reasoningEffort.max", "Max");
 			case "high":

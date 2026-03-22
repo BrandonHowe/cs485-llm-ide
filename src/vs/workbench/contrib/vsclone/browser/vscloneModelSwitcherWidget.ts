@@ -133,9 +133,6 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 
 		const selection = this.getCurrentSelection();
 		this.button.replaceChildren(this.createButtonModelLabel(selection));
-		if (selection) {
-			this.button.appendChild(this.createButtonProviderLabel(selection.vendor.toLowerCase()));
-		}
 		this.button.appendChild(this.createButtonChevron());
 		this.button.setAttribute('aria-expanded', String(this.isOpen));
 		// Announce the current model in the control name so assistive tech users can verify selection quickly.

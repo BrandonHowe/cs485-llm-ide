@@ -43,6 +43,30 @@ interface ISubmitPromptTarget {
 	submitPrompt: () => Promise<void>;
 }
 
+interface IComposerStateTarget {
+	[key: string]: unknown;
+	activeThreadId?: string;
+	submittingPrompt: boolean;
+	composerInput: HTMLTextAreaElement;
+	composerSendButton: HTMLButtonElement;
+	reasoningEffortSelect?: HTMLSelectElement;
+	reasoningEffortContainer?: HTMLElement;
+	updateComposerState: () => void;
+	getBusyThreadId: () => string | undefined;
+	getCurrentComposerModelSelection: (threadId: string | undefined) => unknown;
+	refreshPlanModeControl: (composerBusy?: boolean) => void;
+	getCurrentComposerMode: () => 'act' | 'plan';
+}
+
+interface IComposerPrimaryActionTarget {
+	[key: string]: unknown;
+	handleComposerPrimaryAction: () => Promise<void>;
+	getBusyThreadId: () => string | undefined;
+	sessionService: { cancelThread: (threadId: string) => void };
+	updateComposerState: () => void;
+	submitPrompt: () => Promise<void>;
+}
+
 interface IRenderToolAwareAssistantTarget {
 	[key: string]: unknown;
 	renderToolAwareAssistantText: (container: HTMLElement, text: string, streaming: boolean) => void;
@@ -365,36 +389,40 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		const parent = document.createElement('div');
 		target.renderConversationSurface(parent);
 		const composer = parent.querySelector('.vsclone-thread-composer') as HTMLElement;
+		const toolbar = parent.querySelector('.vsclone-thread-composer-toolbar') as HTMLElement;
 		const controls = parent.querySelector('.vsclone-thread-composer-controls') as HTMLElement;
-		const planModeRow = parent.querySelector('.vsclone-thread-plan-mode') as HTMLElement;
-		const planModeSwitch = parent.querySelector('.vsclone-thread-plan-mode-switch') as HTMLButtonElement;
+		const addContextRoot = parent.querySelector('.vsclone-add-context-root') as HTMLElement;
+		const addContextButton = parent.querySelector('.vsclone-add-context-button') as HTMLButtonElement;
+		const addContextMenu = parent.querySelector('.vsclone-add-context-menu') as HTMLElement;
+		const sendButton = parent.querySelector('.vsclone-thread-composer-send') as HTMLButtonElement;
 		const hint = parent.querySelector('.vsclone-thread-composer-hint') as HTMLElement;
 		assert.ok(parent.querySelector('.vsclone-thread-model-switcher'));
 		assert.ok(parent.querySelector('.vsclone-thread-reasoning-level-select'));
-		assert.ok(planModeRow);
-		assert.strictEqual(controls.contains(planModeRow), false);
+		assert.ok(toolbar);
+		assert.ok(addContextRoot);
+		assert.ok(addContextMenu);
 		assert.deepStrictEqual(
 			{
-				role: planModeSwitch.getAttribute('role'),
-				checked: planModeSwitch.getAttribute('aria-checked'),
-				state: (planModeRow.querySelector('.vsclone-thread-plan-mode-state') as HTMLElement).textContent,
-				description: (planModeRow.querySelector('.vsclone-thread-plan-mode-description') as HTMLElement).textContent,
-				order: {
-					controls: Array.from(composer.children).indexOf(controls),
-					mode: Array.from(composer.children).indexOf(planModeRow),
+				addContextHasPopup: addContextButton.getAttribute('aria-haspopup'),
+				menuHidden: addContextMenu.classList.contains('hidden'),
+				composerChildren: {
+					toolbar: Array.from(composer.children).indexOf(toolbar),
 					hint: Array.from(composer.children).indexOf(hint),
 				},
+				toolbarContainsAddContext: toolbar.contains(addContextRoot),
+				toolbarContainsControls: toolbar.contains(controls),
+				toolbarContainsSend: toolbar.contains(sendButton),
 			},
 			{
-				role: 'switch',
-				checked: 'true',
-				state: 'On',
-				description: 'Read-only planning',
-				order: {
-					controls: 2,
-					mode: 3,
-					hint: 4,
+				addContextHasPopup: 'menu',
+				menuHidden: true,
+				composerChildren: {
+					toolbar: 1,
+					hint: 2,
 				},
+				toolbarContainsAddContext: true,
+				toolbarContainsControls: true,
+				toolbarContainsSend: true,
 			},
 		);
 		assert.strictEqual((parent.querySelector('.vsclone-thread-action-button') as HTMLButtonElement).getAttribute('aria-label'), 'Show chat history');
@@ -469,6 +497,78 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.strictEqual(capturedOptions?.modelSelection?.modelIdentifier, 'openai/gpt-5.3-codex');
 		assert.strictEqual(capturedOptions?.modelSelection?.reasoningEffort, 'high');
 		assert.strictEqual(boundThreadId, 'thread-new');
+	});
+
+	test('updateComposerState replaces send with stop while the active thread is streaming', () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IComposerStateTarget;
+		const composerInput = document.createElement('textarea');
+		const composerSendButton = document.createElement('button');
+		let capturedPlanModeBusy: boolean | undefined;
+
+		target.activeThreadId = 'thread-1';
+		target.submittingPrompt = false;
+		target.composerInput = composerInput;
+		target.composerSendButton = composerSendButton;
+		target.getBusyThreadId = () => 'thread-1';
+		// The stop affordance must remain available even if the selected model disappears mid-stream.
+		target.getCurrentComposerModelSelection = () => undefined;
+		target.refreshPlanModeControl = composerBusy => {
+			capturedPlanModeBusy = composerBusy;
+		};
+		target.getCurrentComposerMode = () => 'act';
+
+		target.updateComposerState();
+
+		assert.deepStrictEqual(
+			{
+				label: composerSendButton.textContent,
+				disabled: composerSendButton.disabled,
+				stopMode: composerSendButton.classList.contains('stop-mode'),
+				ariaLabel: composerSendButton.getAttribute('aria-label'),
+				title: composerSendButton.title,
+				inputDisabled: composerInput.disabled,
+				placeholder: composerInput.placeholder,
+				planModeBusy: capturedPlanModeBusy,
+			},
+			{
+				label: 'Stop',
+				disabled: false,
+				stopMode: true,
+				ariaLabel: 'Stop response generation',
+				title: 'Stop response generation',
+				inputDisabled: true,
+				placeholder: 'Waiting for response...',
+				planModeBusy: true,
+			},
+		);
+	});
+
+	test('handleComposerPrimaryAction cancels the active thread instead of sending a new prompt', async () => {
+		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+		const target = pane as unknown as IComposerPrimaryActionTarget;
+		let cancelledThreadId: string | undefined;
+		let updateComposerStateCalls = 0;
+		let submitPromptCalls = 0;
+
+		target.getBusyThreadId = () => 'thread-1';
+		target.sessionService = {
+			cancelThread: threadId => {
+				cancelledThreadId = threadId;
+			},
+		};
+		target.updateComposerState = () => {
+			updateComposerStateCalls += 1;
+		};
+		target.submitPrompt = async () => {
+			submitPromptCalls += 1;
+		};
+
+		await target.handleComposerPrimaryAction();
+
+		assert.strictEqual(cancelledThreadId, 'thread-1');
+		assert.strictEqual(updateComposerStateCalls, 1);
+		assert.strictEqual(submitPromptCalls, 0);
 	});
 
 	test('thread selection refreshes model switcher context on openSession', async () => {
