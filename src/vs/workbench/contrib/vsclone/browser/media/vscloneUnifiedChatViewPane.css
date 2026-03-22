@@ -885,6 +885,46 @@
 	display: none;
 }
 
+.vsclone-image-preview-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 10000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: color-mix(in srgb, black 70%, transparent 30%);
+	cursor: pointer;
+}
+
+.vsclone-image-preview-overlay-img {
+	max-width: 75vw;
+	max-height: 75vh;
+	border-radius: 6px;
+	box-shadow: 0 8px 32px color-mix(in srgb, black 60%, transparent 40%);
+}
+
+.vsclone-image-preview-close {
+	position: absolute;
+	top: 16px;
+	right: 16px;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	border-radius: 50%;
+	background: color-mix(in srgb, black 50%, transparent 50%);
+	color: white;
+	font-size: 16px;
+	cursor: pointer;
+}
+
+.vsclone-image-preview-close:hover {
+	background: color-mix(in srgb, black 70%, transparent 30%);
+}
+
 .vsclone-thread-composer-controls {
 	display: flex;
 	align-items: center;
@@ -991,16 +1031,35 @@
 }
 
 .vsclone-add-context-menu-toggle {
+	position: relative;
 	margin-left: auto;
-	width: 8px;
-	height: 8px;
-	border-radius: 50%;
-	background: color-mix(in srgb, var(--vscode-editor-foreground) 20%, transparent 80%);
+	width: 28px;
+	height: 16px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--vscode-editor-foreground) 22%, var(--vscode-editor-background) 78%);
 	transition: background 120ms ease;
+	flex: 0 0 auto;
+}
+
+.vsclone-add-context-menu-toggle::after {
+	content: '';
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	background: var(--vscode-editor-background);
+	box-shadow: 0 0.5px 2px color-mix(in srgb, black 30%, transparent 70%);
+	transition: transform 120ms ease;
 }
 
 .vsclone-add-context-menu-toggle.active {
 	background: var(--vscode-button-background);
+}
+
+.vsclone-add-context-menu-toggle.active::after {
+	transform: translateX(12px);
 }
 
 /* Scope with the pane class so we override global workbench select border defaults. */

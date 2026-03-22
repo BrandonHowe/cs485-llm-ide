@@ -24,16 +24,24 @@ import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
 
 class TestChatApiService implements IVSCloneChatApiService {
 	declare readonly _serviceBrand: undefined;
+	readonly observedAgentLoopOptions: IVSCloneApiSubmitOptions[] = [];
+	private readonly scriptedResponses: readonly string[];
+	private requestIndex = 0;
 
-	constructor(private readonly scriptedResponse: string) { }
+	constructor(scriptedResponse: string | readonly string[]) {
+		this.scriptedResponses = Array.isArray(scriptedResponse) ? scriptedResponse : [scriptedResponse];
+	}
 
 	submitApiPrompt(_options: IVSCloneApiSubmitOptions): IVSCloneApiRequestHandle {
 		throw new Error('submitApiPrompt is not used in this test');
 	}
 
-	submitApiPromptForAgentLoop(_options: IVSCloneApiSubmitOptions, observer: IVSCloneApiStreamObserver): IVSCloneApiRequestHandle {
+	submitApiPromptForAgentLoop(options: IVSCloneApiSubmitOptions, observer: IVSCloneApiStreamObserver): IVSCloneApiRequestHandle {
+		this.observedAgentLoopOptions.push(options);
+		const scriptedResponse = this.scriptedResponses[Math.min(this.requestIndex, this.scriptedResponses.length - 1)] ?? '';
+		this.requestIndex += 1;
 		const done = Promise.resolve().then(() => {
-			observer.onDelta?.(this.scriptedResponse);
+			observer.onDelta?.(scriptedResponse);
 			observer.onComplete?.();
 		});
 		return {
@@ -102,6 +110,28 @@ class TestHistoryService implements IVSCloneChatHistoryService {
 	async clearAll(_scope: VSCloneChatHistoryScope): Promise<void> { }
 }
 
+async function withMutedConsole(run: () => Promise<void>): Promise<void> {
+	const originalConsole = {
+		debug: console.debug,
+		info: console.info,
+		warn: console.warn,
+		error: console.error,
+	};
+	console.debug = () => undefined;
+	console.info = () => undefined;
+	console.warn = () => undefined;
+	console.error = () => undefined;
+
+	try {
+		await run();
+	} finally {
+		console.debug = originalConsole.debug;
+		console.info = originalConsole.info;
+		console.warn = originalConsole.warn;
+		console.error = originalConsole.error;
+	}
+}
+
 suite('VSCloneAgentLoopService', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -136,33 +166,25 @@ suite('VSCloneAgentLoopService', () => {
 			historyService,
 			new NullLogService(),
 		);
-		const originalConsole = {
-			debug: console.debug,
-			info: console.info,
-			warn: console.warn,
-			error: console.error,
-		};
-		console.debug = () => undefined;
-		console.info = () => undefined;
-		console.warn = () => undefined;
-		console.error = () => undefined;
 
 		try {
-			const handle = service.runAgentLoop({
-				threadId: 'thread-1',
-				turnId: 'turn-1',
-				sequence: 1,
-				sessionResource: 'vsclone://api/thread-1',
-				promptText: 'Make a browser game idea',
-				mode: 'plan',
-				vendor: 'openai' as VSCloneModelVendor,
-				modelId: 'gpt-5.3-codex',
-				modelIdentifier: 'openai/gpt-5.3-codex',
-				previousTurns: [],
-				systemMessage: 'SYSTEM',
-			});
+			await withMutedConsole(async () => {
+				const handle = service.runAgentLoop({
+					threadId: 'thread-1',
+					turnId: 'turn-1',
+					sequence: 1,
+					sessionResource: 'vsclone://api/thread-1',
+					promptText: 'Make a browser game idea',
+					mode: 'plan',
+					vendor: 'openai' as VSCloneModelVendor,
+					modelId: 'gpt-5.3-codex',
+					modelIdentifier: 'openai/gpt-5.3-codex',
+					previousTurns: [],
+					systemMessage: 'SYSTEM',
+				});
 
-			await handle.done;
+				await handle.done;
+			});
 
 			const replacementUpdate = historyService.updates.find(update => typeof update.responsePlainTextReplace === 'string');
 			assert.ok(replacementUpdate);
@@ -174,10 +196,65 @@ suite('VSCloneAgentLoopService', () => {
 			assert.ok(persistedTurn.responsePlainText.includes('<tool_result tool_name="attempt_completion" success="true">'));
 			assert.ok(!persistedTurn.responsePlainText.includes('<tool_result>\ntestgame/\n</tool_result>'));
 		} finally {
-			console.debug = originalConsole.debug;
-			console.info = originalConsole.info;
-			console.warn = originalConsole.warn;
-			console.error = originalConsole.error;
+			service.dispose();
+		}
+	});
+
+	test('sends image attachments only with the initial model request', async () => {
+		const imageAttachments = [{ mimeType: 'image/png', base64Data: 'ZmFrZS1pbWFnZQ==' }];
+		const apiService = new TestChatApiService([
+			[
+				'Thinking: I will inspect the workspace before answering.',
+				'<tool_call>',
+				'<tool_name>list_directory</tool_name>',
+				'<path>.</path>',
+				'</tool_call>',
+			].join('\n'),
+			[
+				'Thinking: I have enough context to finish.',
+				'<tool_call>',
+				'<tool_name>attempt_completion</tool_name>',
+				'<result>Done.</result>',
+				'</tool_call>',
+			].join('\n'),
+		]);
+		const service = new VSCloneAgentLoopService(
+			apiService,
+			new TestToolExecutionService(),
+			new TestHistoryService(),
+			new NullLogService(),
+		);
+
+		try {
+			await withMutedConsole(async () => {
+				const handle = service.runAgentLoop({
+					threadId: 'thread-images',
+					turnId: 'turn-images',
+					sequence: 1,
+					sessionResource: 'vsclone://api/thread-images',
+					promptText: 'Look at this screenshot and inspect the workspace',
+					mode: 'act',
+					vendor: 'openai' as VSCloneModelVendor,
+					modelId: 'gpt-5.3-codex',
+					modelIdentifier: 'openai/gpt-5.3-codex',
+					previousTurns: [],
+					systemMessage: 'SYSTEM',
+					imageAttachments,
+				});
+
+				await handle.done;
+			});
+
+			// Images are part of the original user prompt only; the follow-up request after tool
+			// execution should reuse prior transcript context instead of re-uploading the same image.
+			assert.deepStrictEqual(
+				apiService.observedAgentLoopOptions.map(options => options.imageAttachments),
+				[
+					imageAttachments,
+					undefined,
+				],
+			);
+		} finally {
 			service.dispose();
 		}
 	});

@@ -3,10 +3,16 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+/* eslint-disable local/code-no-unexternalized-strings */
+// Keep this view's DOM event names, CSS classes, ARIA roles, parser tokens, and other transport
+// or styling literals inline because they are implementation details, not user-facing copy. The
+// actual visible strings in this file still go through `localize(...)` at their call sites.
+
 import "./media/vscloneUnifiedChatViewPane.css";
 import {
 	addDisposableListener,
 	EventType,
+	getActiveWindow,
 	getWindow,
 } from "../../../../base/browser/dom.js";
 import { RunOnceScheduler } from "../../../../base/common/async.js";
@@ -709,16 +715,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		addImageItem.appendChild(addImageIcon);
 		addImageItem.appendChild(document.createTextNode(localize("vsclone.composer.addImage", "Add Image")));
 
-		const addFileItem = document.createElement('button');
-		addFileItem.type = 'button';
-		addFileItem.className = 'vsclone-add-context-menu-item';
-		addFileItem.setAttribute('role', 'menuitem');
-		const addFileIcon = document.createElement('span');
-		addFileIcon.className = 'codicon codicon-new-file';
-		addFileIcon.setAttribute('aria-hidden', 'true');
-		addFileItem.appendChild(addFileIcon);
-		addFileItem.appendChild(document.createTextNode(localize("vsclone.composer.addFile", "Add File")));
-
 		const planModeItem = document.createElement('button');
 		planModeItem.type = 'button';
 		planModeItem.className = 'vsclone-add-context-menu-item';
@@ -733,7 +729,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		planModeItem.appendChild(planModeToggle);
 
 		addContextMenu.appendChild(addImageItem);
-		addContextMenu.appendChild(addFileItem);
 		addContextMenu.appendChild(planModeItem);
 		addContextRoot.appendChild(addContextMenu);
 
@@ -858,6 +853,28 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		);
 
 		this._register(
+			addDisposableListener(input, 'paste', (event: ClipboardEvent) => {
+				const items = event.clipboardData?.items;
+				if (!items) {
+					return;
+				}
+				const imageFiles: File[] = [];
+				for (const item of Array.from(items)) {
+					if (item.type.startsWith('image/')) {
+						const file = item.getAsFile();
+						if (file) {
+							imageFiles.push(file);
+						}
+					}
+				}
+				if (imageFiles.length > 0) {
+					event.preventDefault();
+					void this.handleImageFiles(imageFiles);
+				}
+			}),
+		);
+
+		this._register(
 			addDisposableListener(send, EventType.CLICK, () => {
 				void this.submitPrompt();
 			}),
@@ -909,12 +926,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					void this.handleImageFiles(imageFileInput.files);
 				}
 				imageFileInput.value = '';
-			}),
-		);
-		this._register(
-			addDisposableListener(addFileItem, EventType.CLICK, () => {
-				toggleAddContextMenu(false);
-				// TODO: implement file picker
 			}),
 		);
 		this._register(
@@ -1025,7 +1036,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 	}
 
-	private async handleImageFiles(files: FileList): Promise<void> {
+	private async handleImageFiles(files: FileList | File[]): Promise<void> {
 		const selectedModel = this.getCurrentComposerModelSelection(this.activeThreadId);
 		if (selectedModel) {
 			const modelDescriptor = this.modelCatalogService.getModel(selectedModel.modelIdentifier);
@@ -1087,10 +1098,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			preview.className = 'vsclone-composer-image-thumb-img';
 			this._register(
 				addDisposableListener(preview, EventType.CLICK, () => {
-					// Open image in a new editor tab for full-resolution viewing
-					const blob = this.base64ToBlob(img.base64Data, img.mimeType);
-					const url = URL.createObjectURL(blob);
-					window.open(url, '_blank');
+					this.showImagePreviewOverlay(img.dataUrl);
 				}),
 			);
 
@@ -1117,13 +1125,42 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 	}
 
-	private base64ToBlob(base64: string, mimeType: string): Blob {
-		const bytes = atob(base64);
-		const buffer = new Uint8Array(bytes.length);
-		for (let i = 0; i < bytes.length; i++) {
-			buffer[i] = bytes.charCodeAt(i);
-		}
-		return new Blob([buffer], { type: mimeType });
+	private showImagePreviewOverlay(dataUrl: string): void {
+		// Resolve the owning workbench window so the preview attaches to the same document as the
+		// clicked thumbnail. Using the global `document` breaks when this view is hosted in a
+		// secondary window.
+		const targetWindow = this.rootContainer ? getWindow(this.rootContainer) : getActiveWindow();
+		const targetDocument = targetWindow.document;
+		const overlay = targetDocument.createElement('div');
+		overlay.className = 'vsclone-image-preview-overlay';
+		const closeBtn = targetDocument.createElement('button');
+		closeBtn.type = 'button';
+		closeBtn.className = 'vsclone-image-preview-close';
+		closeBtn.setAttribute('aria-label', localize("vsclone.imagePreview.close", "Close preview"));
+		const closeIcon = targetDocument.createElement('span');
+		closeIcon.className = 'codicon codicon-close';
+		closeIcon.setAttribute('aria-hidden', 'true');
+		closeBtn.appendChild(closeIcon);
+		const img = targetDocument.createElement('img');
+		img.src = dataUrl;
+		img.className = 'vsclone-image-preview-overlay-img';
+		overlay.appendChild(closeBtn);
+		overlay.appendChild(img);
+		const close = () => overlay.remove();
+		overlay.addEventListener('click', (e) => {
+			if (e.target === overlay) {
+				close();
+			}
+		});
+		closeBtn.addEventListener('click', close);
+		overlay.addEventListener('keydown', (e) => {
+			if (e.key === 'Escape') {
+				close();
+			}
+		});
+		overlay.tabIndex = 0;
+		targetWindow.document.body.appendChild(overlay);
+		overlay.focus();
 	}
 
 	private applyResponsiveLayout(width: number): void {

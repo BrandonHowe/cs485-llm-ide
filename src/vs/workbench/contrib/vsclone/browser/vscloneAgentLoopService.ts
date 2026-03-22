@@ -139,7 +139,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			// obeyed the tool protocol. Capture the transcript prefix now so we can replace only this
 			// iteration's segment with a sanitized version once the model finishes.
 			const responsePrefix = this.getCurrentTurnResponseText(options.threadId, options.turnId);
-			const iterationResult = await this.runModelIteration(options, messages, state);
+			const iterationResult = await this.runModelIteration(options, messages, state, iteration === 1);
 			if (iterationResult.errorMessage) {
 				this.applyError(options, state, iterationResult.errorMessage);
 				return;
@@ -218,7 +218,12 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 		this.applyError(options, state, `Agent loop exceeded the safety limit of ${maxAgentIterations} iterations.`);
 	}
 
-	private async runModelIteration(options: IVSCloneAgentLoopOptions, messages: readonly ILoopMessage[], state: ILoopState): Promise<ILoopIterationResult> {
+	private async runModelIteration(
+		options: IVSCloneAgentLoopOptions,
+		messages: readonly ILoopMessage[],
+		state: ILoopState,
+		includeImageAttachments: boolean,
+	): Promise<ILoopIterationResult> {
 		const lastMessage = messages.at(-1);
 		if (!lastMessage || lastMessage.role !== 'user') {
 			return {
@@ -244,7 +249,10 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			reasoningEffort: options.reasoningEffort,
 			previousTurns: messages.slice(0, -1),
 			systemMessage: options.systemMessage,
-			imageAttachments: iteration === 1 ? options.imageAttachments : undefined,
+			// Composer images belong only to the original user prompt. Tool-result follow-up turns
+			// already preserve that context in the conversation transcript, so re-sending the same
+			// binary payload would waste tokens and can skew provider-side multimodal routing.
+			imageAttachments: includeImageAttachments ? options.imageAttachments : undefined,
 		}, {
 			onDelta: delta => {
 				responseText += delta;
