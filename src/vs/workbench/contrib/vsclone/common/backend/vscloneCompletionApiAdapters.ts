@@ -82,19 +82,31 @@ function buildOpenAIRequest(envelope: IVSCloneCompletionPromptEnvelope, selectio
 function buildAnthropicRequest(envelope: IVSCloneCompletionPromptEnvelope, selection: IVSCloneModelSelection): IVSCloneCompletionAdapterRequest {
 	const apiModelId = resolveVSCloneApiModelId('anthropic', selection.modelId);
 	assertSupportsAnthropicOAuthMessagesModel(apiModelId);
+	const stopSequences = sanitizeAnthropicStopSequences(envelope.stopTokens);
+
+	// Anthropic rejects stop sequences that contain only whitespace, which is exactly what the
+	// single-line completion prompt uses to stop at the next newline. Sanitize that vendor-specific
+	// constraint here so prompt construction can stay transport-agnostic across providers.
+	const body: Record<string, unknown> = {
+		model: apiModelId,
+		system: envelope.systemMessage,
+		messages: [{ role: 'user', content: envelope.promptText }],
+		max_tokens: envelope.maxTokens,
+		temperature: envelope.temperature,
+		stream: true,
+	};
+	if (stopSequences.length > 0) {
+		body.stop_sequences = stopSequences;
+	}
 
 	return {
 		url: defaultOAuthProviderConfig.anthropic.apiEndpoint,
-		body: {
-			model: apiModelId,
-			system: envelope.systemMessage,
-			messages: [{ role: 'user', content: envelope.promptText }],
-			max_tokens: envelope.maxTokens,
-			temperature: envelope.temperature,
-			stop_sequences: envelope.stopTokens,
-			stream: true,
-		},
+		body,
 	};
+}
+
+function sanitizeAnthropicStopSequences(stopTokens: readonly string[]): readonly string[] {
+	return stopTokens.filter(stopToken => stopToken.trim().length > 0);
 }
 
 function buildGoogleRequest(envelope: IVSCloneCompletionPromptEnvelope, selection: IVSCloneModelSelection): IVSCloneCompletionAdapterRequest {

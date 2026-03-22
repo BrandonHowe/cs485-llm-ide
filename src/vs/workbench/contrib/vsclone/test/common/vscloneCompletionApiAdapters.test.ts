@@ -59,6 +59,21 @@ suite('VSCloneCompletionApiAdapters', () => {
 		assert.strictEqual((googleRequest.body.generationConfig as { temperature?: number }).temperature, 0.01);
 	});
 
+	test('omits whitespace-only stop sequences for Anthropic completion models', () => {
+		const anthropicRequest = buildRequest(baseEnvelope, createSelection('anthropic', 'claude-haiku-4-5-20251001'));
+
+		assert.strictEqual(hasKey(anthropicRequest.body, { stop_sequences: true }), false);
+	});
+
+	test('preserves non-whitespace stop sequences for Anthropic completion models', () => {
+		const anthropicRequest = buildRequest({
+			...baseEnvelope,
+			stopTokens: ['<END>'],
+		}, createSelection('anthropic', 'claude-haiku-4-5-20251001'));
+
+		assert.deepStrictEqual(anthropicRequest.body.stop_sequences, ['<END>']);
+	});
+
 	test('maps Anthropic picker IDs to real provider model aliases', () => {
 		// The UI currently exposes VSClone compatibility labels, but the transport must emit the
 		// exact Anthropic IDs from the current `/v1/models` response rather than the older aliases.
@@ -68,9 +83,12 @@ suite('VSCloneCompletionApiAdapters', () => {
 		assert.strictEqual(resolveVSCloneApiModelId('anthropic', 'claude-haiku-4.5'), 'claude-haiku-4-5-20251001');
 	});
 
-	test('maps Google picker IDs to the live provider model aliases', () => {
-		assert.strictEqual(resolveVSCloneApiModelId('google', 'gemini-3-pro'), 'gemini-3.1-pro-preview');
-		assert.strictEqual(resolveVSCloneApiModelId('google', 'gemini-3-flash'), 'gemini-3-flash-preview');
+	test('keeps Google picker IDs aligned with the live provider model aliases', () => {
+		// The current catalog already exposes the provider-facing IDs for Google's supported VSClone
+		// entries, so the resolver should preserve them exactly rather than reintroducing older aliases.
+		assert.strictEqual(resolveVSCloneApiModelId('google', 'gemini-3.1-pro-preview'), 'gemini-3.1-pro-preview');
+		assert.strictEqual(resolveVSCloneApiModelId('google', 'gemini-3-flash-preview'), 'gemini-3-flash-preview');
+		assert.strictEqual(resolveVSCloneApiModelId('google', 'gemini-3.1-flash-lite-preview'), 'gemini-3.1-flash-lite-preview');
 	});
 
 	test('rejects Anthropic completion models that the OAuth Messages beta still fails to serve', () => {
@@ -85,5 +103,11 @@ suite('VSCloneCompletionApiAdapters', () => {
 
 		assert.strictEqual(hasKey(request.body, { max_output_tokens: true }), false);
 		assert.deepStrictEqual(request.body.reasoning, { effort: 'low' });
+	});
+
+	test('forwards explicit no-reasoning for the gpt-5-nano inline fallback', () => {
+		const request = buildRequest(baseEnvelope, createSelection('openai', 'gpt-5-nano', 'none'));
+
+		assert.deepStrictEqual(request.body.reasoning, { effort: 'none' });
 	});
 });

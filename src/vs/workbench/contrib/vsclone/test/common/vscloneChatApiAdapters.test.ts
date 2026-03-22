@@ -71,4 +71,32 @@ suite('VSCloneChatApiAdapters', () => {
 			parts: [{ text: 'what model are you' }],
 		}]);
 	});
+
+	test('google parser surfaces prompt feedback blocks as explicit errors', () => {
+		const parsed = getVendorAdapter('google').parseLine(`data: ${JSON.stringify({
+			promptFeedback: {
+				blockReason: 'SAFETY',
+				blockReasonMessage: 'blocked for testing',
+			},
+		})}`, undefined);
+
+		assert.deepStrictEqual(parsed, {
+			type: 'error',
+			message: 'Google completion blocked: SAFETY (blocked for testing).',
+		});
+	});
+
+	test('google parser surfaces non-stop finish reasons as explicit errors', () => {
+		const parsed = getVendorAdapter('google').parseLine(`data: ${JSON.stringify({
+			candidates: [{
+				finishReason: 'SAFETY',
+				finishMessage: 'candidate blocked',
+			}],
+		})}`, undefined);
+
+		assert.deepStrictEqual(parsed, {
+			type: 'error',
+			message: 'Google completion finished with SAFETY: candidate blocked.',
+		});
+	});
 });

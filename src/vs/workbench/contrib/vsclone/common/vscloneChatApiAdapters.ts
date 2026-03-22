@@ -362,27 +362,39 @@ const googleAdapter: IVSCloneVendorAdapter = {
 
 		try {
 			const parsed = JSON.parse(payload);
+			if (parsed.error) {
+				return {
+					type: "error",
+					message: parsed.error.message ?? JSON.stringify(parsed.error) ?? "Google completion request failed.",
+				};
+			}
+			const promptFeedbackMessage = getGooglePromptFeedbackErrorMessage(parsed);
+			if (promptFeedbackMessage) {
+				return {
+					type: "error",
+					message: promptFeedbackMessage,
+				};
+			}
 			const candidates = parsed.candidates;
 			if (Array.isArray(candidates) && candidates.length > 0) {
 				const candidate = candidates[0];
-				if (candidate.finishReason === "STOP") {
-					// May still have final text delta
-					const text = candidate.content?.parts?.[0]?.text;
+				const text = getGoogleCandidateText(candidate);
+				if (candidate.finishReason === "STOP" || candidate.finishReason === "MAX_TOKENS") {
 					if (typeof text === "string" && text.length > 0) {
 						return { type: "delta", text };
 					}
 					return { type: "done" };
 				}
-				const text = candidate.content?.parts?.[0]?.text;
-				if (typeof text === "string") {
+				if (typeof text === "string" && text.length > 0) {
 					return { type: "delta", text };
 				}
-			}
-			if (parsed.error) {
-				return {
-					type: "error",
-					message: parsed.error.message ?? JSON.stringify(parsed.error),
-				};
+				const finishReasonMessage = getGoogleFinishReasonErrorMessage(candidate);
+				if (finishReasonMessage) {
+					return {
+						type: "error",
+						message: finishReasonMessage,
+					};
+				}
 			}
 		} catch {
 			// Unparseable line - ignore
@@ -391,6 +403,48 @@ const googleAdapter: IVSCloneVendorAdapter = {
 		return undefined;
 	},
 };
+
+function getGoogleCandidateText(
+	candidate: { content?: { parts?: Array<{ text?: string }> } } | undefined,
+): string | undefined {
+	const parts = candidate?.content?.parts;
+	if (!Array.isArray(parts) || parts.length === 0) {
+		return undefined;
+	}
+
+	const text = parts
+		.map(part => typeof part.text === "string" ? part.text : "")
+		.join("");
+	return text.length > 0 ? text : undefined;
+}
+
+function getGooglePromptFeedbackErrorMessage(
+	parsed: { promptFeedback?: { blockReason?: string; blockReasonMessage?: string } },
+): string | undefined {
+	const blockReason = parsed.promptFeedback?.blockReason;
+	if (!blockReason) {
+		return undefined;
+	}
+
+	const blockReasonMessage = parsed.promptFeedback?.blockReasonMessage?.trim();
+	return blockReasonMessage
+		? `Google completion blocked: ${blockReason} (${blockReasonMessage}).`
+		: `Google completion blocked: ${blockReason}.`;
+}
+
+function getGoogleFinishReasonErrorMessage(
+	candidate: { finishReason?: string; finishMessage?: string } | undefined,
+): string | undefined {
+	const finishReason = candidate?.finishReason;
+	if (!finishReason || finishReason === "STOP" || finishReason === "MAX_TOKENS") {
+		return undefined;
+	}
+
+	const finishMessage = candidate?.finishMessage?.trim();
+	return finishMessage
+		? `Google completion finished with ${finishReason}: ${finishMessage}.`
+		: `Google completion finished with ${finishReason}.`;
+}
 
 // -- Dispatch --
 

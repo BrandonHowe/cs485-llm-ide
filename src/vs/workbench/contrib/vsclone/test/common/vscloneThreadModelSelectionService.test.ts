@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { VSCloneModelCatalogService } from '../../common/vscloneModelCatalogService.js';
+import { IVSCloneModelCatalogModelDescriptor, IVSCloneModelCatalogProviderDescriptor, IVSCloneModelCatalogService, IVSCloneModelCatalogState, VSCloneModelCatalogService } from '../../common/vscloneModelCatalogService.js';
 import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderPreferencesService.js';
 import { IVSCloneModelSelection, VSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
@@ -39,6 +40,68 @@ suite('VSCloneThreadModelSelectionService', () => {
 		await selectionService.initialize();
 
 		return { providerPreferencesService, oauthService, catalogService, selectionService, backendService };
+	}
+
+	function createSelectableModel(
+		identifier: string,
+		modelName: string,
+		reasoningEffortLevels?: readonly ('none' | 'minimal' | 'lite' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'standard')[],
+		defaultReasoningEffort?: IVSCloneModelSelection['reasoningEffort'],
+	): IVSCloneModelCatalogModelDescriptor {
+		const [vendor, modelId] = identifier.split('/', 2) as [IVSCloneModelSelection['vendor'], string];
+		return {
+			identifier,
+			vendor,
+			modelId,
+			modelName,
+			reasoningEffortLevels,
+			defaultReasoningEffort,
+			isSelectable: true,
+		};
+	}
+
+	/**
+	 * The production catalog only gates models at the provider level, so a fake catalog is the
+	 * simplest way to exercise the inline fallback order when Spark is intentionally omitted but the
+	 * rest of the provider chain still exists.
+	 */
+	class StaticCatalogService implements IVSCloneModelCatalogService {
+		declare readonly _serviceBrand: undefined;
+		readonly onDidChangeCatalog = Event.None;
+
+		constructor(private readonly state: IVSCloneModelCatalogState) { }
+
+		async refreshCatalog(): Promise<void> {
+			return;
+		}
+
+		getState(): IVSCloneModelCatalogState {
+			return {
+				...this.state,
+				providers: [...this.state.providers],
+				models: [...this.state.models],
+			};
+		}
+
+		getProviders(): readonly IVSCloneModelCatalogProviderDescriptor[] {
+			return [...this.state.providers];
+		}
+
+		getModels(providerId?: IVSCloneModelSelection['vendor']): readonly IVSCloneModelCatalogModelDescriptor[] {
+			if (!providerId) {
+				return [...this.state.models];
+			}
+
+			return this.state.models.filter(model => model.vendor === providerId);
+		}
+
+		getModel(identifier: string): IVSCloneModelCatalogModelDescriptor | undefined {
+			return this.state.models.find(model => model.identifier === identifier);
+		}
+
+		getSelectableModels(): readonly IVSCloneModelCatalogModelDescriptor[] {
+			return this.state.models.filter(model => model.isSelectable);
+		}
 	}
 
 	function toSelection(modelIdentifier: string, vendor: IVSCloneModelSelection['vendor'], modelId: string, modelName: string, reasoningEffort?: 'low' | 'medium' | 'high'): IVSCloneModelSelection {
@@ -86,6 +149,29 @@ suite('VSCloneThreadModelSelectionService', () => {
 		assert.strictEqual(current?.reasoningEffort, 'lite');
 	});
 
+	test('falls back to gpt-5-nano when codex spark is not present in the inline policy chain', async () => {
+		const backendService = new TestVSCloneUnifiedChatBackendService();
+		const selectionService = store.add(new VSCloneThreadModelSelectionService(
+			backendService,
+			new StaticCatalogService({
+				status: 'ready',
+				providers: [],
+				models: [
+					createSelectableModel('openai/gpt-5-nano', 'GPT-5 Nano', ['high', 'low', 'none'], 'high'),
+					createSelectableModel('anthropic/claude-haiku-4-5-20251001', 'Haiku 4.5'),
+					createSelectableModel('google/gemini-3.1-flash-lite-preview', 'Gemini 3.1 Flash Lite', ['high', 'medium', 'low', 'minimal'], 'medium'),
+				],
+			}),
+		));
+
+		await selectionService.initialize();
+
+		const current = selectionService.getCurrentSelectionForThread('', 'editorInline');
+		assert.ok(current);
+		assert.strictEqual(current?.modelIdentifier, 'openai/gpt-5-nano');
+		assert.strictEqual(current?.reasoningEffort, 'none');
+	});
+
 	test('recent model identifiers dedupe and preserve recency', async () => {
 		const { catalogService, selectionService } = await createHarness();
 		const models = catalogService.getSelectableModels();
@@ -118,6 +204,34 @@ suite('VSCloneThreadModelSelectionService', () => {
 		const next = selectionService.getCurrentSelectionForThread('thread-1', 'chat');
 		assert.ok(next);
 		assert.notStrictEqual(next?.modelIdentifier, googleModel.identifier);
+	});
+
+	test('falls back to Google Flash Lite before Anthropic when OpenAI is unavailable', async () => {
+		const { providerPreferencesService, oauthService, catalogService, selectionService } = await createHarness();
+		await providerPreferencesService.setProviderEnabled('openai', false);
+		await providerPreferencesService.setProviderEnabled('google', true);
+		oauthService.setReady('google', true);
+		await catalogService.refreshCatalog();
+		await waitForCatalogToSettle(catalogService);
+
+		const current = selectionService.getCurrentSelectionForThread('', 'editorInline');
+		assert.ok(current);
+		assert.strictEqual(current?.modelIdentifier, 'google/gemini-3.1-flash-lite-preview');
+		assert.strictEqual(current?.reasoningEffort, 'minimal');
+	});
+
+	test('falls back to Anthropic Haiku 4.5 when OpenAI and Google are unavailable', async () => {
+		const { providerPreferencesService, oauthService, catalogService, selectionService } = await createHarness();
+		await providerPreferencesService.setProviderEnabled('openai', false);
+		await providerPreferencesService.setProviderEnabled('google', true);
+		oauthService.setReady('google', false);
+		await catalogService.refreshCatalog();
+		await waitForCatalogToSettle(catalogService);
+
+		const current = selectionService.getCurrentSelectionForThread('', 'editorInline');
+		assert.ok(current);
+		assert.strictEqual(current?.modelIdentifier, 'anthropic/claude-haiku-4-5-20251001');
+		assert.strictEqual(current?.reasoningEffort, undefined);
 	});
 
 	test('migrates the legacy editor-inline fallback to codex spark on restore', async () => {

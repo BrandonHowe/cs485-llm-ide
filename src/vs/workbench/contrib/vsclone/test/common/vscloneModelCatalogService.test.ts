@@ -38,6 +38,10 @@ suite('VSCloneModelCatalogService', () => {
 		assert.ok(openAIModel);
 		assert.deepStrictEqual(openAIModel?.reasoningEffortLevels, ['xhigh', 'high', 'medium', 'low']);
 		assert.strictEqual(openAIModel?.defaultReasoningEffort, 'medium');
+		const nanoModel = state.models.find(model => model.identifier === 'openai/gpt-5-nano');
+		assert.ok(nanoModel);
+		assert.deepStrictEqual(nanoModel?.reasoningEffortLevels, ['high', 'low', 'none']);
+		assert.strictEqual(nanoModel?.defaultReasoningEffort, 'high');
 		const anthropicModels = state.models.filter(model => model.vendor === 'anthropic');
 		// The OAuth-backed Anthropic transport currently limits the picker to the Haiku models we
 		// have verified against live `POST /v1/messages` sends, despite `/v1/models` listing more.

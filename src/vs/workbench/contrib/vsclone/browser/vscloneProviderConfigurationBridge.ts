@@ -8,7 +8,6 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { displayInfoOfOAuthProvider, VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
-import { IVSCloneProviderPreferencesService } from '../common/vscloneProviderPreferencesService.js';
 
 export interface IVSCloneProviderConfigurationBridge {
 	readonly _serviceBrand: undefined;
@@ -27,19 +26,17 @@ export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfi
 
 	constructor(
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
-		@IVSCloneProviderPreferencesService private readonly providerPreferencesService: IVSCloneProviderPreferencesService,
 		@IVSCloneOAuthService private readonly oAuthService: IVSCloneOAuthService,
 	) {
 	}
 
 	async openManageProvidersPicker(): Promise<void> {
-		await this.providerPreferencesService.initialize();
 		await this.oAuthService.initialize();
 
-		const providers = this.providerPreferencesService.getProviders();
 		const picks: IProviderActionPick[] = [];
 
-		// OAuth sign-in/sign-out picks per provider
+		// Keep provider management focused on auth state so the picker no longer exposes
+		// experimental visibility toggles that can unexpectedly hide models from the selector.
 		const allVendors: readonly VSCloneModelVendor[] = ['openai', 'anthropic', 'google'];
 		for (const vendor of allVendors) {
 			const oAuthState = this.oAuthService.state.providers[vendor];
@@ -64,26 +61,6 @@ export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfi
 			}
 		}
 
-		for (const provider of providers) {
-			const providerName = displayInfoOfOAuthProvider(provider.vendor).title;
-			picks.push({
-				label: provider.enabled
-					? localize('vsclone.providers.disable', 'Disable {0}', providerName)
-					: localize('vsclone.providers.enable', 'Enable {0}', providerName),
-				description: provider.enabled
-					? localize('vsclone.providers.disable.description', 'Hidden from model selector')
-					: localize('vsclone.providers.enable.description', 'Show in model selector'),
-				actionId: 'toggleEnabled',
-				vendor: provider.vendor,
-			});
-		}
-
-		picks.push({
-			label: localize('vsclone.providers.resetDefaults', 'Reset provider defaults'),
-			description: localize('vsclone.providers.resetDefaults.description', 'Re-enable OpenAI + Anthropic, disable Google'),
-			actionId: 'resetDefaults',
-		});
-
 		const selected = await this.quickInputService.pick(picks, {
 			canPickMany: false,
 			placeHolder: localize('vsclone.providers.manage.placeholder', 'Manage VSClone providers'),
@@ -101,25 +78,6 @@ export class VSCloneProviderConfigurationBridge implements IVSCloneProviderConfi
 
 		if (selected.actionId === 'oauthSignOut' && selected.vendor) {
 			await this.oAuthService.signOut(selected.vendor);
-			return;
-		}
-
-		if (selected.actionId === 'resetDefaults') {
-			await this.providerPreferencesService.resetDefaults();
-			return;
-		}
-
-		if (!selected.vendor) {
-			return;
-		}
-
-		const provider = this.providerPreferencesService.getProvider(selected.vendor);
-		if (!provider) {
-			return;
-		}
-
-		if (selected.actionId === 'toggleEnabled') {
-			await this.providerPreferencesService.setProviderEnabled(selected.vendor, !provider.enabled);
 		}
 	}
 }

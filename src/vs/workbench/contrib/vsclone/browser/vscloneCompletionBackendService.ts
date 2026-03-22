@@ -12,8 +12,25 @@ import { postProcessCompletion } from '../common/vscloneCompletionPostProcessor.
 import { IVSCloneCompletionPromptService } from '../common/vscloneCompletionPromptService.js';
 import { IVSCloneThreadModelSelectionService, IVSCloneModelSelection } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { IVSCloneCompletionApiService } from './vscloneCompletionApiService.js';
+import { type VSCloneReasoningEffortLevel, type IVSCloneModelCatalogModelDescriptor } from '../common/vscloneModelCatalogService.js';
 
 const defaultCompletionRequestTimeoutMs = 8_000;
+
+interface IVSCloneInlineCompletionFallbackCandidate {
+	readonly modelIdentifier: string;
+	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
+}
+
+/**
+ * Runtime retries should mirror the location-default policy for inline completions so a provider
+ * error degrades to the next cheapest viable option instead of silently dropping the suggestion.
+ */
+const editorInlineCompletionFallbackCandidates: readonly IVSCloneInlineCompletionFallbackCandidate[] = [
+	{ modelIdentifier: 'openai/gpt-5.3-codex-spark', reasoningEffort: 'lite' },
+	{ modelIdentifier: 'openai/gpt-5-nano', reasoningEffort: 'none' },
+	{ modelIdentifier: 'google/gemini-3.1-flash-lite-preview', reasoningEffort: 'minimal' },
+	{ modelIdentifier: 'anthropic/claude-haiku-4-5-20251001' },
+];
 
 /**
  * The completion backend keeps model policy, prompt shaping, timeout enforcement, and deterministic
@@ -46,10 +63,25 @@ export class VSCloneCompletionBackendService implements IVSCloneCompletionBacken
 				return undefined;
 			}
 
-			const envelope = this.promptService.buildPromptEnvelope(request, selection);
-			const rawText = await this.apiService.complete(envelope, selection, requestCts.token);
-			const normalized = this.normalizeBackendResult(rawText, request, selection);
-			return normalized?.insertText;
+			let attemptSelection = selection;
+			const retrySelections = this.getRetrySelectionsAfterFailure(selection);
+			while (true) {
+				try {
+					return await this.completeWithSelection(request, attemptSelection, requestCts.token);
+				} catch (error) {
+					if (isCancellationError(error) || requestCts.token.isCancellationRequested) {
+						throw error;
+					}
+
+					const retrySelection = retrySelections.shift();
+					if (!retrySelection) {
+						throw error;
+					}
+
+					this.logService.info(`[VSCloneCompletionBackend] Retrying inline completion with ${retrySelection.modelId} after ${attemptSelection.modelId} failed.`);
+					attemptSelection = retrySelection;
+				}
+			}
 		} catch (error) {
 			if (!isCancellationError(error) && !requestCts.token.isCancellationRequested) {
 				this.logService.debug('[VSCloneCompletionBackend] Completion backend failed.', error);
@@ -79,6 +111,61 @@ export class VSCloneCompletionBackendService implements IVSCloneCompletionBacken
 		}
 
 		return this.selectionService.getCurrentSelectionForThread('', 'editorInline');
+	}
+
+	private async completeWithSelection(
+		request: IVSCloneCompletionRequest,
+		selection: IVSCloneModelSelection,
+		token: CancellationToken,
+	): Promise<string | undefined> {
+		const envelope = this.promptService.buildPromptEnvelope(request, selection);
+		const rawText = await this.apiService.complete(envelope, selection, token);
+		const normalized = this.normalizeBackendResult(rawText, request, selection);
+		return normalized?.insertText;
+	}
+
+	/**
+	 * Runtime retries are limited to the inline policy chain so provider failures can degrade to the
+	 * next configured model without changing the meaning of "no completion text" responses.
+	 */
+	private getRetrySelectionsAfterFailure(selection: IVSCloneModelSelection): IVSCloneModelSelection[] {
+		if (selection.location !== 'editorInline') {
+			return [];
+		}
+
+		const currentIndex = editorInlineCompletionFallbackCandidates.findIndex(candidate => candidate.modelIdentifier === selection.modelIdentifier);
+		if (currentIndex === -1) {
+			return [];
+		}
+
+		const retrySelections: IVSCloneModelSelection[] = [];
+		for (const candidate of editorInlineCompletionFallbackCandidates.slice(currentIndex + 1)) {
+			const model = this.modelCatalogService.getModel(candidate.modelIdentifier);
+			if (!model?.isSelectable) {
+				continue;
+			}
+
+			retrySelections.push(this.toRetrySelection(selection, model, candidate.reasoningEffort));
+		}
+
+		return retrySelections;
+	}
+
+	private toRetrySelection(
+		baseSelection: IVSCloneModelSelection,
+		model: IVSCloneModelCatalogModelDescriptor,
+		reasoningEffort: VSCloneReasoningEffortLevel | undefined,
+	): IVSCloneModelSelection {
+		return {
+			...baseSelection,
+			modelIdentifier: model.identifier,
+			vendor: model.vendor,
+			modelId: model.modelId,
+			modelName: model.modelName,
+			reasoningEffort: reasoningEffort && model.reasoningEffortLevels?.includes(reasoningEffort)
+				? reasoningEffort
+				: model.defaultReasoningEffort ?? model.reasoningEffortLevels?.[0],
+		};
 	}
 
 	private normalizeBackendResult(

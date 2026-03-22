@@ -80,8 +80,10 @@ export class VSCloneCompletionApiService extends Disposable implements IVSCloneC
 				return undefined;
 			}
 
+			// The backend owns retry policy, so transport failures must stay distinguishable from
+			// "no completion text" responses instead of being collapsed to `undefined` here.
 			this.logService.debug('[VSCloneCompletionApi] Completion request failed.', error);
-			return undefined;
+			throw error;
 		} finally {
 			cancellationListener.dispose();
 		}

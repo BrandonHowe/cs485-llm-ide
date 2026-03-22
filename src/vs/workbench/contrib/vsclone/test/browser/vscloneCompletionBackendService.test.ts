@@ -71,7 +71,7 @@ class TestModelCatalogService implements IVSCloneModelCatalogService {
 	}
 
 	getModel(_identifier: string): IVSCloneModelCatalogModelDescriptor | undefined {
-		return undefined;
+		return this.state.models.find(model => model.identifier === _identifier);
 	}
 
 	getSelectableModels(): readonly IVSCloneModelCatalogModelDescriptor[] {
@@ -102,9 +102,19 @@ class TestPromptService implements IVSCloneCompletionPromptService {
 
 class TestCompletionApiService implements IVSCloneCompletionApiService {
 	declare readonly _serviceBrand: undefined;
-	constructor(private readonly rawText: string | undefined) { }
+	readonly requests: string[] = [];
 
-	async complete(_envelope: IVSCloneCompletionPromptEnvelope, _selection: IVSCloneModelSelection): Promise<string | undefined> {
+	constructor(
+		private readonly rawText: string | undefined,
+		private readonly failingModelIdentifiers: readonly string[] = [],
+	) { }
+
+	async complete(_envelope: IVSCloneCompletionPromptEnvelope, selection: IVSCloneModelSelection): Promise<string | undefined> {
+		this.requests.push(selection.modelIdentifier);
+		if (this.failingModelIdentifiers.includes(selection.modelIdentifier)) {
+			throw new Error(`Rejected ${selection.modelIdentifier}`);
+		}
+
 		return this.rawText;
 	}
 }
@@ -147,5 +157,127 @@ suite('VSCloneCompletionBackendService', () => {
 		assert.strictEqual(catalogService.refreshCallCount, 1);
 		assert.deepStrictEqual(selectionService.requestedSelections, [{ threadId: '', location: 'editorInline' }]);
 		assert.strictEqual(promptService.lastEnvelope?.promptText, 'prompt');
+	});
+
+	test('retries Spark failures with gpt-5-nano for inline completions', async () => {
+		const selection: IVSCloneModelSelection = {
+			location: 'editorInline',
+			modelIdentifier: 'openai/gpt-5.3-codex-spark',
+			vendor: 'openai',
+			modelId: 'gpt-5.3-codex-spark',
+			modelName: 'GPT-5.3-Codex-Spark',
+			reasoningEffort: 'lite',
+			selectedAt: Date.now(),
+		};
+		const selectionService = new TestSelectionService(selection);
+		const catalogService = new TestModelCatalogService();
+		catalogService.state = {
+			status: 'ready',
+			providers: [],
+			models: [
+				{
+					identifier: 'openai/gpt-5.3-codex-spark',
+					vendor: 'openai',
+					modelId: 'gpt-5.3-codex-spark',
+					modelName: 'GPT-5.3-Codex-Spark',
+					reasoningEffortLevels: ['standard', 'lite'],
+					defaultReasoningEffort: 'standard',
+					isSelectable: true,
+				},
+				{
+					identifier: 'openai/gpt-5-nano',
+					vendor: 'openai',
+					modelId: 'gpt-5-nano',
+					modelName: 'GPT-5 Nano',
+					reasoningEffortLevels: ['high', 'low', 'none'],
+					defaultReasoningEffort: 'high',
+					isSelectable: true,
+				},
+			],
+		};
+		const promptService = new TestPromptService();
+		const apiService = new TestCompletionApiService(
+			'```ts\nconsole.log(value);\n```',
+			['openai/gpt-5.3-codex-spark'],
+		);
+		const service = new VSCloneCompletionBackendService(
+			selectionService,
+			catalogService,
+			promptService,
+			apiService,
+			new NullLogService(),
+		);
+
+		const result = await service.complete({
+			prefix: 'console.',
+			suffix: '',
+			languageId: 'typescript',
+			filePath: '/workspace/src/app.ts',
+			predictionType: 'single-line',
+			maxTokens: 128,
+		}, CancellationToken.None);
+
+		assert.strictEqual(result, 'console.log(value);');
+		assert.deepStrictEqual(apiService.requests, ['openai/gpt-5.3-codex-spark', 'openai/gpt-5-nano']);
+	});
+
+	test('retries Google inline completion failures with Anthropic when Gemini is next in the fallback chain', async () => {
+		const selection: IVSCloneModelSelection = {
+			location: 'editorInline',
+			modelIdentifier: 'google/gemini-3.1-flash-lite-preview',
+			vendor: 'google',
+			modelId: 'gemini-3.1-flash-lite-preview',
+			modelName: 'Gemini 3.1 Flash Lite',
+			reasoningEffort: 'minimal',
+			selectedAt: Date.now(),
+		};
+		const selectionService = new TestSelectionService(selection);
+		const catalogService = new TestModelCatalogService();
+		catalogService.state = {
+			status: 'ready',
+			providers: [],
+			models: [
+				{
+					identifier: 'google/gemini-3.1-flash-lite-preview',
+					vendor: 'google',
+					modelId: 'gemini-3.1-flash-lite-preview',
+					modelName: 'Gemini 3.1 Flash Lite',
+					reasoningEffortLevels: ['high', 'medium', 'low', 'minimal'],
+					defaultReasoningEffort: 'medium',
+					isSelectable: true,
+				},
+				{
+					identifier: 'anthropic/claude-haiku-4-5-20251001',
+					vendor: 'anthropic',
+					modelId: 'claude-haiku-4-5-20251001',
+					modelName: 'Haiku 4.5',
+					isSelectable: true,
+				},
+			],
+		};
+		const promptService = new TestPromptService();
+		const apiService = new TestCompletionApiService(
+			'```ts\nconsole.log(value);\n```',
+			['google/gemini-3.1-flash-lite-preview'],
+		);
+		const service = new VSCloneCompletionBackendService(
+			selectionService,
+			catalogService,
+			promptService,
+			apiService,
+			new NullLogService(),
+		);
+
+		const result = await service.complete({
+			prefix: 'console.',
+			suffix: '',
+			languageId: 'typescript',
+			filePath: '/workspace/src/app.ts',
+			predictionType: 'single-line',
+			maxTokens: 128,
+		}, CancellationToken.None);
+
+		assert.strictEqual(result, 'console.log(value);');
+		assert.deepStrictEqual(apiService.requests, ['google/gemini-3.1-flash-lite-preview', 'anthropic/claude-haiku-4-5-20251001']);
 	});
 });

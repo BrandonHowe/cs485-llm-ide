@@ -144,7 +144,10 @@ const modelDefinitionsByProvider: Record<
 			vendor: "openai",
 			modelId: "gpt-5-nano",
 			modelName: "GPT-5 Nano",
-			reasoningEffortLevels: ["high", "low"],
+			// Inline completions fall back to Nano specifically to avoid Spark-only eligibility gaps,
+			// so the catalog must expose `none` here to let that path suppress reasoning explicitly
+			// without changing the higher-quality chat default for this model family.
+			reasoningEffortLevels: ["high", "low", "none"],
 			defaultReasoningEffort: "high",
 		},
 	],

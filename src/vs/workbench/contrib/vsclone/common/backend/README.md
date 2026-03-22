@@ -56,7 +56,7 @@ VSClone currently supports OpenAI, Google, and Anthropic logins. It currently ta
   - OAuth token: `https://oauth2.googleapis.com/token`
   - Inference: `https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse`
 
-**Note: Due to Anthropic login being against their Terms of Service, only select Haiku models are offered.**
+**Note: Due to Anthropic login being against their Terms of Service, only select Haiku models are offered. Use the Claude integration at your own risk.**
 
 ### OAuth and Loopback Ports
 

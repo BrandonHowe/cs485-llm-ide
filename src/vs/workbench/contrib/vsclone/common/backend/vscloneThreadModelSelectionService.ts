@@ -25,9 +25,25 @@ export type {
 	IVSCloneModelSelectionChangeEvent,
 };
 
-const preferredEditorInlineFallbackIdentifier = 'openai/gpt-5.3-codex-spark';
 const legacyEditorInlineFallbackIdentifier = 'openai/gpt-5.3-codex';
-const preferredEditorInlineReasoningEffort: VSCloneReasoningEffortLevel = 'lite';
+
+interface IVSCloneLocationFallbackCandidate {
+	readonly modelIdentifier: string;
+	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
+}
+
+/**
+ * `editorInline` has no dedicated picker today, so its location default is policy-managed rather
+ * than user-managed. Keep the exact fallback order explicit here so low-latency completions use
+ * Spark first, downgrade to Nano when Spark is not available, prefer Gemini Flash Lite before
+ * Claude when OpenAI is unavailable, and avoid the heavier Google Pro/Flash routes entirely.
+ */
+const editorInlineFallbackCandidates: readonly IVSCloneLocationFallbackCandidate[] = [
+	{ modelIdentifier: 'openai/gpt-5.3-codex-spark', reasoningEffort: 'lite' },
+	{ modelIdentifier: 'openai/gpt-5-nano', reasoningEffort: 'none' },
+	{ modelIdentifier: 'google/gemini-3.1-flash-lite-preview', reasoningEffort: 'minimal' },
+	{ modelIdentifier: 'anthropic/claude-haiku-4-5-20251001' },
+];
 
 function cloneSelectionState(state: IVSCloneUnifiedChatSelectionState): IVSCloneUnifiedChatSelectionState {
 	return {
@@ -343,12 +359,16 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 	}
 
 	/**
-	 * Inline completions optimize for time-to-first-token, so the Spark fallback stays on the
-	 * lightest supported reasoning level even though the catalog default is tuned for chat quality.
+	 * Location policy can pin a lighter reasoning level than the catalog default when latency matters
+	 * more than answer depth. For all other cases, defer to the catalog metadata so chat and inline
+	 * stay aligned on each model family's supported controls.
 	 */
 	private getPreferredReasoningEffortForLocation(location: IVSCloneChatLocation, model: IVSCloneModelCatalogModelDescriptor): VSCloneReasoningEffortLevel | undefined {
-		if (location === 'editorInline' && model.identifier === preferredEditorInlineFallbackIdentifier && model.reasoningEffortLevels?.includes(preferredEditorInlineReasoningEffort)) {
-			return preferredEditorInlineReasoningEffort;
+		if (location === 'editorInline') {
+			const fallbackCandidate = editorInlineFallbackCandidates.find(candidate => candidate.modelIdentifier === model.identifier);
+			if (fallbackCandidate?.reasoningEffort && model.reasoningEffortLevels?.includes(fallbackCandidate.reasoningEffort)) {
+				return fallbackCandidate.reasoningEffort;
+			}
 		}
 
 		return model.defaultReasoningEffort ?? model.reasoningEffortLevels?.[0];
@@ -360,32 +380,32 @@ export class VSCloneThreadModelSelectionService extends Disposable implements IV
 	}
 
 	/**
-	 * Inline completions are latency-sensitive enough that the lighter Spark model is a better
-	 * default. This also migrates the previous editor-inline fallback so existing users pick up the
-	 * faster path without needing a dedicated UI control for inline model selection.
+	 * The inline-completion location default is policy-managed because there is no inline picker yet.
+	 * Reconcile any stored location selection back to the current fallback chain so existing users
+	 * pick up model-order and reasoning-policy changes automatically without manual cleanup.
 	 */
 	private shouldReplaceLocationSelection(location: IVSCloneChatLocation, modelIdentifier: string, reasoningEffort: VSCloneReasoningEffortLevel | undefined): boolean {
-		if (location !== 'editorInline' || !this.isSelectableModelIdentifier(preferredEditorInlineFallbackIdentifier)) {
+		if (location !== 'editorInline') {
 			return false;
 		}
 
-		if (modelIdentifier === legacyEditorInlineFallbackIdentifier) {
-			return true;
-		}
-
-		if (modelIdentifier !== preferredEditorInlineFallbackIdentifier) {
+		const preferredInlineSelection = this.getFallbackSelection(location);
+		if (!preferredInlineSelection) {
 			return false;
 		}
 
-		const preferredInlineModel = this.catalogService.getModel(preferredEditorInlineFallbackIdentifier);
-		return !!preferredInlineModel && reasoningEffort !== this.getPreferredReasoningEffortForLocation(location, preferredInlineModel);
+		return modelIdentifier === legacyEditorInlineFallbackIdentifier
+			|| modelIdentifier !== preferredInlineSelection.modelIdentifier
+			|| reasoningEffort !== preferredInlineSelection.reasoningEffort;
 	}
 
 	private getPreferredFallbackModel(location: IVSCloneChatLocation): IVSCloneModelCatalogModelDescriptor | undefined {
 		if (location === 'editorInline') {
-			const preferredInlineModel = this.catalogService.getModel(preferredEditorInlineFallbackIdentifier);
-			if (preferredInlineModel?.isSelectable) {
-				return preferredInlineModel;
+			for (const candidate of editorInlineFallbackCandidates) {
+				const preferredInlineModel = this.catalogService.getModel(candidate.modelIdentifier);
+				if (preferredInlineModel?.isSelectable) {
+					return preferredInlineModel;
+				}
 			}
 		}
 
