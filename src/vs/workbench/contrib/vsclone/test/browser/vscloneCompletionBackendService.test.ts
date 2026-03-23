@@ -182,6 +182,7 @@ suite('VSCloneCompletionBackendService', () => {
 					modelName: 'GPT-5.3-Codex-Spark',
 					reasoningEffortLevels: ['standard', 'lite'],
 					defaultReasoningEffort: 'standard',
+					supportsImages: false,
 					isSelectable: true,
 				},
 				{
@@ -191,6 +192,7 @@ suite('VSCloneCompletionBackendService', () => {
 					modelName: 'GPT-5 Nano',
 					reasoningEffortLevels: ['high', 'low', 'none'],
 					defaultReasoningEffort: 'high',
+					supportsImages: true,
 					isSelectable: true,
 				},
 			],
@@ -244,6 +246,7 @@ suite('VSCloneCompletionBackendService', () => {
 					modelName: 'Gemini 3.1 Flash Lite',
 					reasoningEffortLevels: ['high', 'medium', 'low', 'minimal'],
 					defaultReasoningEffort: 'medium',
+					supportsImages: true,
 					isSelectable: true,
 				},
 				{
@@ -251,6 +254,7 @@ suite('VSCloneCompletionBackendService', () => {
 					vendor: 'anthropic',
 					modelId: 'claude-haiku-4-5-20251001',
 					modelName: 'Haiku 4.5',
+					supportsImages: true,
 					isSelectable: true,
 				},
 			],

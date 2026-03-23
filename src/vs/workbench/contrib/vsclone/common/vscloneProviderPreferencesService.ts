@@ -38,7 +38,9 @@ const legacyProviderStorageKey = 'vsclone.modelSwitcher.providers.v1';
 const providerDefaults: readonly IVSCloneProviderPreferenceState[] = [
 	{ vendor: 'openai', displayName: defaultOAuthProviderConfig.openai.displayName, enabled: true },
 	{ vendor: 'anthropic', displayName: defaultOAuthProviderConfig.anthropic.displayName, enabled: true },
-	{ vendor: 'google', displayName: defaultOAuthProviderConfig.google.displayName, enabled: false },
+	// Keep Google visible on first run so the model picker and provider management UI stay aligned
+	// without requiring a hidden preference toggle before users can discover Gemini sign-in.
+	{ vendor: 'google', displayName: defaultOAuthProviderConfig.google.displayName, enabled: true },
 ] as const;
 
 function cloneDefaults(): IVSCloneProviderPreferenceState[] {

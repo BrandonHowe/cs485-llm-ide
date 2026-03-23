@@ -22,7 +22,10 @@ export class MockLanguageModelToolsService extends Disposable implements ILangua
 	_serviceBrand: undefined;
 	vscodeToolSet: ToolSet = new ToolSet('vscode', 'vscode', ThemeIcon.fromId(Codicon.code.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());
 	executeToolSet: ToolSet = new ToolSet('execute', 'execute', ThemeIcon.fromId(Codicon.terminal.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());
+	editToolSet: ToolSet = new ToolSet('edit', 'edit', ThemeIcon.fromId(Codicon.edit.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());
+	searchToolSet: ToolSet = new ToolSet('search', 'search', ThemeIcon.fromId(Codicon.search.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());
 	readToolSet: ToolSet = new ToolSet('read', 'read', ThemeIcon.fromId(Codicon.book.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());
+	webToolSet: ToolSet = new ToolSet('web', 'web', ThemeIcon.fromId(Codicon.globe.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());
 	agentToolSet: ToolSet = new ToolSet('agent', 'agent', ThemeIcon.fromId(Codicon.agent.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());
 
 	private readonly _onDidInvokeTool = this._register(new Emitter<IToolInvokedEvent>());
@@ -80,7 +83,7 @@ export class MockLanguageModelToolsService extends Disposable implements ILangua
 		return Disposable.None;
 	}
 
-	getTools(): Iterable<IToolData> {
+	getTools(_model: ILanguageModelChatMetadata | undefined): Iterable<IToolData> {
 		return [];
 	}
 
@@ -92,7 +95,7 @@ export class MockLanguageModelToolsService extends Disposable implements ILangua
 		return undefined;
 	}
 
-	observeTools(): IObservable<readonly IToolData[]> {
+	observeTools(_model: ILanguageModelChatMetadata | undefined): IObservable<readonly IToolData[]> {
 		return constObservable([]);
 	}
 
@@ -119,7 +122,7 @@ export class MockLanguageModelToolsService extends Disposable implements ILangua
 		// Mock implementation - do nothing
 	}
 
-	toolSets: IObservable<readonly IToolSet[]> = constObservable([]);
+	toolSets: IObservable<Iterable<IToolSet>> = constObservable([]);
 
 	getToolSetsForModel(model: ILanguageModelChatMetadata | undefined, reader?: IReader): Iterable<IToolSet> {
 		return [];
@@ -133,11 +136,11 @@ export class MockLanguageModelToolsService extends Disposable implements ILangua
 		return undefined;
 	}
 
-	createToolSet(): ToolSet & IDisposable {
+	createToolSet(_source: ToolDataSource, _id: string, _referenceName: string, _options?: { icon?: ThemeIcon; description?: string; legacyFullNames?: string[] }): ToolSet & IDisposable {
 		throw new Error('Method not implemented.');
 	}
 
-	toToolAndToolSetEnablementMap(toolOrToolSetNames: readonly string[]): IToolAndToolSetEnablementMap {
+	toToolAndToolSetEnablementMap(_toolOrToolSetNames: readonly string[], _model: ILanguageModelChatMetadata | undefined): IToolAndToolSetEnablementMap {
 		throw new Error('Method not implemented.');
 	}
 

@@ -5,6 +5,8 @@ title VSCode Dev
 
 pushd %~dp0\..
 
+call "%~dp0load-env.bat" "%CD%"
+
 :: Get electron, compile, built-in extensions
 if "%VSCODE_SKIP_PRELAUNCH%"=="" (
 	node build/lib/preLaunch.ts

@@ -56,6 +56,9 @@ suite('VSCloneThreadModelSelectionService', () => {
 			modelName,
 			reasoningEffortLevels,
 			defaultReasoningEffort,
+			// Tests build public catalog descriptors directly, so they need to mirror the catalog's
+			// explicit image-capability flag even when the scenario itself does not exercise images.
+			supportsImages: true,
 			isSelectable: true,
 		};
 	}
