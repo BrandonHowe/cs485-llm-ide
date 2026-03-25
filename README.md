@@ -7,6 +7,111 @@
 
 This repository ("`Code - OSS`") is where we (Microsoft) develop the [Visual Studio Code](https://code.visualstudio.com) product together with the community. Not only do we work on code and issues here, we also publish our [roadmap](https://github.com/microsoft/vscode/wiki/Roadmap), [monthly iteration plans](https://github.com/microsoft/vscode/wiki/Iteration-Plans), and our [endgame plans](https://github.com/microsoft/vscode/wiki/Running-the-Endgame). This source code is available to everyone under the standard [MIT license](https://github.com/microsoft/vscode/blob/main/LICENSE.txt).
 
+## VSClone Local Setup
+
+This fork includes VSClone-specific OAuth wiring and launch scripts that are not covered by the stock Code - OSS README. Use the steps below when you want to install dependencies and run the desktop app locally.
+
+### Shared prerequisites
+
+* `git`
+* Node.js `22.21.1` or later (the repo checks `.nvmrc` during install)
+* `npm` (`yarn` is rejected by the repo preinstall step)
+
+### macOS
+
+1. Install the Apple command line toolchain:
+
+   ```bash
+   xcode-select --install
+   ```
+
+2. Install and select Node.js `22.21.1` or later. If you use `nvm`, the commands are:
+
+   ```bash
+   nvm install 22.21.1
+   nvm use 22.21.1
+   ```
+
+3. Create the local VSClone OAuth file and fill in your real values:
+
+   ```bash
+   cp .env.vsclone.example .env.vsclone
+   ```
+
+   Required values:
+   * `VSCODE_VSCLONE_GOOGLE_CLIENT_ID`
+   * `VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET`
+   * `VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT` (optional)
+
+4. Install dependencies:
+
+   ```bash
+   npm ci
+   ```
+
+5. Start the desktop dev app:
+
+   ```bash
+   ./scripts/dev.sh
+   ```
+
+   `./scripts/dev.sh` starts the watch build, waits for the first set of required artifacts, and then launches Electron. After the initial build, you can relaunch more directly with:
+
+   ```bash
+   VSCODE_SKIP_PRELAUNCH=1 ./scripts/code.sh
+   ```
+
+### Windows
+
+1. Install the native build prerequisites:
+   * Visual Studio 2022 or 2019 with Desktop development with C++
+   * Node.js `22.21.1` or later
+
+   If Visual Studio is installed outside the default location, set `vs2022_install` or `vs2019_install` before running `npm ci`.
+
+2. Copy the local VSClone OAuth template:
+
+   ```powershell
+   Copy-Item .env.vsclone.example .env.vsclone
+   ```
+
+3. Export the VSClone OAuth variables in the shell you will launch from. `.\scripts\code.bat` does not currently load `.env.vsclone` automatically:
+
+   ```powershell
+   $env:VSCODE_VSCLONE_GOOGLE_CLIENT_ID="your-client-id"
+   $env:VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET="your-client-secret"
+   $env:VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT="your-quota-project" # optional
+   ```
+
+4. Install dependencies:
+
+   ```powershell
+   npm ci
+   ```
+
+5. Start the desktop dev app:
+
+   ```powershell
+   .\scripts\code.bat
+   ```
+
+   For a faster edit/run loop, keep the watcher running in one terminal:
+
+   ```powershell
+   npm run watch
+   ```
+
+   Then launch from a second terminal with the prelaunch compile skipped:
+
+   ```powershell
+   $env:VSCODE_SKIP_PRELAUNCH="1"
+   .\scripts\code.bat
+   ```
+
+### Important runtime note
+
+Use the desktop launchers above when validating VSClone. `./scripts/code-server.sh`, `.\scripts\code-server.bat`, and the web entrypoints do not register the Electron-only VSClone IPC channels.
+
 ## Visual Studio Code
 
 <p align="center">

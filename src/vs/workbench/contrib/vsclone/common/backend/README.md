@@ -130,7 +130,7 @@ The source-of-truth provider configuration lives in [`src/vs/workbench/contrib/v
   - OAuth token: `https://oauth2.googleapis.com/token`
   - Completion/chat base API: `https://generativelanguage.googleapis.com/v1beta/models`
 
-Google sign-in depends on local environment variables loaded by `./scripts/code.sh`:
+Google sign-in depends on local environment variables. On macOS/Linux, `./scripts/code.sh` loads them from repo-local env files when present. On Windows, export them before launching `.\scripts\code.bat`:
 
 - `VSCODE_VSCLONE_GOOGLE_CLIENT_ID`
 - `VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET`
@@ -138,7 +138,9 @@ Google sign-in depends on local environment variables loaded by `./scripts/code.
 
 ## Starting and Stopping
 
-Start the desktop development shell from the repository root:
+Start the desktop development shell from the repository root.
+
+macOS/Linux:
 
 ```bash
 ./scripts/code.sh
@@ -146,10 +148,28 @@ Start the desktop development shell from the repository root:
 
 This loads `.env.vsclone`, `.env.local`, and `.env` when present, runs the normal prelaunch build unless `VSCODE_SKIP_PRELAUNCH=1`, and starts the Electron app that registers the VSClone IPC channels.
 
+Windows PowerShell:
+
+```powershell
+$env:VSCODE_VSCLONE_GOOGLE_CLIENT_ID="your-client-id"
+$env:VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET="your-client-secret"
+$env:VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT="your-quota-project" # optional
+.\scripts\code.bat
+```
+
+`.\scripts\code.bat` starts the same Electron app, but unlike `./scripts/code.sh` it does not currently load `.env.vsclone`, `.env.local`, or `.env` automatically. Set the required environment variables in the launching shell first.
+
 For faster restarts after an initial build:
 
 ```bash
 VSCODE_SKIP_PRELAUNCH=1 ./scripts/code.sh
+```
+
+Windows PowerShell equivalent:
+
+```powershell
+$env:VSCODE_SKIP_PRELAUNCH="1"
+.\scripts\code.bat
 ```
 
 Do not use `./scripts/code-server.sh` to validate this backend. That entrypoint does not register `vsclone-chat-api`, `vsclone-completion`, or `vsclone-oauth`.

@@ -96,7 +96,7 @@ import { IChatResponseViewModel, isResponseVM } from '../../../common/model/chat
 import { IChatAgentService } from '../../../common/participants/chatAgents.js';
 import { ILanguageModelToolsService } from '../../../common/tools/languageModelToolsService.js';
 import { ChatHistoryNavigator } from '../../../common/widget/chatWidgetHistoryService.js';
-import { ChatSessionPrimaryPickerAction, ChatSubmitAction, IChatExecuteActionContext, OpenDelegationPickerAction, OpenModelPickerAction, OpenModePickerAction, OpenSessionTargetPickerAction, OpenWorkspacePickerAction } from '../../actions/chatExecuteActions.js';
+import { CancelChatActionId, ChatSessionPrimaryPickerAction, ChatSubmitAction, IChatExecuteActionContext, OpenDelegationPickerAction, OpenModelPickerAction, OpenModePickerAction, OpenSessionTargetPickerAction, OpenWorkspacePickerAction } from '../../actions/chatExecuteActions.js';
 import { AgentSessionProviders, getAgentSessionProvider } from '../../agentSessions/agentSessions.js';
 import { IAgentSessionsService } from '../../agentSessions/agentSessionsService.js';
 import { ChatAttachmentModel } from '../../attachments/chatAttachmentModel.js';
@@ -316,6 +316,9 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 
 	private executeToolbar!: MenuWorkbenchToolBar;
 	private inputActionsToolbar!: MenuWorkbenchToolBar;
+	private stopResponseButton: ButtonWithIcon | undefined;
+	private stopResponseButtonVisible = false;
+	private readonly _executeToolbarStateDisposables = this._register(new MutableDisposable<DisposableStore>());
 
 	private addFilesToolbar: MenuWorkbenchToolBar | undefined;
 	private addFilesButton: AddFilesButton | undefined;
@@ -1743,6 +1746,7 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 			this.tryUpdateWidgetController();
 			this.updateContextUsageWidget();
 			this.clearQuestionCarousel();
+			this.bindExecuteToolbarState();
 		}));
 
 		let elements;
@@ -2075,10 +2079,28 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 		this.executeToolbar.getElement().classList.add('chat-execute-toolbar');
 		this.executeToolbar.context = { widget } satisfies IChatExecuteActionContext;
 		this._register(this.executeToolbar.onDidChangeMenuItems(() => {
-			if (this.cachedWidth && typeof this.cachedExecuteToolbarWidth === 'number' && this.cachedExecuteToolbarWidth !== this.executeToolbar.getItemsWidth()) {
+			if (this.cachedWidth && typeof this.cachedExecuteToolbarWidth === 'number' && this.cachedExecuteToolbarWidth !== this.getCurrentExecuteControlWidth()) {
 				this.layout(this.cachedWidth);
 			}
 		}));
+		this.stopResponseButton = this._register(new ButtonWithIcon(toolbarsContainer, {
+			supportIcons: true,
+			secondary: true,
+			small: true,
+			title: this.keybindingService.appendKeybinding(localize('interactive.stopGenerating.tooltip', "Stop"), CancelChatActionId, this.contextKeyService),
+			ariaLabel: localize('interactive.stopGenerating.ariaLabel', "Stop response generation"),
+		}));
+		this.stopResponseButton.element.classList.add('chat-stop-button');
+		this.stopResponseButton.icon = Codicon.stopCircle;
+		this.stopResponseButton.label = localize('interactive.stopGenerating.label', "Stop");
+		this._register(this.stopResponseButton.onDidClick(() => {
+			const sessionResource = this._widget?.viewModel?.sessionResource;
+			if (sessionResource) {
+				this.chatService.cancelCurrentRequestForSession(sessionResource);
+			}
+		}));
+		this.updateStopResponseButtonVisibility(false);
+		this.bindExecuteToolbarState();
 		if (this.options.menus.inputSideToolbar) {
 			const toolbarSide = this._register(this.instantiationService.createInstance(MenuWorkbenchToolBar, inputAndSideToolbar, this.options.menus.inputSideToolbar, {
 				telemetrySource: this.options.menus.telemetrySource,
@@ -2178,6 +2200,58 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 			}));
 			this._register(toolbarsResizeObserver.observe(toolbarsContainer));
 		}
+	}
+
+	/**
+	 * Keep an explicit stop button in sync with the active model so users can halt
+	 * streaming immediately without giving up the execute toolbar's queue/steer actions.
+	 */
+	private bindExecuteToolbarState(): void {
+		this._executeToolbarStateDisposables.clear();
+
+		const model = this._widget?.viewModel?.model;
+		if (!model) {
+			this.updateStopResponseButtonVisibility(false);
+			return;
+		}
+
+		const store = new DisposableStore();
+		this._executeToolbarStateDisposables.value = store;
+		store.add(autorun(reader => {
+			const showStopButton = model.requestInProgress.read(reader);
+			this.updateStopResponseButtonVisibility(showStopButton);
+		}));
+	}
+
+	/**
+	 * Toggle the stop button independently from the execute toolbar so cancellation
+	 * stays obvious while the existing active-request controls remain available.
+	 */
+	private updateStopResponseButtonVisibility(visible: boolean): void {
+		if (!this.stopResponseButton) {
+			return;
+		}
+
+		dom.setVisibility(visible, this.stopResponseButton.element);
+
+		if (this.stopResponseButtonVisible === visible) {
+			return;
+		}
+
+		this.stopResponseButtonVisible = visible;
+		if (this.cachedWidth) {
+			this.layout(this.cachedWidth);
+		}
+	}
+
+	/**
+	 * Measure the execute toolbar plus the optional stop button so compact layout
+	 * math stays correct while streaming requests surface an extra control.
+	 */
+	private getCurrentExecuteControlWidth(): number {
+		const executeToolbarPadding = (this.executeToolbar.getItemsLength() - 1) * 4;
+		const stopButtonWidth = this.stopResponseButtonVisible && this.stopResponseButton ? dom.getTotalWidth(this.stopResponseButton.element) : 0;
+		return this.executeToolbar.getItemsWidth() + executeToolbarPadding + stopButtonWidth;
 	}
 
 	public toggleChatInputOverlay(editing: boolean): void {
@@ -2851,11 +2925,10 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 		const inputSideToolbarWidth = this.inputSideToolbarContainer ? dom.getTotalWidth(this.inputSideToolbarContainer) : 0;
 
 		const getToolbarsWidthCompact = () => {
-			const executeToolbarWidth = this.cachedExecuteToolbarWidth = this.executeToolbar.getItemsWidth();
+			const executeToolbarWidth = this.cachedExecuteToolbarWidth = this.getCurrentExecuteControlWidth();
 			const inputToolbarWidth = this.cachedInputToolbarWidth = this.inputActionsToolbar.getItemsWidth();
-			const executeToolbarPadding = (this.executeToolbar.getItemsLength() - 1) * 4;
 			const inputToolbarPadding = this.inputActionsToolbar.getItemsLength() ? (this.inputActionsToolbar.getItemsLength() - 1) * 4 : 0;
-			return executeToolbarWidth + executeToolbarPadding + (this.options.renderInputToolbarBelowInput ? 0 : inputToolbarWidth + inputToolbarPadding);
+			return executeToolbarWidth + (this.options.renderInputToolbarBelowInput ? 0 : inputToolbarWidth + inputToolbarPadding);
 		};
 
 		return {
