@@ -641,6 +641,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const send = document.createElement('button');
 		send.type = 'button';
 		send.className = 'vsclone-thread-composer-send';
+		send.setAttribute(
+			'aria-label',
+			localize("vsclone.composer.send", "Send message"),
+		);
+		send.title = localize("vsclone.composer.sendTooltip", "Send message");
 		const sendIcon = document.createElement('span');
 		sendIcon.className = 'codicon codicon-send';
 		sendIcon.setAttribute('aria-hidden', 'true');
@@ -862,7 +867,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 						return;
 					}
 					event.preventDefault();
-					void this.submitPrompt();
+					void this.handleComposerPrimaryAction();
 				},
 			),
 		);
@@ -891,7 +896,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		this._register(
 			addDisposableListener(send, EventType.CLICK, () => {
-				void this.submitPrompt();
+				void this.handleComposerPrimaryAction();
 			}),
 		);
 		// "+" context menu: open/close popup
@@ -1049,6 +1054,27 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.submittingPrompt = false;
 			this.updateComposerState();
 		}
+	}
+
+	private getBusyThreadId(): string | undefined {
+		const activeThreadId = this.activeThreadId;
+		if (!activeThreadId || !this.isThreadBusy(activeThreadId)) {
+			return undefined;
+		}
+		return activeThreadId;
+	}
+
+	private async handleComposerPrimaryAction(): Promise<void> {
+		const busyThreadId = this.getBusyThreadId();
+		if (busyThreadId) {
+			// Keep the stop affordance responsive immediately after the user clicks it because the
+			// turn status update lands asynchronously after the transport observes the cancellation.
+			this.sessionService.cancelThread(busyThreadId);
+			this.updateComposerState();
+			return;
+		}
+
+		await this.submitPrompt();
 	}
 
 	private async handleImageFiles(files: FileList | File[]): Promise<void> {
@@ -3171,14 +3197,49 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const hasText = this.composerInput.value.trim().length > 0;
-		const threadBusy = this.activeThreadId
-			? this.isThreadBusy(this.activeThreadId)
-			: false;
+		const busyThreadId = this.getBusyThreadId();
+		const threadBusy = !!busyThreadId;
 		const composerBusy = threadBusy || this.submittingPrompt;
 		const hasSelectedModel = !!this.getCurrentComposerModelSelection(
 			this.activeThreadId,
 		);
-		const disabled = !hasText || composerBusy || !hasSelectedModel;
+		// Once a response is in flight, the primary action must stay enabled so the user can abort
+		// the active generation without waiting for transport or history updates to settle first.
+		const disabled = threadBusy
+			? false
+			: !hasText || composerBusy || !hasSelectedModel;
+		if (threadBusy) {
+			this.composerSendButton.textContent = localize(
+				"vsclone.composer.stop",
+				"Stop",
+			);
+			this.composerSendButton.classList.add("stop-mode");
+			this.composerSendButton.setAttribute(
+				"aria-label",
+				localize(
+					"vsclone.composer.stopTooltip",
+					"Stop response generation",
+				),
+			);
+			this.composerSendButton.title = localize(
+				"vsclone.composer.stopTooltip",
+				"Stop response generation",
+			);
+		} else {
+			const sendIcon = document.createElement("span");
+			sendIcon.className = "codicon codicon-send";
+			sendIcon.setAttribute("aria-hidden", "true");
+			this.composerSendButton.replaceChildren(sendIcon);
+			this.composerSendButton.classList.remove("stop-mode");
+			this.composerSendButton.setAttribute(
+				"aria-label",
+				localize("vsclone.composer.send", "Send message"),
+			);
+			this.composerSendButton.title = localize(
+				"vsclone.composer.sendTooltip",
+				"Send message",
+			);
+		}
 		this.composerSendButton.disabled = disabled;
 		this.composerInput.disabled = composerBusy;
 		if (this.reasoningEffortSelect) {

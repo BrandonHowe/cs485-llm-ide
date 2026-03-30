@@ -831,6 +831,9 @@
 }
 
 .vsclone-thread-composer-send.stop-mode {
+	width: auto;
+	min-width: 52px;
+	padding: 0 10px;
 	border: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 42%, transparent 58%);
 	background: color-mix(in srgb, var(--vscode-errorForeground) 16%, var(--vscode-editor-background) 84%);
 	color: var(--vscode-errorForeground);

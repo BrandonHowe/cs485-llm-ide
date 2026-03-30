@@ -47,6 +47,7 @@ import { MockChatService } from './mockChatService.js';
 import { MockChatVariablesService } from '../mockChatVariables.js';
 import { IPromptsService } from '../../../common/promptSyntax/service/promptsService.js';
 import { MockPromptsService } from '../promptSyntax/service/mockPromptsService.js';
+import { ILanguageModelToolsService } from '../../../common/tools/languageModelToolsService.js';
 
 const chatAgentWithUsedContextId = 'ChatProviderWithUsedContext';
 const chatAgentWithUsedContext: IChatAgent = {
@@ -174,6 +175,9 @@ suite('ChatService', () => {
 		instantiationService.stub(IChatService, new MockChatService());
 		instantiationService.stub(IEnvironmentService, { workspaceStorageHome: URI.file('/test/path/to/workspaceStorage') });
 		instantiationService.stub(ILifecycleService, { onWillShutdown: Event.None });
+		instantiationService.stub(ILanguageModelToolsService, new class extends mock<ILanguageModelToolsService>() {
+			override cancelToolCallsForRequest(_requestId: string): void { }
+		});
 		instantiationService.stub(IChatEditingService, new class extends mock<IChatEditingService>() {
 			override startOrContinueGlobalEditingSession(): IChatEditingSession {
 				return {
@@ -276,6 +280,43 @@ suite('ChatService', () => {
 		await response.data.responseCompletePromise;
 
 		await assertSnapshot(toSnapshotExportData(model));
+	});
+
+	test('cancelCurrentRequestForSession aborts an active request', async () => {
+		const requestStarted = new DeferredPromise<void>();
+		const requestCancelled = new DeferredPromise<void>();
+
+		const cancellableAgent: IChatAgentImplementation = {
+			async invoke(request, progress, history, token) {
+				requestStarted.complete();
+				const cancellationListener = token.onCancellationRequested(() => {
+					cancellationListener.dispose();
+					requestCancelled.complete();
+				});
+
+				// Keep the request alive until the service cancels it so this test exercises the
+				// same mid-generation stop path the UI uses.
+				await requestCancelled.p;
+				return {};
+			},
+		};
+
+		testDisposables.add(chatAgentService.registerAgent('cancellableAgent', getAgentData('cancellableAgent')));
+		testDisposables.add(chatAgentService.registerAgentImplementation('cancellableAgent', cancellableAgent));
+
+		const testService = createChatService();
+		const modelRef = testDisposables.add(startSessionModel(testService));
+		const model = modelRef.object;
+
+		const response = await testService.sendRequest(model.sessionResource, 'test request', { agentId: 'cancellableAgent' });
+		ChatSendResult.assertSent(response);
+		await requestStarted.p;
+
+		testService.cancelCurrentRequestForSession(model.sessionResource);
+		await response.data.responseCompletePromise;
+
+		assert.strictEqual(model.requestInProgress.get(), false);
+		assert.strictEqual(model.getRequests()[0].response?.isCanceled, true);
 	});
 
 	test('history', async () => {

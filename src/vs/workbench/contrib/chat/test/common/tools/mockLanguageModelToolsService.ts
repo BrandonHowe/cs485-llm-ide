@@ -20,6 +20,8 @@ import { CountTokensCallback, IBeginToolCallOptions, ILanguageModelToolsService,
 
 export class MockLanguageModelToolsService extends Disposable implements ILanguageModelToolsService {
 	_serviceBrand: undefined;
+	// Keep the mock's built-in tool-set surface aligned with production so tests fail on behavior,
+	// not because the interface added another built-in grouping.
 	vscodeToolSet: ToolSet = new ToolSet('vscode', 'vscode', ThemeIcon.fromId(Codicon.code.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());
 	executeToolSet: ToolSet = new ToolSet('execute', 'execute', ThemeIcon.fromId(Codicon.terminal.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());
 	editToolSet: ToolSet = new ToolSet('edit', 'edit', ThemeIcon.fromId(Codicon.edit.id), ToolDataSource.Internal, undefined, undefined, new MockContextKeyService());

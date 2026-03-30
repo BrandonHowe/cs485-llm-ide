@@ -400,6 +400,8 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		const addContextRoot = parent.querySelector('.vsclone-add-context-root') as HTMLElement;
 		const addContextButton = parent.querySelector('.vsclone-add-context-button') as HTMLButtonElement;
 		const addContextMenu = parent.querySelector('.vsclone-add-context-menu') as HTMLElement;
+		const imageStrip = parent.querySelector('.vsclone-composer-image-strip') as HTMLElement;
+		const composerInput = parent.querySelector('.vsclone-thread-composer-input') as HTMLTextAreaElement;
 		const sendButton = parent.querySelector('.vsclone-thread-composer-send') as HTMLButtonElement;
 		const hint = parent.querySelector('.vsclone-thread-composer-hint') as HTMLElement;
 		assert.ok(parent.querySelector('.vsclone-thread-model-switcher'));
@@ -411,7 +413,11 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			{
 				addContextHasPopup: addContextButton.getAttribute('aria-haspopup'),
 				menuHidden: addContextMenu.classList.contains('hidden'),
+				// The image strip stays mounted even while empty so pasted/selected images can appear
+				// without replacing composer nodes and breaking focus/measurement bookkeeping.
 				composerChildren: {
+					imageStrip: Array.from(composer.children).indexOf(imageStrip),
+					input: Array.from(composer.children).indexOf(composerInput),
 					toolbar: Array.from(composer.children).indexOf(toolbar),
 					hint: Array.from(composer.children).indexOf(hint),
 				},
@@ -423,8 +429,10 @@ suite('VSCloneUnifiedChatViewPane', () => {
 				addContextHasPopup: 'menu',
 				menuHidden: true,
 				composerChildren: {
-					toolbar: 1,
-					hint: 2,
+					imageStrip: 0,
+					input: 1,
+					toolbar: 2,
+					hint: 3,
 				},
 				toolbarContainsAddContext: true,
 				toolbarContainsControls: true,

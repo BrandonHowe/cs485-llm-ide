@@ -33,6 +33,7 @@ import { ServiceCollection } from '../../../../platform/instantiation/common/ser
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
 import { IMarkdownRendererService } from '../../../../platform/markdown/browser/markdownRenderer.js';
+import { bindContextKey } from '../../../../platform/observable/common/platformObservableUtils.js';
 import product from '../../../../platform/product/common/product.js';
 import { asCssVariable, asCssVariableName, editorBackground, inputBackground } from '../../../../platform/theme/common/colorRegistry.js';
 import { EDITOR_DRAG_AND_DROP_BACKGROUND } from '../../../common/theme.js';
@@ -50,7 +51,7 @@ import { ChatMode } from '../../chat/common/chatModes.js';
 import { ChatAgentVoteDirection, IChatService } from '../../chat/common/chatService/chatService.js';
 import { isResponseVM } from '../../chat/common/model/chatViewModel.js';
 import * as marked from '../../../../base/common/marked/marked.js';
-import { CTX_INLINE_CHAT_FOCUSED, CTX_INLINE_CHAT_RESPONSE_FOCUSED, inlineChatBackground, inlineChatForeground } from '../common/inlineChat.js';
+import { CTX_INLINE_CHAT_FOCUSED, CTX_INLINE_CHAT_REQUEST_IN_PROGRESS, CTX_INLINE_CHAT_RESPONSE_FOCUSED, inlineChatBackground, inlineChatForeground } from '../common/inlineChat.js';
 import './media/inlineChat.css';
 
 export interface InlineChatWidgetViewState {
@@ -176,6 +177,7 @@ export class InlineChatWidget {
 		this._elements.chatWidget.style.setProperty(asCssVariableName(chatRequestBackground), asCssVariable(inlineChatBackground));
 		this._chatWidget.setVisible(true);
 		this._store.add(this._chatWidget);
+		this._store.add(bindContextKey(CTX_INLINE_CHAT_REQUEST_IN_PROGRESS, this.scopedContextKeyService, reader => this._requestInProgress.read(reader)));
 
 		const ctxResponse = ChatContextKeys.isResponse.bindTo(this.scopedContextKeyService);
 		const ctxResponseVote = ChatContextKeys.responseVote.bindTo(this.scopedContextKeyService);
@@ -194,6 +196,7 @@ export class InlineChatWidget {
 
 			viewModelStore.add(toDisposable(() => {
 				toolbar2.context = undefined;
+				this._requestInProgress.set(false, undefined);
 				ctxResponse.reset();
 				ctxResponseVote.reset();
 				ctxResponseError.reset();
@@ -201,10 +204,13 @@ export class InlineChatWidget {
 				ctxResponseSupportIssues.reset();
 			}));
 
+			// Keep the inline-chat status menus in lockstep with the backing chat request so
+			// the primary action flips from send to stop/cancel for the entire streaming window.
+			viewModelStore.add(autorun(reader => {
+				this._requestInProgress.set(viewModel.model.requestInProgress.read(reader), undefined);
+			}));
+
 			viewModelStore.add(viewModel.onDidChange(() => {
-
-				this._requestInProgress.set(viewModel.model.requestInProgress.get(), undefined);
-
 				const last = viewModel.getItems().at(-1);
 				toolbar2.context = last;
 
