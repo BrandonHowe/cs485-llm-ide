@@ -299,11 +299,13 @@ export class VSCloneUnifiedChatBackendService extends Disposable implements IVSC
 			this.model.initialize(snapshot);
 
 			const retention = this.model.applyRetention(this.maxThreads, this.retentionDays, Date.now());
+			// Mark the backend initialized before persisting any retention cleanup so the save path
+			// can materialize the pruned snapshot during the first successful restore.
+			this.initialized = true;
 			if (retention.deletedThreadIds.length > 0) {
 				await this.persistNow();
 			}
 
-			this.initialized = true;
 			this._onDidChange.fire({
 				reason: 'initialize',
 				scope: this.persistScope,
