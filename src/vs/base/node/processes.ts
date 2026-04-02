@@ -9,12 +9,16 @@ import { getCaseInsensitive } from '../common/objects.js';
 import * as path from '../common/path.js';
 import * as Platform from '../common/platform.js';
 import * as processCommon from '../common/process.js';
-import { CommandOptions, ForkOptions, Source, SuccessData, TerminateResponse, TerminateResponseCode } from '../common/processes.js';
+import type { CommandOptions, ForkOptions, SuccessData, TerminateResponse } from '../common/processes.js';
 import * as Types from '../common/types.js';
 import * as pfs from './pfs.js';
 import { FileAccess } from '../common/network.js';
 import Stream from 'stream';
-export { Source, TerminateResponseCode, type CommandOptions, type ForkOptions, type SuccessData, type TerminateResponse };
+
+// Only re-export types from `common/processes`: that module exposes `const enum`s
+// that are intentionally erased from emitted JavaScript, so value re-exports here
+// would force ESM imports for bindings that do not exist at runtime.
+export type { CommandOptions, ForkOptions, SuccessData, TerminateResponse };
 
 export type ValueCallback<T> = (value: T | Promise<T>) => void;
 export type ErrorCallback = (error?: any) => void;

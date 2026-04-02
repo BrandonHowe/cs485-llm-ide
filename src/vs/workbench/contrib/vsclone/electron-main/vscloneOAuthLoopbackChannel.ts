@@ -29,6 +29,15 @@ import { shell } from 'electron';
 
 const LOOPBACK_PORT_PLACEHOLDER = '{port}';
 const DEFAULT_WAIT_TIMEOUT_MS = 180_000;
+const LOOPBACK_WAIT_TIMEOUT = Symbol('vscloneOAuthLoopbackWaitTimeout');
+
+// Keep Node/Electron entry points behind a mutable object so the electron-main tests can stub the
+// integration surface without attempting to replace ESM namespace bindings, which Sinon rejects.
+export const vscloneOAuthLoopbackRuntime = {
+	createServer,
+	httpsRequest,
+	openExternal: (url: string) => shell.openExternal(url),
+};
 
 interface IVSCloneLoopbackSession {
 	readonly callbackPath: string;
@@ -134,7 +143,7 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 			case VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE:
 				return await this.tokenExchange(arg as IVSCloneOAuthTokenExchangeRequest) as T;
 			case VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL:
-				await shell.openExternal(arg as string);
+				await vscloneOAuthLoopbackRuntime.openExternal(arg as string);
 				return undefined as T;
 			default:
 				throw new Error(`Call not found: ${command}`);
@@ -151,7 +160,7 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 	private async tokenExchange(req: IVSCloneOAuthTokenExchangeRequest): Promise<IVSCloneOAuthTokenExchangeResponse> {
 		const parsed = new URL(req.url);
 		return new Promise<IVSCloneOAuthTokenExchangeResponse>((resolve, reject) => {
-			const outgoing = httpsRequest(
+			const outgoing = vscloneOAuthLoopbackRuntime.httpsRequest(
 				{
 					hostname: parsed.hostname,
 					port: parsed.port || 443,
@@ -194,7 +203,7 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 		const listenPort = request.preferredPort > 0 ? request.preferredPort : 0;
 
 		const result = new DeferredPromise<IVSCloneOAuthLoopbackWaitResponse>();
-		const server = createServer((incomingRequest, response) => {
+		const server = vscloneOAuthLoopbackRuntime.createServer((incomingRequest, response) => {
 			this.handleLoopbackRequest(request.sessionId, incomingRequest, response);
 		});
 
@@ -223,12 +232,18 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 		let timeout: ReturnType<typeof setTimeout> | undefined;
 
 		try {
-			return await Promise.race([
+			const result = await Promise.race<IVSCloneOAuthLoopbackWaitResponse | typeof LOOPBACK_WAIT_TIMEOUT>([
 				session.result.p,
-				new Promise<IVSCloneOAuthLoopbackWaitResponse>((_resolve, reject) => {
-					timeout = setTimeout(() => reject(new Error('Timed out waiting for OAuth callback.')), timeoutMs);
+				// Resolve with a sentinel instead of rejecting from inside the timer so test runners do
+				// not briefly observe an unhandled rejection before the caller awaits the race result.
+				new Promise<typeof LOOPBACK_WAIT_TIMEOUT>((resolve) => {
+					timeout = setTimeout(() => resolve(LOOPBACK_WAIT_TIMEOUT), timeoutMs);
 				}),
 			]);
+			if (result === LOOPBACK_WAIT_TIMEOUT) {
+				throw new Error('Timed out waiting for OAuth callback.');
+			}
+			return result;
 		} finally {
 			if (timeout) {
 				clearTimeout(timeout);

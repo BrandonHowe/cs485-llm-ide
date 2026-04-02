@@ -41,6 +41,9 @@ export interface IVSCloneChatHistoryTurn {
 	status: VSCloneChatTurnStatus;
 	errorCode?: string;
 	lastEventAt?: number;
+	// Persist the last applied wire-event fingerprint so replayed stream chunks with the same
+	// timestamp can be ignored without dropping distinct chunks that happened within one millisecond.
+	lastEventFingerprint?: string;
 }
 
 /**

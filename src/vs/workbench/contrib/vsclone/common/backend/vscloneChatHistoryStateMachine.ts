@@ -78,6 +78,24 @@ function mergeDelta(existing: string, delta: string | undefined, replace: string
 	return `${existing}${delta}`;
 }
 
+function createUpdateFingerprint(update: IVSCloneChatTurnUpdate): string {
+	return JSON.stringify({
+		phase: update.phase,
+		occurredAt: update.occurredAt,
+		promptText: update.promptText,
+		threadTitle: update.threadTitle,
+		executionMode: update.executionMode,
+		modelIdentifier: update.modelIdentifier,
+		providerId: update.providerId,
+		promptImages: update.promptImages?.map(image => `${image.mimeType}:${image.base64Data}`),
+		responseMarkdownDelta: update.responseMarkdownDelta,
+		responsePlainTextDelta: update.responsePlainTextDelta,
+		responseMarkdownReplace: update.responseMarkdownReplace,
+		responsePlainTextReplace: update.responsePlainTextReplace,
+		errorCode: update.errorCode,
+	});
+}
+
 export function reduceThreadTurns(
 	thread: IVSCloneChatHistoryThread | undefined,
 	turns: readonly IVSCloneChatHistoryTurn[] | undefined,
@@ -85,9 +103,11 @@ export function reduceThreadTurns(
 	options: IVSCloneHistoryTransitionOptions,
 ): IVSCloneHistoryTransitionResult {
 	const existingTurns = turns ? [...turns] : [];
+	const updateFingerprint = createUpdateFingerprint(update);
 	let existingTurnIndex = existingTurns.findIndex(turn => turn.turnId === update.turnId);
+	const isNewTurn = existingTurnIndex === -1;
 
-	if (existingTurnIndex === -1) {
+	if (isNewTurn) {
 		existingTurns.push({
 			turnId: update.turnId,
 			threadId: update.threadId,
@@ -104,12 +124,33 @@ export function reduceThreadTurns(
 			errorCode: update.errorCode,
 			completedAt: update.phase === 'complete' || update.phase === 'error' || update.phase === 'cancel' ? update.occurredAt : undefined,
 			lastEventAt: update.occurredAt,
+			lastEventFingerprint: updateFingerprint,
 		});
 		existingTurnIndex = existingTurns.length - 1;
 	}
 
 	const existingTurn = existingTurns[existingTurnIndex];
 	const lastEventAt = existingTurn.lastEventAt ?? existingTurn.startedAt;
+	// Stream chunks can legitimately arrive in the same millisecond, but transport retries can also
+	// replay the exact same event. Remembering the last applied fingerprint preserves equal-time
+	// chunks while making duplicate replays idempotent.
+	if (!isNewTurn && update.occurredAt === lastEventAt && existingTurn.lastEventFingerprint === updateFingerprint) {
+		return {
+			thread: thread ?? {
+				threadId: update.threadId,
+				sessionResource: options.sessionResource,
+				title: update.threadTitle?.trim() || 'Untitled Chat',
+				activeModelIdentifier: update.modelIdentifier,
+				createdAt: existingTurn.startedAt,
+				updatedAt: existingTurn.startedAt,
+				status: 'active',
+				archived: false,
+				turnCount: existingTurns.length,
+				lastTurnPreview: deriveLastTurnPreview(existingTurns.at(-1)),
+			},
+			turns: toSortedTurns(existingTurns),
+		};
+	}
 	// Stream chunks can legitimately arrive in the same millisecond.
 	// Only reject strictly older events so equal-timestamp deltas are preserved.
 	if (update.occurredAt < lastEventAt && update.phase !== 'prompt') {
@@ -138,6 +179,7 @@ export function reduceThreadTurns(
 		providerId: update.providerId ?? existingTurn.providerId,
 		promptImages: update.promptImages ?? existingTurn.promptImages,
 		lastEventAt: Math.max(lastEventAt, update.occurredAt),
+		lastEventFingerprint: updateFingerprint,
 	};
 
 	switch (update.phase) {

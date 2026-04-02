@@ -96,6 +96,12 @@ function createPlainTextMarkdownRendererStub() {
 	};
 }
 
+// The constructor performs a lot of UI setup that would hide the small helper branches we want to
+// exercise, so the tests use a prototype-only harness and inject only the members needed by each case.
+function createPaneHarness(): VSCloneUnifiedChatViewPane {
+	return Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
+}
+
 suite('VSCloneUnifiedChatViewPane', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -347,6 +353,503 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.deepStrictEqual(toVSCloneHistoryQuery('', 'all'), { text: '', tab: 'all', includeArchived: true });
 		assert.deepStrictEqual(toVSCloneHistoryQuery('abc', 'active'), { text: 'abc', tab: 'active', includeArchived: false });
 		assert.deepStrictEqual(toVSCloneHistoryQuery('abc', 'archived'), { text: 'abc', tab: 'archived', includeArchived: false });
+	});
+
+	test('helper transcript parsing decodes thinking traces and trims lone tool outputs', () => {
+		const pane = createPaneHarness();
+		const target = pane as unknown as IRenderToolAwareAssistantTarget & {
+			markdownRendererService: ReturnType<typeof createPlainTextMarkdownRendererStub>;
+			renderedMarkdownDisposables: { add: (value: { dispose(): void }) => void };
+		};
+		target.markdownRendererService = createPlainTextMarkdownRendererStub();
+		target.renderedMarkdownDisposables = {
+			add: () => undefined,
+		};
+
+		const thinkingContainer = document.createElement('div');
+		const thinkingTranscript = [
+			'<agent_trace type="thinking">Thinking about &lt;items&gt; &amp; tools</agent_trace>',
+			'Final answer starts here',
+		].join('\n');
+		target.renderToolAwareAssistantText(thinkingContainer, thinkingTranscript, false);
+
+		assert.strictEqual(
+			thinkingContainer.querySelector('.vsclone-thinking-step')?.textContent,
+			'Thinking about <items> & tools',
+		);
+		assert.ok(!thinkingContainer.textContent?.includes('&lt;items&gt;'));
+
+		const toolContainer = document.createElement('div');
+		const toolTranscript = [
+			'<agent_trace type="tool" status="start">Search workspace</agent_trace>',
+			'<tool_result tool_name="search" success="false">  trimmed output  </tool_result>',
+		].join('\n');
+		target.renderToolAwareAssistantText(toolContainer, toolTranscript, false);
+
+		assert.strictEqual(
+			toolContainer.querySelector('.vsclone-tool-card-output')?.textContent,
+			'trimmed output',
+		);
+	});
+
+	test('helper transcript normalization and thinking segmentation keep structural markers stable', () => {
+		const pane = createPaneHarness() as unknown as {
+			normalizeTranscriptComparisonText: (value: string) => string;
+			extractPlainAssistantSegments: (text: string) => ReadonlyArray<{ kind: 'thinking' | 'text'; value: string }>;
+			findNextPlainThinkingMarker: (text: string, fromOffset: number) => number;
+			splitThinkingMessageAndTrailingText: (value: string) => { message: string; trailingText: string };
+			shouldSuppressProvisionalCompletionSegment: (segment: string, segmentEndOffset: number, firstCompletionStartOffset: number | undefined, completionSummaries: readonly string[]) => boolean;
+		};
+
+		assert.strictEqual(
+			pane.normalizeTranscriptComparisonText('  Hello\nWORLD  '),
+			'hello world',
+		);
+
+		const transcript = 'labelThinking: ignore this. Thinking: plan step. Final answer starts here';
+		assert.strictEqual(
+			pane.findNextPlainThinkingMarker(transcript, 0),
+			transcript.indexOf('Thinking: plan step.'),
+		);
+		assert.deepStrictEqual(pane.extractPlainAssistantSegments(transcript), [
+			{ kind: 'text', value: 'labelThinking: ignore this.' },
+			{ kind: 'thinking', value: 'plan step.' },
+			{ kind: 'text', value: 'Final answer starts here' },
+		]);
+		assert.deepStrictEqual(
+			pane.splitThinkingMessageAndTrailingText('Plan step. Final Answer starts here'),
+			{ message: 'Plan step.', trailingText: 'Final Answer starts here' },
+		);
+
+		const completionSummary = 'I inspected the workspace and it appears empty, so here is a fresh small browser game idea and a concrete build plan.';
+		const normalizedSummary = pane.normalizeTranscriptComparisonText(completionSummary);
+		assert.strictEqual(
+			pane.shouldSuppressProvisionalCompletionSegment(
+				completionSummary,
+				completionSummary.length,
+				completionSummary.length + 10,
+				[normalizedSummary],
+			),
+			true,
+		);
+		assert.strictEqual(
+			pane.shouldSuppressProvisionalCompletionSegment(
+				'Task complete',
+				13,
+				completionSummary.length + 10,
+				['Task complete'],
+			),
+			false,
+		);
+		assert.strictEqual(
+			pane.shouldSuppressProvisionalCompletionSegment(
+				completionSummary,
+				completionSummary.length,
+				undefined,
+				[completionSummary],
+			),
+			false,
+		);
+	});
+
+	test('composer model selection and reasoning helpers resolve visible, stored, and default values', async () => {
+		const pane = createPaneHarness() as unknown as {
+			activeThreadId?: string;
+			reasoningEffortContainer?: HTMLElement;
+			reasoningEffortSelect?: HTMLSelectElement;
+			modelSelectionService: {
+				getCurrentSelectionForThread: (threadId: string, location: 'chat') => { threadId?: string; location: 'chat'; modelIdentifier: string; vendor: string; modelId: string; modelName: string; reasoningEffort?: string; selectedAt: number } | undefined;
+				setSelectionForThread: (threadId: string, selection: unknown) => Promise<void>;
+			};
+			modelCatalogService: {
+				getModel: (modelIdentifier: string) => { reasoningEffortLevels?: readonly string[]; defaultReasoningEffort?: string };
+			};
+			getCurrentComposerModelSelection: (threadId: string | undefined) => unknown;
+			refreshReasoningEffortControl: () => void;
+			updateReasoningEffortSelection: () => Promise<void>;
+		};
+		const selectedModel: {
+			threadId: string;
+			location: 'chat';
+			modelIdentifier: string;
+			vendor: string;
+			modelId: string;
+			modelName: string;
+			reasoningEffort?: 'low' | 'high';
+			selectedAt: number;
+		} = {
+			threadId: 'thread-1',
+			location: 'chat' as const,
+			modelIdentifier: 'openai/gpt-5.3-codex',
+			vendor: 'openai',
+			modelId: 'gpt-5.3-codex',
+			modelName: 'GPT-5.3-Codex',
+			reasoningEffort: 'low' as const,
+			selectedAt: 1,
+		};
+		let persistedSelection: unknown;
+		pane.activeThreadId = 'thread-1';
+		pane.reasoningEffortContainer = document.createElement('div');
+		pane.reasoningEffortContainer.classList.add('hidden');
+		pane.reasoningEffortSelect = document.createElement('select');
+		pane.reasoningEffortSelect.value = 'high';
+		pane.modelSelectionService = {
+			getCurrentSelectionForThread: () => selectedModel,
+			setSelectionForThread: async (_threadId: string, selection: unknown) => {
+				persistedSelection = selection;
+			},
+		};
+		pane.modelCatalogService = {
+			getModel: () => ({
+				reasoningEffortLevels: ['low', 'high'],
+				defaultReasoningEffort: 'high',
+			}),
+		};
+
+		pane.refreshReasoningEffortControl();
+		assert.deepStrictEqual(pane.getCurrentComposerModelSelection('thread-1'), {
+			...selectedModel,
+			threadId: 'thread-1',
+			reasoningEffort: 'low',
+		});
+
+		pane.reasoningEffortSelect.value = 'high';
+		assert.deepStrictEqual(pane.getCurrentComposerModelSelection('thread-1'), {
+			...selectedModel,
+			threadId: 'thread-1',
+			reasoningEffort: 'high',
+		});
+
+		pane.reasoningEffortSelect.value = 'bogus';
+		assert.deepStrictEqual(pane.getCurrentComposerModelSelection('thread-1'), {
+			...selectedModel,
+			threadId: 'thread-1',
+			reasoningEffort: 'low',
+		});
+
+		(selectedModel as { reasoningEffort?: 'low' | 'high' | undefined }).reasoningEffort = undefined;
+		pane.refreshReasoningEffortControl();
+		assert.deepStrictEqual(pane.getCurrentComposerModelSelection('thread-1'), {
+			...selectedModel,
+			threadId: 'thread-1',
+			reasoningEffort: 'high',
+		});
+
+		assert.strictEqual(pane.reasoningEffortContainer.classList.contains('hidden'), false);
+		assert.deepStrictEqual(
+			Array.from(pane.reasoningEffortSelect.options).map(option => [option.value, option.textContent]),
+			[
+				['low', 'Low'],
+				['high', 'High'],
+			],
+		);
+		assert.strictEqual(pane.reasoningEffortSelect.value, 'high');
+
+		pane.reasoningEffortSelect.value = 'high';
+		await pane.updateReasoningEffortSelection();
+		assert.strictEqual((persistedSelection as { reasoningEffort?: string; location?: string; threadId?: string })?.reasoningEffort, 'high');
+		assert.strictEqual((persistedSelection as { reasoningEffort?: string; location?: string; threadId?: string })?.location, 'chat');
+		assert.strictEqual((persistedSelection as { reasoningEffort?: string; location?: string; threadId?: string })?.threadId, 'thread-1');
+		assert.strictEqual((persistedSelection as { selectedAt?: number } | undefined)?.selectedAt !== undefined, true);
+
+		persistedSelection = undefined;
+		selectedModel.reasoningEffort = 'high';
+		await pane.updateReasoningEffortSelection();
+		assert.strictEqual(persistedSelection, undefined);
+
+		pane.modelSelectionService.getCurrentSelectionForThread = () => undefined;
+		pane.refreshReasoningEffortControl();
+		assert.strictEqual(pane.reasoningEffortContainer.classList.contains('hidden'), true);
+		assert.strictEqual(pane.reasoningEffortSelect.options.length, 0);
+	});
+
+	test('composer state and layout helpers respond to missing models and active threads', () => {
+		const pane = createPaneHarness() as unknown as {
+			activeThreadId?: string;
+			historyReady: boolean;
+			submittingPrompt: boolean;
+			isCompactLayout: boolean;
+			rootContainer: HTMLElement;
+			composerInput: HTMLTextAreaElement;
+			composerSendButton: HTMLButtonElement;
+			reasoningEffortContainer: HTMLElement;
+			reasoningEffortSelect: HTMLSelectElement;
+			planModeContainer: HTMLElement;
+			planModeSwitchButton: HTMLButtonElement;
+			addContextMenuToggle: HTMLElement;
+			getBusyThreadId: () => string | undefined;
+			getCurrentComposerModelSelection: (threadId: string | undefined) => unknown;
+			getCurrentComposerMode: () => 'act' | 'plan';
+			updateComposerState: () => void;
+			applyResponsiveLayout: (width: number) => void;
+		};
+		pane.activeThreadId = 'thread-1';
+		pane.historyReady = true;
+		pane.submittingPrompt = false;
+		pane.rootContainer = document.createElement('div');
+		pane.composerInput = document.createElement('textarea');
+		pane.composerInput.value = 'ask';
+		pane.composerSendButton = document.createElement('button');
+		pane.reasoningEffortContainer = document.createElement('div');
+		pane.reasoningEffortContainer.classList.add('hidden');
+		pane.reasoningEffortSelect = document.createElement('select');
+		pane.planModeContainer = document.createElement('div');
+		pane.planModeSwitchButton = document.createElement('button');
+		pane.addContextMenuToggle = document.createElement('span');
+		pane.getBusyThreadId = () => undefined;
+		pane.getCurrentComposerModelSelection = () => undefined;
+		pane.getCurrentComposerMode = () => 'act';
+
+		pane.updateComposerState();
+		assert.strictEqual(pane.composerSendButton.disabled, true);
+		assert.strictEqual(pane.composerInput.disabled, false);
+		assert.strictEqual(
+			pane.composerInput.placeholder,
+			'Sign in to a provider and choose a model to start chatting...',
+		);
+		assert.strictEqual(pane.reasoningEffortSelect.disabled, true);
+		assert.strictEqual(pane.planModeSwitchButton.getAttribute('aria-checked'), 'false');
+		assert.strictEqual(pane.addContextMenuToggle.classList.contains('active'), false);
+
+		pane.getCurrentComposerModelSelection = () => ({ modelIdentifier: 'openai/gpt-5.3-codex' });
+		pane.reasoningEffortContainer.classList.remove('hidden');
+		pane.getCurrentComposerMode = () => 'plan';
+		pane.updateComposerState();
+		assert.strictEqual(pane.composerSendButton.disabled, false);
+		assert.strictEqual(pane.composerInput.disabled, false);
+		assert.strictEqual(pane.composerSendButton.classList.contains('stop-mode'), false);
+		assert.strictEqual(pane.composerSendButton.title, 'Send message');
+		assert.strictEqual(pane.composerInput.placeholder, 'Type your prompt here...');
+		assert.strictEqual(pane.reasoningEffortSelect.disabled, false);
+		assert.strictEqual(pane.planModeSwitchButton.classList.contains('checked'), true);
+		assert.strictEqual(pane.planModeSwitchButton.getAttribute('aria-checked'), 'true');
+		assert.strictEqual(pane.addContextMenuToggle.classList.contains('active'), true);
+
+		pane.applyResponsiveLayout(800);
+		assert.strictEqual((pane as { isCompactLayout: boolean }).isCompactLayout, true);
+		assert.strictEqual(pane.rootContainer.classList.contains('compact-layout'), true);
+		pane.applyResponsiveLayout(1000);
+		assert.strictEqual((pane as { isCompactLayout: boolean }).isCompactLayout, false);
+		assert.strictEqual(pane.rootContainer.classList.contains('compact-layout'), false);
+	});
+
+	test('history helpers resolve busy state, cached threads, and thread switcher context', () => {
+		const pane = createPaneHarness() as unknown as {
+			activeThreadId?: string;
+			historyService: {
+				getTurns: (threadId: string) => Array<{ status: 'pending' | 'streaming' | 'completed' }>;
+				getThreads: (query: { includeArchived: boolean }) => Array<{ threadId: string; archived: boolean }>;
+				deleteThread: (threadId: string) => Promise<void>;
+			};
+			threadsById: Map<string, { threadId: string; archived: boolean }>;
+			rail: {
+				getSelectedThread: () => string | undefined;
+				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
+				setRows: (rows: Array<{ threadId: string; selected: boolean }>) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			getBusyThreadId: () => string | undefined;
+			resolveThreadById: (threadId: string) => { threadId: string; archived: boolean } | undefined;
+			getModelSwitcherContext: () => { threadId: string; location: 'chat' };
+			refreshRailRows: () => void;
+			historyReady: boolean;
+		};
+		const cachedThread = { threadId: 'thread-1', archived: false };
+		const archivedThread = { threadId: 'thread-archived', archived: true };
+		let capturedQuery: { includeArchived: boolean } | undefined;
+		let selectedThread: string | undefined;
+		let capturedRows: Array<{ threadId: string; selected: boolean }> | undefined;
+
+		pane.activeThreadId = 'thread-1';
+		pane.historyService = {
+			getTurns: (threadId: string) => threadId === 'thread-1'
+				? [{ status: 'pending' }, { status: 'streaming' }]
+				: [{ status: 'completed' }],
+			getThreads: (query: { includeArchived: boolean }) => {
+				capturedQuery = query;
+				return [cachedThread, archivedThread];
+			},
+			deleteThread: async () => undefined,
+		};
+		pane.threadsById = new Map([['thread-1', cachedThread]]);
+		pane.rail = {
+			getSelectedThread: () => 'thread-rail',
+			getFilterState: () => ({ query: 'bug', tab: 'all' }),
+			setRows: (rows: Array<{ threadId: string; selected: boolean }>) => {
+				capturedRows = rows;
+			},
+			setSelectedThread: (threadId: string | undefined) => {
+				selectedThread = threadId;
+			},
+		};
+
+		assert.strictEqual(pane.getBusyThreadId(), 'thread-1');
+		pane.activeThreadId = 'thread-2';
+		assert.strictEqual(pane.getBusyThreadId(), undefined);
+
+		assert.strictEqual(pane.resolveThreadById('thread-1'), cachedThread);
+		assert.strictEqual(pane.resolveThreadById('thread-archived'), archivedThread);
+		assert.deepStrictEqual(pane.getModelSwitcherContext(), { threadId: 'thread-2', location: 'chat' });
+
+		pane.historyReady = true;
+		pane.activeThreadId = 'thread-1';
+		pane.refreshRailRows();
+		assert.deepStrictEqual(capturedQuery, { text: 'bug', tab: 'all', includeArchived: true });
+		assert.strictEqual(pane.threadsById.get('thread-1'), cachedThread);
+		assert.strictEqual(pane.threadsById.get('thread-archived'), archivedThread);
+		assert.strictEqual(selectedThread, 'thread-1');
+		assert.strictEqual(capturedRows?.[0].selected, true);
+	});
+
+	test('reloadHistory, render fallback, and composer reset branches update the pane state consistently', async () => {
+		const pane = createPaneHarness() as unknown as {
+			rootContainer: HTMLElement;
+			railVisible: boolean;
+			rail: {
+				setLoading: () => void;
+				setError: (message: string) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			historyReady: boolean;
+			historyService: { initialize: () => Promise<void>; deleteThread?: (threadId: string) => Promise<void> };
+			planModeService: { initialize: () => Promise<void> };
+			reloadHistory: () => Promise<void>;
+			refreshRailRows: () => void;
+			refreshConversation: () => void;
+			applyRailLayout: () => void;
+			focusInput: () => void;
+			renderConversationFallback: (parent: HTMLElement) => void;
+			showComposerForNewChat: () => void;
+			deleteThread: (threadId: string) => Promise<void>;
+			refreshPlanModeControl: () => void;
+			refreshModelControls: () => void;
+			activeThreadId?: string;
+			sessionService: { cancelThread: (threadId: string) => void };
+		};
+		let loadingCalls = 0;
+		let errorMessage: string | undefined;
+		let railSelection: string | undefined = 'thread-1';
+		let refreshRailRowsCalls = 0;
+		let refreshConversationCalls = 0;
+		let applyRailLayoutCalls = 0;
+		let focusInputCalls = 0;
+		let refreshPlanModeControlCalls = 0;
+		let refreshModelControlsCalls = 0;
+		let cancelThreadId: string | undefined;
+		let deletedThreadId: string | undefined;
+		const root = document.createElement('div');
+
+		pane.rootContainer = root;
+		pane.railVisible = true;
+		pane.rail = {
+			setLoading: () => {
+				loadingCalls += 1;
+			},
+			setError: (message: string) => {
+				errorMessage = message;
+			},
+			setSelectedThread: (threadId: string | undefined) => {
+				railSelection = threadId;
+			},
+		};
+		pane.historyReady = false;
+		pane.historyService = {
+			initialize: async () => undefined,
+		};
+		pane.planModeService = {
+			initialize: async () => undefined,
+		};
+		pane.refreshRailRows = () => {
+			refreshRailRowsCalls += 1;
+		};
+		pane.refreshConversation = () => {
+			refreshConversationCalls += 1;
+		};
+		pane.applyRailLayout = () => {
+			applyRailLayoutCalls += 1;
+		};
+		pane.focusInput = () => {
+			focusInputCalls += 1;
+		};
+		pane.refreshPlanModeControl = () => {
+			refreshPlanModeControlCalls += 1;
+		};
+		pane.refreshModelControls = () => {
+			refreshModelControlsCalls += 1;
+		};
+		pane.renderConversationFallback(root);
+		assert.strictEqual(root.querySelector('.vsclone-thread-empty-state')?.textContent, 'Failed to render the chat UI. Reload the window and try again.');
+
+		await pane.reloadHistory();
+		assert.strictEqual(loadingCalls, 1);
+		assert.strictEqual((pane as { historyReady: boolean }).historyReady, true);
+		assert.strictEqual(refreshRailRowsCalls, 1);
+		assert.strictEqual(refreshConversationCalls, 1);
+		assert.strictEqual((pane as { railVisible: boolean }).railVisible, false);
+		assert.strictEqual(applyRailLayoutCalls, 1);
+
+		pane.historyService = {
+			initialize: async () => {
+				throw new Error('boom');
+			},
+		};
+		await pane.reloadHistory();
+		assert.strictEqual(errorMessage, 'Failed to load chat history. Please try again.');
+		assert.strictEqual((pane as { historyReady: boolean }).historyReady, false);
+
+		pane.activeThreadId = 'thread-1';
+		refreshPlanModeControlCalls = 0;
+		refreshModelControlsCalls = 0;
+		refreshConversationCalls = 0;
+		applyRailLayoutCalls = 0;
+		focusInputCalls = 0;
+		railSelection = 'thread-1';
+		pane.railVisible = true;
+		pane.sessionService = {
+			cancelThread: (threadId: string) => {
+				cancelThreadId = threadId;
+			},
+		};
+		pane.historyService = {
+			initialize: async () => undefined,
+			deleteThread: async (threadId: string) => {
+				deletedThreadId = threadId;
+			},
+		};
+		(pane as unknown as { showComposerForNewChat: () => void }).showComposerForNewChat();
+		assert.strictEqual((pane as { activeThreadId?: string }).activeThreadId, undefined);
+		assert.strictEqual(railSelection, undefined);
+		assert.strictEqual((pane as { railVisible: boolean }).railVisible, false);
+		assert.strictEqual(refreshPlanModeControlCalls, 1);
+		assert.strictEqual(refreshModelControlsCalls, 1);
+		assert.strictEqual(refreshConversationCalls, 1);
+		assert.strictEqual(applyRailLayoutCalls, 1);
+		assert.strictEqual(focusInputCalls, 1);
+
+		pane.activeThreadId = 'thread-1';
+		pane.railVisible = true;
+		refreshRailRowsCalls = 0;
+		refreshPlanModeControlCalls = 0;
+		refreshModelControlsCalls = 0;
+		refreshConversationCalls = 0;
+		applyRailLayoutCalls = 0;
+		focusInputCalls = 0;
+		railSelection = 'thread-1';
+		pane.refreshRailRows = () => {
+			refreshRailRowsCalls += 1;
+		};
+		await pane.deleteThread('thread-1');
+		assert.strictEqual(cancelThreadId, 'thread-1');
+		assert.strictEqual(deletedThreadId, 'thread-1');
+		assert.strictEqual((pane as { activeThreadId?: string }).activeThreadId, undefined);
+		assert.strictEqual(railSelection, undefined);
+		assert.strictEqual((pane as { railVisible: boolean }).railVisible, false);
+		assert.strictEqual(refreshRailRowsCalls, 1);
+		assert.strictEqual(refreshPlanModeControlCalls, 1);
+		assert.strictEqual(refreshModelControlsCalls, 2);
+		assert.strictEqual(refreshConversationCalls, 2);
+		assert.strictEqual(applyRailLayoutCalls, 1);
+		assert.strictEqual(focusInputCalls, 1);
 	});
 
 	test('composer surface includes model and reasoning controls when enabled', () => {

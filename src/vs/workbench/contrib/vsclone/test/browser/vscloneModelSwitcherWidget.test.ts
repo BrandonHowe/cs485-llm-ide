@@ -79,7 +79,7 @@ suite('VSCloneModelSwitcherWidget', () => {
 
 		widget.refresh();
 		const button = container.querySelector('.vsclone-model-switcher-button') as HTMLButtonElement;
-		assert.ok(button.textContent?.includes('GPT-5.3-Codex'));
+		assert.ok(button.textContent?.includes(firstModel.modelName));
 		assert.strictEqual(button.getAttribute('aria-haspopup'), 'dialog');
 		assert.strictEqual(button.getAttribute('aria-expanded'), 'false');
 
@@ -111,10 +111,9 @@ suite('VSCloneModelSwitcherWidget', () => {
 
 		widget.refresh();
 		const button = container.querySelector('.vsclone-model-switcher-button') as HTMLButtonElement;
-		assert.ok(button.textContent?.includes('Haiku 4.5'));
-		assert.ok(button.textContent?.includes('anthropic'));
+		assert.ok(button.textContent?.includes(anthropicModel.modelName));
 		const modelLabel = container.querySelector('.vsclone-model-switcher-button-model') as HTMLElement | null;
-		assert.strictEqual(modelLabel?.getAttribute('title'), 'Haiku 4.5');
+		assert.strictEqual(modelLabel?.getAttribute('title'), anthropicModel.modelName);
 	});
 
 	test('escape closes the menu and restores focus to the switcher button', async () => {

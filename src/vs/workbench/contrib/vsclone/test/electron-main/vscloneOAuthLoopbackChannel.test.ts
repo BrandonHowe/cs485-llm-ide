@@ -12,12 +12,9 @@ import { DeferredPromise } from '../../../../../base/common/async.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
-import * as http from 'http';
-import * as https from 'https';
 import { EventEmitter } from 'events';
 import * as sinon from 'sinon';
-import { shell } from 'electron';
-import { VSCloneOAuthLoopbackChannel } from '../../electron-main/vscloneOAuthLoopbackChannel.js';
+import { VSCloneOAuthLoopbackChannel, vscloneOAuthLoopbackRuntime } from '../../electron-main/vscloneOAuthLoopbackChannel.js';
 import {
 	IVSCloneOAuthLoopbackStartRequest,
 	IVSCloneOAuthLoopbackStopRequest,
@@ -130,7 +127,7 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 			channelAny.waitForLoopback = sandbox.stub().resolves({ code: 'code', state: 'state', callbackUrl: 'http://127.0.0.1/callback' });
 			channelAny.stopLoopback = sandbox.stub().resolves();
 			channelAny.tokenExchange = sandbox.stub().resolves({ statusCode: 200, body: '{}' } as IVSCloneOAuthTokenExchangeResponse);
-			const openExternal = sandbox.stub(shell as any, 'openExternal').resolves();
+			const openExternal = sandbox.stub(vscloneOAuthLoopbackRuntime, 'openExternal').resolves();
 
 			assert.deepStrictEqual(await channel.call('', VSCLONE_OAUTH_COMMAND_START_LOOPBACK, startResult), { redirectUri: 'http://127.0.0.1:4321/auth/callback' });
 			assert.deepStrictEqual(await channel.call('', VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK, waitResult), { code: 'code', state: 'state', callbackUrl: 'http://127.0.0.1/callback' });
@@ -161,7 +158,7 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 			outgoing.write = sandbox.spy();
 			outgoing.end = sandbox.spy();
 
-			const requestStub = sandbox.stub(https as any, 'request').callsFake((options: any, callback: (response: any) => void) => {
+			const requestStub = sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest').callsFake((options: any, callback: (response: any) => void) => {
 				assert.deepStrictEqual(options, {
 					hostname: 'example.com',
 					port: '8443',
@@ -204,7 +201,7 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 				queueMicrotask(() => errorOutgoing.emit('error', transportError));
 			});
 
-			sandbox.stub(https as any, 'request').callsFake(() => errorOutgoing);
+			sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest').callsFake(() => errorOutgoing);
 			await assert.rejects(channelAny.tokenExchange(request), /socket closed/);
 		});
 	});
@@ -212,7 +209,7 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 	test('starts loopback sessions with deterministic redirect URIs and records the callback path', async () => {
 		await withSandbox(async sandbox => {
 			const { channelAny, logService } = createChannel(sandbox, store);
-			const createServerStub = sandbox.stub(http as any, 'createServer').returns({} as any);
+			const createServerStub = sandbox.stub(vscloneOAuthLoopbackRuntime, 'createServer').returns({} as any);
 			channelAny.stopLoopback = sandbox.stub().resolves();
 			channelAny.listenServer = sandbox.stub().resolves();
 			channelAny.getBoundPort = sandbox.stub().returns(4321);
@@ -285,8 +282,9 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 				sessionId: 'session-timeout',
 				timeoutMs: 5,
 			});
+			const timeoutAssertion = assert.rejects(timeoutPromise, /Timed out waiting for OAuth callback\./);
 			await clock.tickAsync(5);
-			await assert.rejects(timeoutPromise, /Timed out waiting for OAuth callback\./);
+			await timeoutAssertion;
 		});
 	});
 
@@ -310,7 +308,9 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 
 			const quietSession = createDeferredSession(sandbox);
 			channelAny.sessions.set('session-quiet', quietSession as any);
+			const quietRejection = quietSession.result.p.catch(error => error as Error);
 			await channelAny.stopLoopback('session-quiet', true);
+			await quietRejection;
 
 			assert.strictEqual(channelAny.sessions.has('session-quiet'), false);
 			assert.ok((quietSession.server.close as sinon.SinonSpy).calledOnce);

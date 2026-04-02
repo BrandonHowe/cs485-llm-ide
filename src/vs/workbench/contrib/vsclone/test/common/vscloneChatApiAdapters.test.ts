@@ -37,7 +37,7 @@ suite('VSCloneChatApiAdapters', () => {
 		}, {
 			model: 'claude-haiku-4-5-20251001',
 			max_tokens: 16384,
-			system: 'You are VSClone, a helpful coding assistant. Answer clearly and concisely.',
+			system: 'You are VSClone, a helpful coding assistant. Answer clearly and concisely. User turns may include image attachments in addition to text. Inspect attached images directly when they are present. Do not claim a request was text-only unless no image attachments were provided or the runtime reports an image-processing failure.',
 			stream: true,
 		});
 		// Anthropic OAuth should stay on the plain Messages API surface, so the optional thinking block must be omitted entirely.

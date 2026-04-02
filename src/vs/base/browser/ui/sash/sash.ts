@@ -110,7 +110,10 @@ export interface IHorizontalSashOptions extends ISashOptions {
 	readonly orientation: Orientation.HORIZONTAL;
 }
 
-export const enum Orientation {
+// `splitview.ts` re-exports this enum and browser ESM consumers import it as a runtime value. Keep
+// it as a real enum instead of a `const enum`, otherwise TypeScript erases the export and the
+// browser test loader fails during module evaluation before any suites can register.
+export enum Orientation {
 	VERTICAL,
 	HORIZONTAL
 }

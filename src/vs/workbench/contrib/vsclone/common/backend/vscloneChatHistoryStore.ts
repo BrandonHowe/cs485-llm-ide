@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ILogService } from '../../../../../platform/log/common/log.js';
+import { _util } from '../../../../../platform/instantiation/common/instantiation.js';
 import { IStorageEntry, IStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
@@ -200,6 +201,16 @@ export class VSCloneChatHistoryStore extends Disposable {
 	private getThreadStorageKey(threadId: string): string {
 		return `${THREAD_STORAGE_KEY_PREFIX}${encodeThreadId(threadId)}`;
 	}
+}
+
+// Some VSClone-generated outputs currently miss emitted `__param` metadata for this class even
+// though other workbench services still use constructor-based DI. Registering the dependencies
+// explicitly keeps `createInstance(VSCloneChatHistoryStore)` stable without double-registering
+// when the normal decorator metadata is present.
+if (_util.getServiceDependencies(VSCloneChatHistoryStore).length === 0) {
+	IStorageService(VSCloneChatHistoryStore, undefined, 0);
+	IWorkspaceContextService(VSCloneChatHistoryStore, undefined, 1);
+	ILogService(VSCloneChatHistoryStore, undefined, 2);
 }
 
 function cloneSelection<T extends object>(selection: T): T {

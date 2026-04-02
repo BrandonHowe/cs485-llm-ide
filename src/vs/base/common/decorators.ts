@@ -3,60 +3,100 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-function createDecorator(mapFn: (fn: Function, key: string) => Function): MethodDecorator {
-	return (_target: Object, key: string | symbol, descriptor: TypedPropertyDescriptor<any>) => {
-		let fnKey: 'value' | 'get' | null = null;
-		let fn: Function | null = null;
-
-		if (typeof descriptor.value === 'function') {
-			fnKey = 'value';
-			fn = descriptor.value;
-		} else if (typeof descriptor.get === 'function') {
-			fnKey = 'get';
-			fn = descriptor.get;
-		}
-
-		if (!fn || typeof key === 'symbol') {
-			throw new Error('not supported');
-		}
-
-		descriptor[fnKey!] = mapFn(fn, key);
-	};
+interface IModernDecoratorContext {
+	readonly kind: 'getter' | 'method';
+	readonly name: string | symbol;
 }
 
-export function memoize(_target: Object, key: string, descriptor: PropertyDescriptor) {
-	let fnKey: 'value' | 'get' | null = null;
-	let fn: Function | null = null;
+type DecoratedFunction = (...args: unknown[]) => unknown;
 
-	if (typeof descriptor.value === 'function') {
-		fnKey = 'value';
-		fn = descriptor.value;
+/**
+ * Keep shared decorators compatible with both legacy descriptor decorators and
+ * the modern `__esDecorate` calling convention. The `out/` tree can mix both
+ * shapes while TypeScript/compiler settings change, so central helpers must
+ * understand either runtime form to avoid load-time crashes.
+ */
+function isModernDecoratorContext(value: string | symbol | IModernDecoratorContext): value is IModernDecoratorContext {
+	return typeof value === 'object'
+		&& value !== null
+		&& 'kind' in value
+		&& 'name' in value
+		&& (value.kind === 'getter' || value.kind === 'method');
+}
 
-		if (fn!.length !== 0) {
-			console.warn('Memoize should only be used in functions with zero parameters');
-		}
-	} else if (typeof descriptor.get === 'function') {
-		fnKey = 'get';
-		fn = descriptor.get;
-	}
-
-	if (!fn) {
+function getDecoratorKey(key: string | symbol): string {
+	if (typeof key === 'symbol') {
 		throw new Error('not supported');
 	}
 
+	return key;
+}
+
+function createDecorator(mapFn: (fn: DecoratedFunction, key: string) => DecoratedFunction): MethodDecorator {
+	return ((targetOrValue: Object | DecoratedFunction, keyOrContext: string | symbol | IModernDecoratorContext, descriptor?: PropertyDescriptor) => {
+		if (isModernDecoratorContext(keyOrContext)) {
+			if (typeof targetOrValue !== 'function') {
+				throw new Error('not supported');
+			}
+
+			return mapFn(targetOrValue, getDecoratorKey(keyOrContext.name));
+		}
+
+		if (typeof descriptor?.value === 'function') {
+			descriptor.value = mapFn(descriptor.value, getDecoratorKey(keyOrContext));
+			return;
+		}
+
+		if (typeof descriptor?.get === 'function') {
+			descriptor.get = mapFn(descriptor.get, getDecoratorKey(keyOrContext));
+			return;
+		}
+
+		throw new Error('not supported');
+	}) as MethodDecorator;
+}
+
+function createMemoizedFunction(fn: DecoratedFunction, key: string): DecoratedFunction {
+	if (fn.length !== 0) {
+		console.warn('Memoize should only be used in functions with zero parameters');
+	}
+
 	const memoizeKey = `$memoize$${key}`;
-	descriptor[fnKey!] = function (...args: any[]) {
-		if (!this.hasOwnProperty(memoizeKey)) {
-			Object.defineProperty(this, memoizeKey, {
+	return function (this: object, ...args: unknown[]) {
+		const target = this as Record<string, unknown>;
+		if (!Object.prototype.hasOwnProperty.call(target, memoizeKey)) {
+			Object.defineProperty(target, memoizeKey, {
 				configurable: false,
 				enumerable: false,
 				writable: false,
 				value: fn.apply(this, args)
 			});
 		}
-		// eslint-disable-next-line local/code-no-any-casts
-		return (this as any)[memoizeKey];
+
+		return target[memoizeKey];
 	};
+}
+
+export function memoize(targetOrValue: Object | DecoratedFunction, keyOrContext: string | symbol | IModernDecoratorContext, descriptor?: PropertyDescriptor) {
+	if (isModernDecoratorContext(keyOrContext)) {
+		if (typeof targetOrValue !== 'function') {
+			throw new Error('not supported');
+		}
+
+		return createMemoizedFunction(targetOrValue, getDecoratorKey(keyOrContext.name));
+	}
+
+	if (typeof descriptor?.value === 'function') {
+		descriptor.value = createMemoizedFunction(descriptor.value, getDecoratorKey(keyOrContext));
+		return;
+	}
+
+	if (typeof descriptor?.get === 'function') {
+		descriptor.get = createMemoizedFunction(descriptor.get, getDecoratorKey(keyOrContext));
+		return;
+	}
+
+	throw new Error('not supported');
 }
 
 export interface IDebounceReducer<T> {
