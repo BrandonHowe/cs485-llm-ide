@@ -62,17 +62,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Electron Sandbox
-        # GitHub-hosted Linux runners unpack Electron as the normal workflow user, but Chromium's
-        # Linux sandbox refuses to launch unless the helper is root-owned and marked setuid.
-        run: |
-          sudo chown root:root .build/electron/chrome-sandbox
-          sudo chmod 4755 .build/electron/chrome-sandbox
-
       - name: Run VSClone Backend Common Tests
         run: npm run test-node -- --runGlob '**/vsclone/test/common/**/*.test.js'
 
       - name: Run VSClone Backend Electron Tests
-        # The Electron unit runner still launches a renderer process, so xvfb keeps Linux CI
-        # headless without changing the test environment that VSClone uses on desktop.
-        run: xvfb-run -a ./scripts/test.sh --runGlob '**/vsclone/test/electron-main/**/*.test.js'
+        # GitHub-hosted Ubuntu runners mount the workspace without a usable Chromium setuid sandbox,
+        # so the Electron test slice has to opt out explicitly while still running under xvfb.
+        run: xvfb-run -a ./scripts/test.sh --no-sandbox --disable-gpu-sandbox --runGlob '**/vsclone/test/electron-main/**/*.test.js'
