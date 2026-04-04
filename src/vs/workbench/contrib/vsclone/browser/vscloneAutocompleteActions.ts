@@ -36,6 +36,8 @@ const vscloneAutocompleteTabWhen = ContextKeyExpr.and(
 
 export function registerVSCloneAutocompleteActions(): void {
 	const globalScope = globalThis as GlobalScope;
+	// The contribution can be evaluated more than once in tests and during reload-heavy development,
+	// so the global guard preserves a single keybinding/command registration across repeated imports.
 	if (globalScope[registrationKey]) {
 		return;
 	}

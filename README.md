@@ -108,6 +108,80 @@ This fork includes VSClone-specific OAuth wiring and launch scripts that are not
    .\scripts\code.bat
    ```
 
+## VSClone Local Test Setup
+
+The GitHub Actions workflows in [`.github/workflows/run-frontend-tests.yml`](.github/workflows/run-frontend-tests.yml) and [`.github/workflows/run-backend-tests.yml`](.github/workflows/run-backend-tests.yml) use the commands in this section. If you can run these locally, you are running the same VSClone test slices that CI runs on GitHub.
+
+### Shared prerequisites for frontend and backend tests
+
+* Node.js `22.21.1` or later and `npm`
+* The root workspace dependencies installed with `npm ci`
+* The `build/` workspace dependencies installed with `cd build && npm ci`
+* A current transpiled `out/` tree. For a one-time compile, run:
+
+  ```bash
+  npm run gulp transpile-client-esbuild transpile-extensions
+  ```
+
+  If you are iterating on VSClone code, keep `npm run watch` running in another terminal so the compiled test targets stay fresh.
+
+* Linux-only native packages for browser and Electron test runs:
+
+  ```bash
+  sudo apt-get update
+  sudo apt-get install -y pkg-config xvfb libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 rpm
+  ```
+
+### Run the frontend tests locally
+
+VSClone frontend tests are the browser suites in `src/vs/workbench/contrib/vsclone/test/browser`. They run through Playwright, so you need Chromium installed for Playwright before the first run:
+
+```bash
+npm exec -- playwright install chromium
+```
+
+Run the full VSClone frontend test slice:
+
+```bash
+npm run test-browser-no-install -- --browser chromium --runGlob '**/vsclone/test/browser/**/*.test.js'
+```
+
+Run a single frontend suite when you only need one file:
+
+```bash
+npm run test-browser-no-install -- --browser chromium --run src/vs/workbench/contrib/vsclone/test/browser/vscloneUnifiedChatViewPane.test.ts
+```
+
+### Run the backend tests locally
+
+VSClone backend coverage is split across shared/common backend services and Electron main-process channel code.
+
+Run the shared/common backend suites with Node.js:
+
+```bash
+npm run test-node -- --runGlob '**/vsclone/test/common/**/*.test.js'
+```
+
+Run the Electron main-process backend suites:
+
+macOS/Linux:
+
+```bash
+./scripts/test.sh --runGlob '**/vsclone/test/electron-main/**/*.test.js'
+```
+
+Windows:
+
+```powershell
+.\scripts\test.bat --runGlob '**/vsclone/test/electron-main/**/*.test.js'
+```
+
+On Linux systems without an active desktop session, wrap the Electron command with `xvfb-run -a` so Electron still has a display server:
+
+```bash
+xvfb-run -a ./scripts/test.sh --runGlob '**/vsclone/test/electron-main/**/*.test.js'
+```
+
 ### Important runtime note
 
 Use the desktop launchers above when validating VSClone. `./scripts/code-server.sh`, `.\scripts\code-server.bat`, and the web entrypoints do not register the Electron-only VSClone IPC channels.

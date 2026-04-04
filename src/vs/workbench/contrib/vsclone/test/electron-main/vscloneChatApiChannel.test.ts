@@ -137,4 +137,41 @@ suite('VSCloneChatApiChannel', () => {
 			completionCount: 1,
 		});
 	});
+
+	test('flushes a trailing delta and done marker when both are buffered until EOF', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const channel = testDisposables.add(new VSCloneChatApiChannel(new NullLogService()));
+		const request = createSubmitRequest();
+		const streamedDeltas: string[] = [];
+		let completionCount = 0;
+		const completion = waitForFirstEvent(
+			channel.listen<IVSCloneChatApiCompleteEvent>('', VSCLONE_CHAT_API_EVENT_COMPLETE),
+			testDisposables,
+		);
+
+		testDisposables.add(channel.listen<IVSCloneChatApiCompleteEvent>('', VSCLONE_CHAT_API_EVENT_COMPLETE)(() => {
+			completionCount += 1;
+		}));
+		testDisposables.add(channel.listen<IVSCloneChatApiDeltaEvent>('', VSCLONE_CHAT_API_EVENT_DELTA)(event => {
+			streamedDeltas.push(event.text);
+		}));
+
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = async () => new Response(createStream([
+			`${createOpenAIDeltaLine('Thinking: finish parsing the tail first.')}\n` +
+			'data: [DONE]',
+		]), { status: 200 });
+
+		try {
+			await channel.call('', VSCLONE_CHAT_API_COMMAND_SUBMIT, request);
+			await completion;
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+
+		assert.deepStrictEqual({ streamedDeltas, completionCount }, {
+			streamedDeltas: ['Thinking: finish parsing the tail first.'],
+			completionCount: 1,
+		});
+	});
 });

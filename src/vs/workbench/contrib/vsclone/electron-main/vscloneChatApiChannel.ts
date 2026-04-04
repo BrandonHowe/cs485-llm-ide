@@ -276,6 +276,8 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 				}
 				return false;
 			case 'done':
+				// Route adapter-level completion through the same event path regardless of whether the
+				// marker arrived in a normal chunk or only became visible during the EOF tail flush.
 				this.onCompleteEmitter.fire({ requestId });
 				return true;
 			case 'error':

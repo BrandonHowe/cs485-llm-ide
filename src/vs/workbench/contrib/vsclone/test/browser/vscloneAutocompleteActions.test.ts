@@ -41,12 +41,23 @@ function hasCommandPaletteEntry(commandId: string): boolean {
 	return MenuRegistry.getMenuItems(MenuId.CommandPalette).some(item => isIMenuItem(item) && item.command.id === commandId);
 }
 
+// Register the action once at module load so the leak tracker only measures per-test behavior,
+// not the global one-time keybinding/command registration side effect that the suite is asserting.
+ensureAutocompleteActionsRegistered();
+
 suite('VSCloneAutocompleteActions', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('registers the Tab command with the expected metadata, command palette state, and keybinding', () => {
-		ensureAutocompleteActionsRegistered();
+	test('does not register duplicate commands or keybindings when called repeatedly', () => {
+		const originalKeybindingCount = KeybindingsRegistry.getDefaultKeybindings().filter(rule => rule.command === vscloneAutocompleteAcceptInlineCompletionOnTabId).length;
 
+		registerVSCloneAutocompleteActions();
+
+		assert.strictEqual((globalThis as { __vscloneAutocompleteActionsRegistered__?: boolean }).__vscloneAutocompleteActionsRegistered__, true);
+		assert.strictEqual(KeybindingsRegistry.getDefaultKeybindings().filter(rule => rule.command === vscloneAutocompleteAcceptInlineCompletionOnTabId).length, originalKeybindingCount);
+	});
+
+	test('registers the Tab command with the expected metadata, command palette state, and keybinding', () => {
 		const command = CommandsRegistry.getCommand(vscloneAutocompleteAcceptInlineCompletionOnTabId);
 		assert.ok(command);
 		assert.deepStrictEqual(command?.metadata?.description, {
@@ -71,8 +82,6 @@ suite('VSCloneAutocompleteActions', () => {
 	});
 
 	test('executes the built-in inline suggestion accept command', async () => {
-		ensureAutocompleteActionsRegistered();
-
 		const executedCommands: string[] = [];
 		const commandService = {
 			_serviceBrand: undefined,
@@ -90,8 +99,6 @@ suite('VSCloneAutocompleteActions', () => {
 	});
 
 	test('propagates command service failures without swallowing them', async () => {
-		ensureAutocompleteActionsRegistered();
-
 		const error = new Error('command failed');
 		const commandService = {
 			_serviceBrand: undefined,
