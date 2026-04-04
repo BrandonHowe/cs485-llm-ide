@@ -33,7 +33,9 @@ suite('VSCloneModelCatalogService', () => {
 
 		const state = catalogService.getState();
 		assert.strictEqual(state.status, 'ready');
-		assert.deepStrictEqual(state.providers.map(provider => provider.vendor), ['openai', 'anthropic']);
+		// Google is enabled by default now so the picker and provider-management surfaces expose the
+		// same first-run provider set without requiring a hidden preference toggle beforehand.
+		assert.deepStrictEqual(state.providers.map(provider => provider.vendor), ['openai', 'anthropic', 'google']);
 		const openAIModel = state.models.find(model => model.identifier === 'openai/gpt-5.3-codex');
 		assert.ok(openAIModel);
 		assert.deepStrictEqual(openAIModel?.reasoningEffortLevels, ['xhigh', 'high', 'medium', 'low']);
@@ -52,10 +54,20 @@ suite('VSCloneModelCatalogService', () => {
 				{ id: 'claude-3-haiku-20240307', name: 'Haiku 3', reasoning: undefined },
 			]
 		);
+		const googleModels = state.models.filter(model => model.vendor === 'google');
+		assert.deepStrictEqual(
+			googleModels.map(model => ({ id: model.modelId, name: model.modelName, reasoning: model.reasoningEffortLevels })),
+			[
+				{ id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', reasoning: ['high', 'medium', 'low', 'minimal'] },
+				{ id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', reasoning: ['high', 'medium', 'low', 'minimal'] },
+				{ id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite', reasoning: ['high', 'medium', 'low', 'minimal'] },
+			]
+		);
 		// Assert the picker exposes the verified Anthropic IDs so older Sonnet/Opus entries do not
 		// silently reappear and route users back onto the broken OAuth path.
 		assert.ok(state.models.some(model => model.identifier === 'openai/gpt-5.4'));
 		assert.ok(state.models.some(model => model.identifier === 'anthropic/claude-haiku-4-5-20251001'));
+		assert.ok(state.models.some(model => model.identifier === 'google/gemini-3.1-pro-preview'));
 	});
 
 	test('provider status projects requires_sign_in when enabled but signed out', async () => {

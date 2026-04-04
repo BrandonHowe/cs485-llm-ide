@@ -1,0 +1,67 @@
+name: Run Frontend Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  frontend-tests:
+    name: VSClone Frontend Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      npm_config_arch: x64
+      VSCODE_ARCH: x64
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            build/package-lock.json
+
+      - name: Install Linux System Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config xvfb libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 rpm
+
+      - name: Install Build Dependencies
+        working-directory: build
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Workspace Dependencies
+        run: |
+          source ./build/azure-pipelines/linux/setup-env.sh
+          npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Built-In Extensions
+        # The browser runner loads compiled VS Code modules from out/, so we keep the same
+        # built-in extension bootstrap that the upstream CI uses before transpiling tests.
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Transpile Browser Test Targets
+        # VSClone browser tests execute against transpiled output instead of ts-node-style sources.
+        run: npm run gulp transpile-client-esbuild transpile-extensions
+
+      - name: Install Playwright Chromium
+        run: npm exec -- playwright install chromium
+
+      - name: Run VSClone Frontend Tests
+        run: npm run test-browser-no-install -- --browser chromium --runGlob '**/vsclone/test/browser/**/*.test.js'
+        env:
+          DEBUG: '*browser*'

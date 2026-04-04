@@ -150,7 +150,13 @@ function createRecordingMainProcessService(channel: IChannel) {
 }
 
 function toBase64Url(value: string): string {
-	return Buffer.from(value, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+	// These tests run in the browser harness, so they cannot rely on Node's Buffer helpers.
+	const encoded = new TextEncoder().encode(value);
+	let binary = '';
+	for (const byte of encoded) {
+		binary += String.fromCharCode(byte);
+	}
+	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 function createJwt(payload: Record<string, unknown>): string {
@@ -436,7 +442,7 @@ suite('VSCloneOAuthService', () => {
 		assert.strictEqual(harness.service.state.providers.openai.status, 'error');
 		assert.strictEqual(harness.service.state.providers.openai.errorMessage, 'Token exchange failed: <html>bad gateway</html>');
 		assert.strictEqual(harness.notificationService.errors.length, 1);
-		assert.match(harness.notificationService.errors[0], /Failed to sign in to OpenAI:/);
+		assert.ok(/Failed to sign in to OpenAI:/.test(harness.notificationService.errors[0]));
 	});
 
 	test('manual and fallback authorization helpers parse pasted codes and recover when loopback setup fails', async () => {
@@ -459,7 +465,7 @@ suite('VSCloneOAuthService', () => {
 			redirectUri: 'http://localhost:1455/auth/callback',
 		});
 		assert.strictEqual(manualHarness.calls[0].command, VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL);
-		assert.match(String(manualHarness.calls[0].payload), /code_challenge=challenge/);
+		assert.ok(/code_challenge=challenge/.test(String(manualHarness.calls[0].payload)));
 
 		let stoppedSessionId: string | undefined;
 		const fallbackHarness = createOAuthHarness({
