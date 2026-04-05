@@ -2,8 +2,6 @@
 
 ## Step 1: Files to Test
 
-I found explicit user-story documents in `cs485/userstory1.md` and `cs485/userstory3.md`. Story 1 focuses on the unified chat history rail and restoring thread state, while Story 3 focuses on the unified model switcher and sending requests with the correct provider/model. I kept the same four files below because they still cover the request-dispatch, workspace-action, persistence, and provider-authentication paths that those two stories depend on end to end.
-
 All four files below still represent core product behavior and each contains at least 5 meaningful functions or methods that can support strong unit-test coverage.
 
 ### Frontend
@@ -250,97 +248,3 @@ Functions in this file:
 | OL-19 | `handleLoopbackRequest` | Verify expired session, favicon request, and wrong-path handling. | No matching session; then valid session with `/favicon.ico`; then valid session with a wrong callback path. | Expired session returns HTTP `410` with an expired-session page; favicon returns `204`; wrong path returns `404` with the wrong-endpoint page. |
 | OL-20 | `handleLoopbackRequest` | Verify provider error and missing-parameter callback handling. | Valid session with `?error=access_denied&error_description=denied` and then valid session with missing `code` or `state`. | Both cases return HTTP `200` with an error completion page, reject the deferred result with the corresponding error message, and stop the session. |
 | OL-21 | `handleLoopbackRequest` | Verify the successful OAuth callback path. | Valid session and request URL containing both `code` and `state`. | Response status is `200` with the success page; deferred result resolves to `{ code, state, callbackUrl }`; loopback session is stopped. |
-
-## Step 3: Review-Driven Punch List
-
-After reviewing the current four test suites, the biggest issue is not obviously fake or flaky tests; it is missing branch coverage in a few high-risk areas. The list below is intentionally small and prioritized so coverage improves without bloating the suite with low-value duplicates.
-
-### Highest-value additions
-
-1. `src/vs/workbench/contrib/vsclone/test/common/vscloneUnifiedChatBackendService.test.ts`
-   - Add a test for `persistNow()` save failure.
-   - Purpose:
-     - Verify a store save rejection is normalized, logged, and surfaced through an `onDidChange` event with `reason: "error"` without rethrowing.
-   - Why this matters:
-     - This is the most important missing backend failure path because persistence errors are intentionally swallowed by the implementation.
-
-2. `src/vs/workbench/contrib/vsclone/test/common/vscloneUnifiedChatBackendService.test.ts`
-   - Add a test for gated-off `applyTurnUpdate()`.
-   - Purpose:
-     - Verify `applyTurnUpdate()` is a no-op when the backend is disabled, not initialized, or globally turned off by configuration.
-   - Why this matters:
-     - The production code has explicit guard clauses here, and a regression would create hidden state mutations.
-
-3. `src/vs/workbench/contrib/vsclone/test/common/vscloneUnifiedChatBackendService.test.ts`
-   - Add a test for non-`Error` initialization failures.
-   - Purpose:
-     - Force `store.load()` to reject with a string or number and verify `initialize()` rethrows a normalized `Error`, logs it, and emits the correct error event.
-   - Why this matters:
-     - The current suite only covers the normal `Error("boom")` branch.
-
-4. `src/vs/workbench/contrib/vsclone/test/electron-main/vscloneOAuthLoopbackChannel.test.ts`
-   - Add a test for `listen()` rejecting unsupported events.
-   - Purpose:
-     - Verify `listen()` throws `Error("Event not found: ...")` for unknown event names.
-   - Why this matters:
-     - This is a public API branch that currently is not tested at all.
-
-5. `src/vs/workbench/contrib/vsclone/test/electron-main/vscloneOAuthLoopbackChannel.test.ts`
-   - Add a test for `dispose()` stopping all active sessions.
-   - Purpose:
-     - Seed multiple sessions, call `dispose()`, and verify each session is stopped through `stopLoopback(sessionId, true)`.
-   - Why this matters:
-     - This covers cleanup behavior for the desktop auth boundary and catches resource leaks.
-
-6. `src/vs/workbench/contrib/vsclone/test/electron-main/vscloneOAuthLoopbackChannel.test.ts`
-   - Add a test for `waitForLoopback()` on an unknown session.
-   - Purpose:
-     - Verify the method rejects with `Error("Loopback session not found.")`.
-   - Why this matters:
-     - The timeout path is covered, but the missing-session branch is still untested.
-
-7. `src/vs/workbench/contrib/vsclone/test/electron-main/vscloneOAuthLoopbackChannel.test.ts`
-   - Add a test for the missing-`code` or missing-`state` callback path.
-   - Purpose:
-     - Invoke `handleLoopbackRequest()` with a valid callback path but without `code` or `state`, and verify the HTML error page, rejected deferred result, and session shutdown.
-   - Why this matters:
-     - The current suite covers provider errors and success, but not this separate callback validation branch.
-
-8. `src/vs/workbench/contrib/vsclone/test/browser/vscloneChatSessionService.test.ts`
-   - Add a test for request-handle cleanup after `handle.done` resolves.
-   - Purpose:
-     - Submit a prompt, capture the created `turnId`, resolve the loop handle, await the microtask queue, and verify the handle is removed from `apiRequestHandles`.
-   - Why this matters:
-     - The current suite proves cancellation and disposal, but it does not prove normal completion cleanup.
-
-9. `src/vs/workbench/contrib/vsclone/test/browser/vscloneToolExecutionService.test.ts`
-   - Add a test for `list_directory` invalid-path and missing-directory branches.
-   - Purpose:
-     - Verify invalid paths use the standard invalid-path message and nonexistent directories return `Directory not found: ...`.
-   - Why this matters:
-     - The current suite only covers missing `path`, file-not-directory, and successful listing paths.
-
-10. `src/vs/workbench/contrib/vsclone/test/browser/vscloneToolExecutionService.test.ts`
-   - Add a test for `search_files` invalid-path and file-not-directory branches.
-   - Purpose:
-     - Verify invalid search roots and file roots fail with the correct public tool messages.
-   - Why this matters:
-     - Search is a core tool path, and these negative branches are still uncovered.
-
-11. `src/vs/workbench/contrib/vsclone/test/browser/vscloneToolExecutionService.test.ts`
-   - Add a test for `create_file` invalid-path rejection.
-   - Purpose:
-     - Verify `create_file` returns the standard invalid-path message when the target resolves outside the workspace.
-   - Why this matters:
-     - The create-file suite currently covers only missing params and already-exists/success branches.
-
-### Low-priority cleanup
-
-- `src/vs/workbench/contrib/vsclone/test/browser/vscloneToolExecutionService.test.ts`
-  - The invalid-path string is asserted both through `resolveWorkspacePath()` helper coverage and through public tool execution. That overlap is acceptable, but additional helper-only assertions should be avoided unless they prove behavior that cannot be reached publicly.
-
-- `src/vs/workbench/contrib/vsclone/test/electron-main/vscloneOAuthLoopbackChannel.test.ts`
-  - Several tests reach into private methods and internal session maps. That is workable for this class, but new tests should prefer public API entrypoints when possible so the suite does not become too implementation-coupled.
-
-- `src/vs/workbench/contrib/vsclone/test/browser/vscloneToolExecutionService.test.ts`
-  - The suite is already broad. New coverage should target the missing public branches above rather than adding more helper-only assertions for diff formatting or path normalization.
