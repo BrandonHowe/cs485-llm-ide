@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { VSCloneModelCatalogService } from '../../common/vscloneModelCatalogService.js';
+import { VSCloneModelEligibilityService } from '../../common/vscloneModelEligibilityService.js';
 import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderPreferencesService.js';
 import { TestVSCloneOAuthService } from './vscloneTestOAuthService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
@@ -26,7 +27,8 @@ suite('VSCloneModelCatalogService', () => {
 		const storageService = store.add(new TestStorageService());
 		const providerPreferencesService = store.add(new VSCloneProviderPreferencesService(storageService));
 		const oauthService = new TestVSCloneOAuthService();
-		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
+		const eligibilityService = store.add(new VSCloneModelEligibilityService(storageService));
+		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService, eligibilityService));
 
 		await providerPreferencesService.initialize();
 		await catalogService.refreshCatalog();
@@ -74,7 +76,8 @@ suite('VSCloneModelCatalogService', () => {
 		const storageService = store.add(new TestStorageService());
 		const providerPreferencesService = store.add(new VSCloneProviderPreferencesService(storageService));
 		const oauthService = new TestVSCloneOAuthService();
-		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
+		const eligibilityService = store.add(new VSCloneModelEligibilityService(storageService));
+		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService, eligibilityService));
 
 		await providerPreferencesService.initialize();
 		await providerPreferencesService.setProviderEnabled('google', true);
@@ -97,7 +100,8 @@ suite('VSCloneModelCatalogService', () => {
 		const storageService = store.add(new TestStorageService());
 		const providerPreferencesService = store.add(new VSCloneProviderPreferencesService(storageService));
 		const oauthService = new TestVSCloneOAuthService();
-		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
+		const eligibilityService = store.add(new VSCloneModelEligibilityService(storageService));
+		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService, eligibilityService));
 
 		await providerPreferencesService.initialize();
 		catalogService.setFailNextRefreshForTest();
@@ -106,5 +110,38 @@ suite('VSCloneModelCatalogService', () => {
 
 		await catalogService.refreshCatalog();
 		assert.strictEqual(catalogService.getState().status, 'ready');
+	});
+
+	test('marking a model ineligible hides it from the catalog and restores it on sign-out', async () => {
+		const storageService = store.add(new TestStorageService());
+		const providerPreferencesService = store.add(new VSCloneProviderPreferencesService(storageService));
+		const oauthService = new TestVSCloneOAuthService();
+		const eligibilityService = store.add(new VSCloneModelEligibilityService(storageService));
+		const catalogService = store.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService, eligibilityService));
+
+		await providerPreferencesService.initialize();
+		await eligibilityService.initialize();
+		await catalogService.refreshCatalog();
+		await waitForCatalogToSettle(catalogService);
+
+		assert.ok(catalogService.getState().models.some(model => model.identifier === 'openai/gpt-5.3-codex-spark'));
+
+		eligibilityService.markIneligible('openai/gpt-5.3-codex-spark', 'test');
+		await waitForCatalogToSettle(catalogService);
+
+		const afterHide = catalogService.getState();
+		assert.ok(!afterHide.models.some(model => model.identifier === 'openai/gpt-5.3-codex-spark'));
+		const openaiProvider = afterHide.providers.find(provider => provider.vendor === 'openai');
+		assert.ok(openaiProvider);
+		assert.strictEqual(openaiProvider?.modelCount, afterHide.models.filter(model => model.vendor === 'openai').length);
+
+		// Simulate an OpenAI sign-out: the catalog should wipe cached ineligibility for that vendor
+		// so a fresh identity can rediscover its own entitlements after signing back in.
+		oauthService.setReady('openai', false);
+		await waitForCatalogToSettle(catalogService);
+		oauthService.setReady('openai', true);
+		await waitForCatalogToSettle(catalogService);
+
+		assert.ok(catalogService.getState().models.some(model => model.identifier === 'openai/gpt-5.3-codex-spark'));
 	});
 });

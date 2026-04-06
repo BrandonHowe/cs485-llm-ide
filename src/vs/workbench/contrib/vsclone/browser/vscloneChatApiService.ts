@@ -13,6 +13,8 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { IVSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneApiSubmitOptions } from '../common/vscloneChatApiAdapters.js';
+import { IVSCloneModelEligibilityService } from '../common/vscloneModelEligibilityService.js';
+import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
 import { IVSCloneEditApplicationService } from './vscloneEditApplicationService.js';
 import {
 	IVSCloneChatApiAbortedEvent,
@@ -69,6 +71,7 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 		@IMainProcessService mainProcessService: IMainProcessService,
 		@ILogService private readonly logService: ILogService,
 		@IVSCloneEditApplicationService private readonly editApplicationService: IVSCloneEditApplicationService,
+		@IVSCloneModelEligibilityService private readonly eligibilityService: IVSCloneModelEligibilityService,
 	) {
 		super();
 		this.channel = mainProcessService.getChannel(VSCLONE_CHAT_API_CHANNEL_NAME);
@@ -262,11 +265,33 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 			return;
 		}
 
+		this.recordEligibilityFailureIfAny(pending, event.message);
+
 		if (pending.mode === 'history') {
 			this.applyErrorUpdate(pending, event.message);
 		}
 		pending.observer?.onError?.(event.message);
 		this.finishRequest(event.requestId);
+	}
+
+	/**
+	 * Codex-on-ChatGPT (and similar account-gated backends) surface eligibility failures as opaque
+	 * 400s rather than through a structured field. We sniff the error text for the known patterns
+	 * and record the model as ineligible so the catalog can hide it on the next refresh instead of
+	 * presenting a choice the user cannot actually make.
+	 */
+	private recordEligibilityFailureIfAny(pending: IVSClonePendingApiRequest, errorMessage: string): void {
+		if (!errorMessage) {
+			return;
+		}
+
+		const reason = detectEligibilityFailureReason(pending.options.vendor, errorMessage);
+		if (!reason) {
+			return;
+		}
+
+		this.logService.info(`[VSCloneChatApi] Marking ${pending.options.modelIdentifier} ineligible for this account: ${reason}`);
+		this.eligibilityService.markIneligible(pending.options.modelIdentifier, reason);
 	}
 
 	private handleAbortedEvent(event: IVSCloneChatApiAbortedEvent): void {
@@ -327,4 +352,20 @@ export class VSCloneChatApiService extends Disposable implements IVSCloneChatApi
 		this.pendingRequests.clear();
 		super.dispose();
 	}
+}
+
+/**
+ * Known account-level eligibility failure patterns. OpenAI's Codex-on-ChatGPT backend returns a
+ * 400 with a `detail` field whose text names the model that was rejected; matching that phrase is
+ * the only reliable signal today, since there is no structured error code. Kept exported for the
+ * unit tests in `vscloneChatApiService.test.ts` so the regex stays regression-guarded.
+ */
+export function detectEligibilityFailureReason(vendor: VSCloneModelVendor, errorMessage: string): string | undefined {
+	if (vendor === 'openai') {
+		// Example: `openai API returned 400: {"detail":"The 'gpt-5.3-codex-spark' model is not supported when using Codex with a ChatGPT account."}`
+		if (/is not supported when using Codex with a ChatGPT account/i.test(errorMessage)) {
+			return 'Your ChatGPT account is not entitled to use this model with Codex.';
+		}
+	}
+	return undefined;
 }

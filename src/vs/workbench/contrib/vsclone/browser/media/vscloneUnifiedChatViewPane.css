@@ -118,6 +118,13 @@
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
+	/*
+	 * The workbench body sets user-select: none globally, so opt back in here to allow users
+	 * to copy assistant/user/error message text. Summary headers and the diff gutter keep their
+	 * own user-select: none rules so they stay non-selectable.
+	 */
+	user-select: text;
+	-webkit-user-select: text;
 }
 
 .vsclone-thread-empty-state {

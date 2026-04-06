@@ -30,6 +30,7 @@ import { VSCloneViewContainerId, VSCloneViewId } from './vsclone.js';
 import { IVSCloneChatHistoryService, VSCloneChatHistoryEnabledSetting, VSCloneChatHistoryMaxThreadsSetting, VSCloneChatHistoryMaxTurnsPerThreadSetting, VSCloneChatHistoryPersistScopeSetting, VSCloneChatHistoryRailWidthSetting, VSCloneChatHistoryRedactSecretsSetting, VSCloneChatHistoryRetentionDaysSetting, VSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneModelCatalogService, VSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
+import { IVSCloneModelEligibilityService, VSCloneModelEligibilityService } from '../common/vscloneModelEligibilityService.js';
 import { IVSClonePlanModeService, VSClonePlanModeService } from '../common/vsclonePlanModeService.js';
 import { IVSClonePromptAssemblyService, VSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
 import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
@@ -78,6 +79,7 @@ function registerVSCloneContribution(): void {
 	registerSingleton(IVSCloneUnifiedChatBackendService, VSCloneUnifiedChatBackendService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatHistoryService, VSCloneChatHistoryService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneProviderPreferencesService, VSCloneProviderPreferencesService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneModelEligibilityService, VSCloneModelEligibilityService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneModelCatalogService, VSCloneModelCatalogService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService, InstantiationType.Delayed);
 	registerSingleton(IVSClonePlanModeService, VSClonePlanModeService, InstantiationType.Delayed);

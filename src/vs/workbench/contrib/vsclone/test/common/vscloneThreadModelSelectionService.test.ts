@@ -8,6 +8,7 @@ import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IVSCloneModelCatalogModelDescriptor, IVSCloneModelCatalogProviderDescriptor, IVSCloneModelCatalogService, IVSCloneModelCatalogState, VSCloneModelCatalogService } from '../../common/vscloneModelCatalogService.js';
+import { VSCloneModelEligibilityService } from '../../common/vscloneModelEligibilityService.js';
 import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderPreferencesService.js';
 import { IVSCloneModelSelection, VSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
@@ -31,7 +32,8 @@ suite('VSCloneThreadModelSelectionService', () => {
 		const storageService = testDisposables.add(new TestStorageService());
 		const providerPreferencesService = testDisposables.add(new VSCloneProviderPreferencesService(storageService));
 		const oauthService = new TestVSCloneOAuthService();
-		const catalogService = testDisposables.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService));
+		const eligibilityService = testDisposables.add(new VSCloneModelEligibilityService(storageService));
+		const catalogService = testDisposables.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService, eligibilityService));
 		const backendService = new TestVSCloneUnifiedChatBackendService();
 		const selectionService = testDisposables.add(new VSCloneThreadModelSelectionService(backendService, catalogService));
 

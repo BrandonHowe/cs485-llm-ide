@@ -11,6 +11,7 @@ import { timeout } from "../../../../base/common/async.js";
 import { Emitter, Event } from "../../../../base/common/event.js";
 import { Disposable } from "../../../../base/common/lifecycle.js";
 import { createDecorator } from "../../../../platform/instantiation/common/instantiation.js";
+import { IVSCloneModelEligibilityService } from "./vscloneModelEligibilityService.js";
 import { IVSCloneOAuthService } from "./vscloneOAuthService.js";
 import { VSCloneModelVendor } from "./vscloneOAuthTypes.js";
 import {
@@ -234,6 +235,8 @@ export class VSCloneModelCatalogService
 		@IVSCloneProviderPreferencesService
 		private readonly providerPreferencesService: IVSCloneProviderPreferencesService,
 		@IVSCloneOAuthService private readonly oauthService: IVSCloneOAuthService,
+		@IVSCloneModelEligibilityService
+		private readonly eligibilityService: IVSCloneModelEligibilityService,
 	) {
 		super();
 
@@ -243,7 +246,18 @@ export class VSCloneModelCatalogService
 			}),
 		);
 		this._register(
-			this.oauthService.onDidChangeState(() => {
+			this.oauthService.onDidChangeState(event => {
+				// When the user signs out (or fully re-authenticates), discard any ineligibility we had
+				// cached for that vendor so a different account can rediscover its own entitlements
+				// instead of inheriting the previous identity's hidden list.
+				if (event.current === "signed_out") {
+					this.eligibilityService.clearForVendor(event.vendor);
+				}
+				void this.refreshCatalog();
+			}),
+		);
+		this._register(
+			this.eligibilityService.onDidChangeEligibility(() => {
 				void this.refreshCatalog();
 			}),
 		);
@@ -274,6 +288,7 @@ export class VSCloneModelCatalogService
 		try {
 			await this.providerPreferencesService.initialize();
 			await this.oauthService.initialize();
+			await this.eligibilityService.initialize();
 			// Yield once so the model switcher can render a loading state even when auth state was already warm.
 			await timeout(0);
 
@@ -286,8 +301,10 @@ export class VSCloneModelCatalogService
 
 			const providerPreferences =
 				this.providerPreferencesService.getProviders();
-			const providers = this.computeProviders(providerPreferences);
 			const models = this.computeModels(providerPreferences);
+			// Compute providers after models so per-provider counts reflect the eligibility-filtered
+			// catalog rather than the raw definition count.
+			const providers = this.computeProviders(providerPreferences, models);
 			this.state = {
 				status: "ready",
 				providers,
@@ -346,6 +363,7 @@ export class VSCloneModelCatalogService
 
 	private computeProviders(
 		providerPreferences: readonly IVSCloneProviderPreferenceState[],
+		models: readonly IVSCloneModelCatalogModelDescriptor[],
 	): IVSCloneModelCatalogProviderDescriptor[] {
 		return providerPreferences
 			.filter((providerPreference) => providerPreference.enabled)
@@ -356,8 +374,9 @@ export class VSCloneModelCatalogService
 					.isReady
 					? ("available" as const)
 					: ("requires_sign_in" as const),
-				modelCount:
-					modelDefinitionsByProvider[providerPreference.vendor].length,
+				modelCount: models.filter(
+					(model) => model.vendor === providerPreference.vendor,
+				).length,
 			}))
 			.sort(byVendorOrder);
 	}
@@ -385,8 +404,15 @@ export class VSCloneModelCatalogService
 
 			const providerReady = this.oauthService.state.providers[vendor].isReady;
 			for (const model of modelDefinitionsByProvider[vendor]) {
+				const identifier = toIdentifier(vendor, model.modelId);
+				// Hide models the current account has proven ineligible for (e.g. Codex-on-ChatGPT
+				// rejecting Spark for non-Pro tiers). The set is cleared on sign-out so a different
+				// account can rediscover its own entitlements.
+				if (this.eligibilityService.isIneligible(identifier)) {
+					continue;
+				}
 				models.push({
-					identifier: toIdentifier(vendor, model.modelId),
+					identifier,
 					vendor,
 					modelId: model.modelId,
 					modelName: model.modelName,

@@ -32,9 +32,10 @@ import {
 	IVSCloneChatTurnUpdate,
 	VSCloneChatHistoryScope,
 } from '../../common/backend/vscloneChatHistoryService.js';
+import { IVSCloneModelEligibilityService, IVSCloneModelIneligibilityRecord } from '../../common/vscloneModelEligibilityService.js';
 import { IVSCloneOAuthService } from '../../common/vscloneOAuthService.js';
-import { IVSCloneOAuthState, IVSCloneOAuthTokenSet } from '../../common/vscloneOAuthTypes.js';
-import { VSCloneChatApiService } from '../../browser/vscloneChatApiService.js';
+import { IVSCloneOAuthState, IVSCloneOAuthTokenSet, VSCloneModelVendor } from '../../common/vscloneOAuthTypes.js';
+import { detectEligibilityFailureReason, VSCloneChatApiService } from '../../browser/vscloneChatApiService.js';
 
 interface IRecordedCall {
 	readonly command: string;
@@ -99,6 +100,23 @@ class TestHistoryService implements IVSCloneChatHistoryService {
 	async archiveThread(_threadId: string, _archived: boolean): Promise<void> { }
 	async deleteThread(_threadId: string): Promise<void> { }
 	async clearAll(_scope: VSCloneChatHistoryScope): Promise<void> { }
+}
+
+class TestEligibilityService implements IVSCloneModelEligibilityService {
+	declare readonly _serviceBrand: undefined;
+	readonly onDidChangeEligibility = Event.None;
+	readonly markedIneligible: Array<{ modelIdentifier: string; reason: string }> = [];
+	private readonly records = new Map<string, IVSCloneModelIneligibilityRecord>();
+
+	async initialize(): Promise<void> { }
+	isIneligible(modelIdentifier: string): boolean { return this.records.has(modelIdentifier); }
+	getIneligibilityRecord(modelIdentifier: string): IVSCloneModelIneligibilityRecord | undefined { return this.records.get(modelIdentifier); }
+	markIneligible(modelIdentifier: string, reason: string): void {
+		this.markedIneligible.push({ modelIdentifier, reason });
+		this.records.set(modelIdentifier, { modelIdentifier, reason, markedAt: Date.now() });
+	}
+	clearForVendor(_vendor: VSCloneModelVendor): void { }
+	clearAll(): void { this.records.clear(); }
 }
 
 class TestOAuthService implements IVSCloneOAuthService {
@@ -171,12 +189,14 @@ suite('VSCloneChatApiService', () => {
 		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		const channel = new TestChannel();
+		const eligibilityService = new TestEligibilityService();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
 			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
 			createEditApplicationService(),
+			eligibilityService,
 		));
 
 		const handle = service.submitApiPrompt(createSubmitOptions());
@@ -200,12 +220,14 @@ suite('VSCloneChatApiService', () => {
 		const oauthService = new TestOAuthService();
 		oauthService.headersByVendor.set('openai', undefined);
 		const channel = new TestChannel();
+		const eligibilityService = new TestEligibilityService();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
 			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
 			createEditApplicationService(),
+			eligibilityService,
 		));
 
 		const handle = service.submitApiPrompt(createSubmitOptions());
@@ -222,12 +244,14 @@ suite('VSCloneChatApiService', () => {
 		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		const channel = new TestChannel();
+		const eligibilityService = new TestEligibilityService();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
 			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
 			createEditApplicationService(),
+			eligibilityService,
 		));
 
 		const handle = service.submitApiPrompt(createSubmitOptions());
@@ -243,12 +267,14 @@ suite('VSCloneChatApiService', () => {
 		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		const channel = new TestChannel();
+		const eligibilityService = new TestEligibilityService();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
 			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
 			createEditApplicationService(),
+			eligibilityService,
 		));
 
 		let abortedCalls = 0;
@@ -271,12 +297,14 @@ suite('VSCloneChatApiService', () => {
 		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		const channel = new TestChannel();
+		const eligibilityService = new TestEligibilityService();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
 			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
 			createEditApplicationService(),
+			eligibilityService,
 		));
 
 		const handle = service.submitApiPrompt(createSubmitOptions());
@@ -289,5 +317,47 @@ suite('VSCloneChatApiService', () => {
 		await handle.done;
 
 		assert.deepStrictEqual(historyService.updates.map(update => update.phase), ['prompt', 'cancel']);
+	});
+
+	test('records model ineligibility when Codex reports a ChatGPT account entitlement failure', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const historyService = new TestHistoryService();
+		const oauthService = new TestOAuthService();
+		const channel = new TestChannel();
+		const eligibilityService = new TestEligibilityService();
+		const service = testDisposables.add(new VSCloneChatApiService(
+			oauthService,
+			historyService,
+			createMainProcessService(channel),
+			new NullLogService(),
+			createEditApplicationService(),
+			eligibilityService,
+		));
+
+		const handle = service.submitApiPrompt(createSubmitOptions({
+			modelId: 'gpt-5.3-codex-spark',
+			modelIdentifier: 'openai/gpt-5.3-codex-spark',
+		}));
+		await timeout(0);
+		const submitCall = getRecordedCall(channel, VSCLONE_CHAT_API_COMMAND_SUBMIT);
+		assert.ok(submitCall);
+		const request = submitCall?.arg as { requestId: string };
+
+		channel.fireError({
+			requestId: request.requestId,
+			message: `openai API returned 400: {"detail":"The 'gpt-5.3-codex-spark' model is not supported when using Codex with a ChatGPT account."}`,
+		});
+		await handle.done;
+
+		assert.deepStrictEqual(eligibilityService.markedIneligible, [{
+			modelIdentifier: 'openai/gpt-5.3-codex-spark',
+			reason: 'Your ChatGPT account is not entitled to use this model with Codex.',
+		}]);
+	});
+
+	test('detectEligibilityFailureReason ignores unrelated OpenAI errors', () => {
+		assert.strictEqual(detectEligibilityFailureReason('openai', 'openai API returned 500: internal error'), undefined);
+		assert.strictEqual(detectEligibilityFailureReason('anthropic', `The 'x' model is not supported when using Codex with a ChatGPT account.`), undefined);
+		assert.ok(detectEligibilityFailureReason('openai', `openai API returned 400: {"detail":"The 'gpt-5.3-codex-spark' model is not supported when using Codex with a ChatGPT account."}`));
 	});
 });
