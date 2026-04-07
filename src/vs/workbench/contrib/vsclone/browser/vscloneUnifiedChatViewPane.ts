@@ -38,6 +38,7 @@ import { INotificationService } from "../../../../platform/notification/common/n
 import { IOpenerService } from "../../../../platform/opener/common/opener.js";
 import { IFileService } from "../../../../platform/files/common/files.js";
 import { IMarkdownRendererService } from "../../../../platform/markdown/browser/markdownRenderer.js";
+import { IStorageService, StorageScope, StorageTarget } from "../../../../platform/storage/common/storage.js";
 import { IThemeService } from "../../../../platform/theme/common/themeService.js";
 import {
 	IViewPaneOptions,
@@ -73,7 +74,7 @@ import { IVSCloneChatSessionService } from "./vscloneChatSessionService.js";
 import { VSCloneModelSwitcherWidget } from "./vscloneModelSwitcherWidget.js";
 import { IVSCloneProviderConfigurationBridge } from "./vscloneProviderConfigurationBridge.js";
 import { toVSCloneRailRows } from "./vscloneChatHistoryRailTree.js";
-import { IVSCloneEditApplicationService } from "./vscloneEditApplicationService.js";
+import { IVSCloneEditApplicationService, type IVSCloneEditApplyResult, type IVSCloneEditFileChange } from "./vscloneEditApplicationService.js";
 import { parseToolResultDiff } from "../common/vscloneToolResultDiff.js";
 import {
 	toVSCloneImageDataUrl,
@@ -192,6 +193,115 @@ function decodeXmlText(value: string): string {
 		.replace(/&amp;/g, "&");
 }
 
+/**
+ * Per-turn lifecycle for an assistant turn that contains SEARCH/REPLACE blocks. Auto-apply
+ * starts in `pending`, lands in `applied` (success) or `failed` (no matching SEARCH block),
+ * and can flip between `applied` and `undone` as the user toggles Undo/Redo. The full apply
+ * result is carried on `applied` and `undone` so the diff card stays visible across an undo.
+ */
+type EditApplyState =
+	| { readonly phase: "pending" }
+	| { readonly phase: "failed" }
+	| { readonly phase: "applied"; readonly result: IVSCloneEditApplyResult }
+	| { readonly phase: "undone"; readonly result: IVSCloneEditApplyResult };
+
+const editApplyStateStorageKey = "vsclone.chat.editApplyState";
+
+/**
+ * On-disk shape for the edit apply state map. URIs are flattened to strings since `JSON.stringify`
+ * does not natively round-trip a `URI` instance, and the runtime side reconstructs them via
+ * `URI.parse`. Only the persisted phases are represented here. `pending` is intentionally
+ * dropped at serialization time because the in-flight apply belongs to a process that is gone.
+ */
+interface IPersistedEditApplyState {
+	readonly phase: "failed" | "applied" | "undone";
+	readonly fileChanges?: readonly IPersistedEditFileChange[];
+}
+
+interface IPersistedEditFileChange {
+	readonly uri: string;
+	readonly displayPath: string;
+	readonly addedLines: number;
+	readonly removedLines: number;
+	readonly action: "create" | "modify";
+	readonly originalContent?: string;
+}
+
+function serializePersistedEditApplyState(state: EditApplyState): IPersistedEditApplyState | undefined {
+	if (state.phase === "pending") {
+		return undefined;
+	}
+	if (state.phase === "failed") {
+		return { phase: "failed" };
+	}
+	return {
+		phase: state.phase,
+		fileChanges: state.result.fileChanges.map((change): IPersistedEditFileChange => ({
+			uri: change.uri.toString(),
+			displayPath: change.displayPath,
+			addedLines: change.addedLines,
+			removedLines: change.removedLines,
+			action: change.action,
+			originalContent: change.originalContent,
+		})),
+	};
+}
+
+function deserializePersistedEditApplyState(value: unknown): EditApplyState | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined;
+	}
+	const candidate = value as IPersistedEditApplyState;
+	if (candidate.phase === "failed") {
+		return { phase: "failed" };
+	}
+	if (candidate.phase !== "applied" && candidate.phase !== "undone") {
+		return undefined;
+	}
+	if (!Array.isArray(candidate.fileChanges)) {
+		return undefined;
+	}
+	const fileChanges: IVSCloneEditFileChange[] = [];
+	for (const raw of candidate.fileChanges) {
+		if (!raw || typeof raw !== "object") {
+			continue;
+		}
+		const change = raw as IPersistedEditFileChange;
+		if (typeof change.uri !== "string" || typeof change.displayPath !== "string") {
+			continue;
+		}
+		let parsedUri: URI;
+		try {
+			parsedUri = URI.parse(change.uri);
+		} catch {
+			continue;
+		}
+		fileChanges.push({
+			uri: parsedUri,
+			displayPath: change.displayPath,
+			addedLines: typeof change.addedLines === "number" ? change.addedLines : 0,
+			removedLines: typeof change.removedLines === "number" ? change.removedLines : 0,
+			action: change.action === "create" ? "create" : "modify",
+			originalContent: typeof change.originalContent === "string" ? change.originalContent : undefined,
+		});
+	}
+	if (fileChanges.length === 0) {
+		return undefined;
+	}
+	// Reconstruct a minimal IVSCloneEditApplyResult sufficient for the renderer + undo path.
+	// Fields the renderer doesn't read (attemptedEdits, failures, modifiedFiles) are filled with
+	// best-effort defaults rather than persisted, since they would balloon the storage payload
+	// without affecting any UI behaviour.
+	const result: IVSCloneEditApplyResult = {
+		attemptedEdits: fileChanges.length,
+		appliedEdits: fileChanges.length,
+		modifiedFiles: fileChanges.map(change => change.uri),
+		failures: [],
+		fileChanges,
+	};
+	return { phase: candidate.phase, result };
+}
+
 export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private readonly composerFocusDisposable = this._register(
 		new MutableDisposable(),
@@ -221,6 +331,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.instantiationService.createInstance(VSCloneChatHistoryRail),
 	);
 	private readonly threadsById = new Map<string, IVSCloneChatHistoryThread>();
+	// Per-turn state machine for the auto-apply / undo / redo flow. Each completed assistant
+	// turn that emits SEARCH/REPLACE blocks transitions through pending → applied → undone →
+	// applied as the user (or the auto-apply scheduler) acts on it. Storing the full apply
+	// result on the 'applied' and 'undone' phases lets the renderer keep the diff card visible
+	// across an undo+redo cycle and lets the undo handler restore exact pre-apply contents.
+	private readonly editApplyStateByTurnId = new Map<string, EditApplyState>();
 	private readonly refreshRailScheduler = this._register(
 		new RunOnceScheduler(() => {
 			this.refreshRailRows();
@@ -273,6 +389,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IFileService private readonly fileService: IFileService,
 		@IMarkdownRendererService
 		private readonly markdownRendererService: IMarkdownRendererService,
+		@IStorageService private readonly storageService: IStorageService,
 	) {
 		super(
 			options,
@@ -294,6 +411,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				this.configurationService.getValue<number>(railWidthSetting) ?? 320,
 			),
 		);
+
+		this.hydrateEditApplyStateFromStorage();
 
 		this._register(
 			this.rail.onDidSelectThread((threadId) => {
@@ -361,6 +480,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				if (event.reason === "turnUpdate") {
 					if (affectsActiveThread) {
 						this.refreshConversationScheduler.schedule(24);
+						// Trigger auto-apply on the same event the streaming completes so the user
+						// never has to click the apply button on the happy path.
+						this.maybeAutoApplyCompletedTurns();
 					}
 					this.refreshRailScheduler.schedule();
 					return;
@@ -1420,20 +1542,234 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			text.trim().length > 0 &&
 			this.editApplicationService.hasSearchReplaceBlocks(text)
 		) {
-			const applyButton = document.createElement("button");
-			applyButton.type = "button";
-			applyButton.className = "vsclone-thread-message-apply";
-			applyButton.textContent = localize(
-				"vsclone.thread.assistant.apply",
-				"Apply Changes",
-			);
-			applyButton.addEventListener(EventType.CLICK, () => {
-				void this.applyAssistantEdits(turn, applyButton);
-			});
-			item.appendChild(applyButton);
+			const state = this.editApplyStateByTurnId.get(turn.turnId);
+			if (state?.phase === "applied" || state?.phase === "undone") {
+				item.appendChild(this.renderEditApplySummary(turn, state));
+			} else if (state?.phase === "pending") {
+				const pendingIndicator = document.createElement("div");
+				pendingIndicator.className = "vsclone-thread-message-apply pending";
+				pendingIndicator.textContent = localize(
+					"vsclone.thread.assistant.apply.applyingAuto",
+					"Applying changes...",
+				);
+				item.appendChild(pendingIndicator);
+			} else if (state?.phase === "failed") {
+				// Auto-apply failed (typically because the SEARCH text no longer matches the file
+				// contents). Surface a manual retry button so the user is not stranded.
+				const applyButton = document.createElement("button");
+				applyButton.type = "button";
+				applyButton.className = "vsclone-thread-message-apply";
+				applyButton.textContent = localize(
+					"vsclone.thread.assistant.apply",
+					"Apply Changes",
+				);
+				applyButton.addEventListener(EventType.CLICK, () => {
+					void this.applyAssistantEdits(turn, applyButton);
+				});
+				item.appendChild(applyButton);
+			}
+			// If state is undefined, the auto-apply scheduler hasn't run yet for this turn.
+			// The next history change tick will set it to 'pending' and re-render.
 		}
 
 		return item;
+	}
+
+	/**
+	 * Renders the post-apply summary card: a one-line header with the file count and an
+	 * Undo (or Redo, when the apply has been undone) action, followed by one row per modified
+	 * file showing the relative path, +N/-N stats, and a Review action that opens the file.
+	 * The card is intentionally compact so it fits inside the chat transcript without dominating
+	 * the column. The diff rows stay visible across an undo+redo cycle so the user can always
+	 * see exactly which lines were touched.
+	 */
+	private renderEditApplySummary(
+		turn: IVSCloneChatHistoryTurn,
+		state: { readonly phase: "applied" | "undone"; readonly result: IVSCloneEditApplyResult },
+	): HTMLElement {
+		const applyResult = state.result;
+		const card = document.createElement("div");
+		card.className = "vsclone-edit-apply-summary";
+		card.classList.add(`phase-${state.phase}`);
+
+		const header = document.createElement("div");
+		header.className = "vsclone-edit-apply-summary-header";
+		const fileCountLabel = document.createElement("span");
+		fileCountLabel.className = "vsclone-edit-apply-summary-count";
+		fileCountLabel.textContent = applyResult.fileChanges.length === 1
+			? localize("vsclone.thread.assistant.apply.fileCount.one", "1 file changed")
+			: localize("vsclone.thread.assistant.apply.fileCount.many", "{0} files changed", applyResult.fileChanges.length.toString());
+		header.appendChild(fileCountLabel);
+
+		const actionButton = document.createElement("button");
+		actionButton.type = "button";
+		actionButton.className = "vsclone-edit-apply-summary-undo";
+		const actionLabel = document.createElement("span");
+		const actionIcon = document.createElement("span");
+		actionIcon.className = "codicon vsclone-edit-apply-summary-undo-icon";
+		actionIcon.setAttribute("aria-hidden", "true");
+		if (state.phase === "applied") {
+			actionLabel.textContent = localize("vsclone.thread.assistant.apply.undo", "Undo");
+			actionIcon.classList.add("codicon-discard");
+			actionButton.addEventListener(EventType.CLICK, () => {
+				void this.undoAssistantEdits(turn, applyResult, actionButton);
+			});
+		} else {
+			actionLabel.textContent = localize("vsclone.thread.assistant.apply.redo", "Redo");
+			actionIcon.classList.add("codicon-redo");
+			actionButton.addEventListener(EventType.CLICK, () => {
+				void this.redoAssistantEdits(turn, actionButton);
+			});
+		}
+		actionButton.appendChild(actionLabel);
+		actionButton.appendChild(actionIcon);
+		header.appendChild(actionButton);
+
+		card.appendChild(header);
+
+		for (const change of applyResult.fileChanges) {
+			card.appendChild(this.renderEditApplySummaryFileRow(change));
+		}
+
+		return card;
+	}
+
+	private renderEditApplySummaryFileRow(change: IVSCloneEditFileChange): HTMLElement {
+		const row = document.createElement("div");
+		row.className = "vsclone-edit-apply-summary-file";
+
+		const pathLabel = document.createElement("span");
+		pathLabel.className = "vsclone-edit-apply-summary-file-path";
+		pathLabel.textContent = change.displayPath;
+		pathLabel.title = change.uri.toString();
+		row.appendChild(pathLabel);
+
+		const stats = document.createElement("span");
+		stats.className = "vsclone-edit-apply-summary-file-stats";
+		const added = document.createElement("span");
+		added.className = "vsclone-edit-apply-summary-file-added";
+		added.textContent = `+${change.addedLines}`;
+		stats.appendChild(added);
+		const removed = document.createElement("span");
+		removed.className = "vsclone-edit-apply-summary-file-removed";
+		removed.textContent = `-${change.removedLines}`;
+		stats.appendChild(removed);
+		row.appendChild(stats);
+
+		const reviewButton = document.createElement("button");
+		reviewButton.type = "button";
+		reviewButton.className = "vsclone-edit-apply-summary-review";
+		const reviewLabel = document.createElement("span");
+		reviewLabel.textContent = localize("vsclone.thread.assistant.apply.review", "Review");
+		reviewButton.appendChild(reviewLabel);
+		const reviewIcon = document.createElement("span");
+		reviewIcon.className = "codicon codicon-arrow-right vsclone-edit-apply-summary-review-icon";
+		reviewIcon.setAttribute("aria-hidden", "true");
+		reviewButton.appendChild(reviewIcon);
+		reviewButton.addEventListener(EventType.CLICK, () => {
+			void this.editorService.openEditor({ resource: change.uri });
+		});
+		row.appendChild(reviewButton);
+
+		return row;
+	}
+
+	private async undoAssistantEdits(
+		turn: IVSCloneChatHistoryTurn,
+		applyResult: IVSCloneEditApplyResult,
+		button: HTMLButtonElement,
+	): Promise<void> {
+		button.disabled = true;
+		try {
+			const undoResult = await this.editApplicationService.undoEditApply(applyResult.fileChanges);
+			if (undoResult.failures.length > 0 && undoResult.revertedFiles.length === 0) {
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.assistant.apply.undo.failed",
+						"Could not undo all changes: {0}",
+						undoResult.failures[0],
+					),
+				);
+				return;
+			}
+
+			// Keep the same apply result on the state so the diff card stays in place; only the
+			// phase flips, which causes the renderer to swap Undo for Redo.
+			this.setEditApplyState(turn.turnId, { phase: "undone", result: applyResult });
+			this.notificationService.info(
+				localize(
+					"vsclone.thread.assistant.apply.undo.success",
+					"Reverted {0} file(s).",
+					undoResult.revertedFiles.length,
+				),
+			);
+			this.refreshConversation();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.notificationService.error(
+				localize(
+					"vsclone.thread.assistant.apply.undo.error",
+					"Failed to undo suggested changes: {0}",
+					message,
+				),
+			);
+		} finally {
+			if (button.isConnected) {
+				button.disabled = false;
+			}
+		}
+	}
+
+	private async redoAssistantEdits(
+		turn: IVSCloneChatHistoryTurn,
+		button: HTMLButtonElement,
+	): Promise<void> {
+		const responseText = turn.responsePlainText || turn.responseMarkdown;
+		if (!responseText) {
+			return;
+		}
+		button.disabled = true;
+		try {
+			const applyResult = await this.editApplicationService.applySearchReplaceBlocks(responseText);
+			if (applyResult.appliedEdits === 0) {
+				const failureDetails = applyResult.failures[0] ?? localize(
+					"vsclone.thread.assistant.apply.noChanges.reason",
+					"No matching SEARCH block was found.",
+				);
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.assistant.apply.redo.failed",
+						"Could not redo changes. {0}",
+						failureDetails,
+					),
+				);
+				return;
+			}
+
+			this.setEditApplyState(turn.turnId, { phase: "applied", result: applyResult });
+			this.notificationService.info(
+				localize(
+					"vsclone.thread.assistant.apply.redo.success",
+					"Re-applied {0} edit(s) across {1} file(s).",
+					applyResult.appliedEdits,
+					applyResult.modifiedFiles.length,
+				),
+			);
+			this.refreshConversation();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.notificationService.error(
+				localize(
+					"vsclone.thread.assistant.apply.redo.error",
+					"Failed to redo suggested changes: {0}",
+					message,
+				),
+			);
+		} finally {
+			if (button.isConnected) {
+				button.disabled = false;
+			}
+		}
 	}
 
 	private renderToolAwareAssistantText(
@@ -3114,6 +3450,141 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return card;
 	}
 
+	/**
+	 * Restores the per-turn apply state map from workspace storage on view-pane construction.
+	 * `pending` states are intentionally not persisted: a process restart means whatever apply
+	 * was in flight is gone, and the auto-apply scheduler will simply re-trigger on the same
+	 * turn. We persist `failed`, `applied`, and `undone`, with `applied`/`undone` carrying the
+	 * full per-file changes (including `originalContent`) so the diff card and undo button
+	 * survive a restart.
+	 */
+	private hydrateEditApplyStateFromStorage(): void {
+		const raw = this.storageService.get(editApplyStateStorageKey, StorageScope.WORKSPACE);
+		if (!raw) {
+			return;
+		}
+		try {
+			const parsed = JSON.parse(raw) as unknown;
+			if (!parsed || typeof parsed !== "object") {
+				return;
+			}
+			for (const [turnId, persisted] of Object.entries(parsed as Record<string, unknown>)) {
+				const state = deserializePersistedEditApplyState(persisted);
+				if (state) {
+					this.editApplyStateByTurnId.set(turnId, state);
+				}
+			}
+		} catch {
+			// A malformed value just falls back to "no state restored"; the user will see the
+			// auto-apply scheduler kick in fresh on their next turn.
+		}
+	}
+
+	private persistEditApplyStateToStorage(): void {
+		const payload: Record<string, ReturnType<typeof serializePersistedEditApplyState>> = {};
+		for (const [turnId, state] of this.editApplyStateByTurnId) {
+			const serialized = serializePersistedEditApplyState(state);
+			if (serialized) {
+				payload[turnId] = serialized;
+			}
+		}
+		if (Object.keys(payload).length === 0) {
+			this.storageService.remove(editApplyStateStorageKey, StorageScope.WORKSPACE);
+			return;
+		}
+		this.storageService.store(
+			editApplyStateStorageKey,
+			JSON.stringify(payload),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+	}
+
+	/**
+	 * Centralizes edit-apply state mutations so every transition runs through the same persist
+	 * path. Hydration still writes the in-memory map directly to avoid an unnecessary round-trip
+	 * back to storage, but every subsequent transition (pending → applied/failed, applied →
+	 * undone, undone → applied, failed → pending → applied, etc.) goes through here.
+	 */
+	private setEditApplyState(turnId: string, state: EditApplyState): void {
+		this.editApplyStateByTurnId.set(turnId, state);
+		this.persistEditApplyStateToStorage();
+	}
+
+	/**
+	 * Walks the active thread and starts auto-apply for any completed assistant turn that has
+	 * SEARCH/REPLACE blocks but no entry in the apply state map yet. This is invoked from the
+	 * history change listener so the apply happens the moment the model finishes streaming.
+	 */
+	private maybeAutoApplyCompletedTurns(): void {
+		if (!this.activeThreadId) {
+			return;
+		}
+		const turns = this.historyService.getTurns(this.activeThreadId);
+		for (const turn of turns) {
+			if (turn.status !== "completed" || turn.executionMode === "plan") {
+				continue;
+			}
+			if (this.editApplyStateByTurnId.has(turn.turnId)) {
+				continue;
+			}
+			const text = turn.responsePlainText || turn.responseMarkdown;
+			if (!text || !this.editApplicationService.hasSearchReplaceBlocks(text)) {
+				continue;
+			}
+
+			this.setEditApplyState(turn.turnId, { phase: "pending" });
+			void this.runAutoApply(turn, text);
+		}
+	}
+
+	private async runAutoApply(turn: IVSCloneChatHistoryTurn, responseText: string): Promise<void> {
+		try {
+			const applyResult = await this.editApplicationService.applySearchReplaceBlocks(responseText);
+			if (applyResult.appliedEdits > 0) {
+				this.setEditApplyState(turn.turnId, { phase: "applied", result: applyResult });
+				this.notificationService.info(
+					localize(
+						"vsclone.thread.assistant.apply.autoSuccess",
+						"Auto-applied {0} edit(s) across {1} file(s).",
+						applyResult.appliedEdits,
+						applyResult.modifiedFiles.length,
+					),
+				);
+			} else {
+				this.setEditApplyState(turn.turnId, { phase: "failed" });
+				const failureDetails = applyResult.failures[0] ?? localize(
+					"vsclone.thread.assistant.apply.noChanges.reason",
+					"No matching SEARCH block was found.",
+				);
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.assistant.apply.autoFailed",
+						"Could not auto-apply changes. {0}",
+						failureDetails,
+					),
+				);
+			}
+		} catch (error) {
+			this.setEditApplyState(turn.turnId, { phase: "failed" });
+			const message = error instanceof Error ? error.message : String(error);
+			this.notificationService.error(
+				localize(
+					"vsclone.thread.assistant.apply.error",
+					"Failed to apply suggested changes: {0}",
+					message,
+				),
+			);
+		} finally {
+			this.refreshConversation();
+		}
+	}
+
+	/**
+	 * Manual fallback path used when auto-apply ended in `failed` and the user wants to retry.
+	 * Mirrors the auto-apply path but disables the clicked button while it runs so the user
+	 * gets immediate visual feedback.
+	 */
 	private async applyAssistantEdits(
 		turn: IVSCloneChatHistoryTurn,
 		button: HTMLButtonElement,
@@ -3132,48 +3603,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			"vsclone.thread.assistant.apply.pending",
 			"Applying...",
 		);
+		this.setEditApplyState(turn.turnId, { phase: "pending" });
 
 		try {
-			const applyResult =
-				await this.editApplicationService.applySearchReplaceBlocks(
-					responseText,
-				);
-			if (applyResult.appliedEdits > 0) {
-				this.notificationService.info(
-					localize(
-						"vsclone.thread.assistant.apply.success",
-						"Applied {0} edit(s) across {1} file(s).",
-						applyResult.appliedEdits,
-						applyResult.modifiedFiles.length,
-					),
-				);
-			} else {
-				const failureDetails =
-					applyResult.failures[0] ??
-					localize(
-						"vsclone.thread.assistant.apply.noChanges.reason",
-						"No matching SEARCH block was found.",
-					);
-				this.notificationService.warn(
-					localize(
-						"vsclone.thread.assistant.apply.noChanges",
-						"No changes were applied. {0}",
-						failureDetails,
-					),
-				);
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			this.notificationService.error(
-				localize(
-					"vsclone.thread.assistant.apply.error",
-					"Failed to apply suggested changes: {0}",
-					message,
-				),
-			);
+			await this.runAutoApply(turn, responseText);
 		} finally {
-			button.disabled = false;
-			button.textContent = defaultButtonLabel;
+			if (button.isConnected) {
+				button.disabled = false;
+				button.textContent = defaultButtonLabel;
+			}
 		}
 	}
 

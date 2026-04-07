@@ -775,6 +775,132 @@
 	cursor: default;
 }
 
+.vsclone-thread-message-apply.pending {
+	background: transparent;
+	border-color: transparent;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 60%, transparent 40%);
+	font-weight: 500;
+	cursor: default;
+	padding-left: 0;
+	font-style: italic;
+}
+
+.vsclone-edit-apply-summary {
+	display: flex;
+	flex-direction: column;
+	margin-top: 6px;
+	border: 1px solid var(--vscode-panel-border, color-mix(in srgb, var(--vscode-editor-foreground) 14%, transparent 86%));
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-editorWidget-background) 8%);
+	overflow: hidden;
+	font-size: 11px;
+}
+
+.vsclone-edit-apply-summary.phase-undone {
+	opacity: 0.7;
+}
+
+.vsclone-edit-apply-summary-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 5px 10px;
+	background: color-mix(in srgb, var(--vscode-editor-background) 80%, var(--vscode-editorWidget-background) 20%);
+	border-bottom: 1px solid var(--vscode-panel-border, color-mix(in srgb, var(--vscode-editor-foreground) 14%, transparent 86%));
+}
+
+.vsclone-edit-apply-summary-count {
+	font-weight: 600;
+	color: var(--vscode-editor-foreground);
+}
+
+.vsclone-edit-apply-summary-undo {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	background: transparent;
+	border: none;
+	padding: 2px 4px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 78%, transparent 22%);
+	cursor: pointer;
+	font-size: 11px;
+	border-radius: 3px;
+}
+
+.vsclone-edit-apply-summary-undo:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--vscode-editor-foreground) 8%, transparent 92%);
+	color: var(--vscode-editor-foreground);
+}
+
+.vsclone-edit-apply-summary-undo:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.vsclone-edit-apply-summary-undo-icon {
+	font-size: 12px;
+}
+
+.vsclone-edit-apply-summary-file {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 5px 10px;
+	border-top: 1px solid color-mix(in srgb, var(--vscode-editor-foreground) 6%, transparent 94%);
+}
+
+.vsclone-edit-apply-summary-file:first-of-type {
+	border-top: none;
+}
+
+.vsclone-edit-apply-summary-file-path {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--vscode-editor-foreground);
+	font-family: var(--monaco-monospace-font, monospace);
+}
+
+.vsclone-edit-apply-summary-file-stats {
+	flex: 0 0 auto;
+	display: inline-flex;
+	gap: 6px;
+	font-family: var(--monaco-monospace-font, monospace);
+}
+
+.vsclone-edit-apply-summary-file-added {
+	color: var(--vscode-charts-green, #28a745);
+}
+
+.vsclone-edit-apply-summary-file-removed {
+	color: var(--vscode-charts-red, #d73a49);
+}
+
+.vsclone-edit-apply-summary-review {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	background: transparent;
+	border: none;
+	padding: 2px 4px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 78%, transparent 22%);
+	cursor: pointer;
+	font-size: 11px;
+	border-radius: 3px;
+}
+
+.vsclone-edit-apply-summary-review:hover {
+	background: color-mix(in srgb, var(--vscode-editor-foreground) 8%, transparent 92%);
+	color: var(--vscode-editor-foreground);
+}
+
+.vsclone-edit-apply-summary-review-icon {
+	font-size: 11px;
+}
+
 .vsclone-thread-composer {
 	border-top: 1px solid var(--vscode-panel-border);
 	padding: 8px 12px;

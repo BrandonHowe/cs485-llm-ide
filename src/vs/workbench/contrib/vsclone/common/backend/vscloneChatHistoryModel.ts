@@ -23,6 +23,14 @@ export class VSCloneChatHistoryModel {
 	private readonly selectedByThread = new Map<string, IVSCloneModelSelection>();
 	private readonly selectedByLocation = new Map<IVSCloneChatLocation, IVSCloneModelSelection>();
 	private recentModelIdentifiers: string[] = [];
+	// Set during `initialize` whenever the loaded snapshot contained streaming/pending turns from a
+	// previous session that we rewrote to `failed`. The unified backend reads this to know whether
+	// it should persist the recovered state immediately so subsequent restarts skip the rewrite.
+	private _recoveredInterruptedTurns = false;
+
+	get hasRecoveredInterruptedTurns(): boolean {
+		return this._recoveredInterruptedTurns;
+	}
 
 	initialize(snapshot: IVSCloneChatHistorySnapshot): void {
 		this.threads.clear();
@@ -33,9 +41,18 @@ export class VSCloneChatHistoryModel {
 		this.selectedByThread.clear();
 		this.selectedByLocation.clear();
 		this.recentModelIdentifiers = [...snapshot.recentModelIdentifiers];
+		this._recoveredInterruptedTurns = false;
 
+		const recoveryTimestamp = Date.now();
 		for (const thread of snapshot.threads) {
-			const turns = snapshot.turnsByThreadId[thread.threadId] ?? [];
+			const rawTurns = snapshot.turnsByThreadId[thread.threadId] ?? [];
+			// Any turn still marked streaming/pending in the snapshot belonged to a previous process
+			// that did not finish; its agent loop is gone, so we mark it failed instead of leaving
+			// the UI showing a permanently spinning tool card.
+			const turns = recoverInterruptedTurns(rawTurns, recoveryTimestamp);
+			if (turns !== rawTurns) {
+				this._recoveredInterruptedTurns = true;
+			}
 			this.threads.set(thread.threadId, thread);
 			this.threadIdsBySessionResource.set(thread.sessionResource, thread.threadId);
 			this.turnsByThreadId.set(thread.threadId, turns);
@@ -327,4 +344,41 @@ export class VSCloneChatHistoryModel {
 
 		this.searchTextByThreadId.set(thread.threadId, values.join('\n').toLowerCase());
 	}
+}
+
+const interruptedTurnNotice = 'This turn was interrupted before it could finish. Send a new prompt to retry.';
+
+/**
+ * Snapshots can contain turns whose agent loop never reached a terminal phase, typically because
+ * the previous process exited (or hung) mid-tool. The state machine has no notion of liveness, so
+ * those turns would otherwise restore as `streaming`/`pending` forever, locking the composer and
+ * showing a perpetual spinner. We rewrite them to a clean `failed` state at restore time so the
+ * chat is always usable after a restart.
+ */
+function recoverInterruptedTurns(turns: readonly IVSCloneChatHistoryTurn[], recoveryTimestamp: number): readonly IVSCloneChatHistoryTurn[] {
+	let mutated = false;
+	const recovered: IVSCloneChatHistoryTurn[] = [];
+	for (const turn of turns) {
+		if (turn.status !== 'pending' && turn.status !== 'streaming') {
+			recovered.push(turn);
+			continue;
+		}
+
+		mutated = true;
+		const trailingNotice = turn.responsePlainText.trim().length > 0
+			? `${turn.responsePlainText.replace(/\s+$/, '')}\n\n${interruptedTurnNotice}`
+			: interruptedTurnNotice;
+		const trailingMarkdown = turn.responseMarkdown.trim().length > 0
+			? `${turn.responseMarkdown.replace(/\s+$/, '')}\n\n${interruptedTurnNotice}`
+			: interruptedTurnNotice;
+		recovered.push({
+			...turn,
+			status: 'failed',
+			errorCode: turn.errorCode ?? 'interrupted',
+			completedAt: turn.completedAt ?? recoveryTimestamp,
+			responsePlainText: trailingNotice,
+			responseMarkdown: trailingMarkdown,
+		});
+	}
+	return mutated ? recovered : turns;
 }

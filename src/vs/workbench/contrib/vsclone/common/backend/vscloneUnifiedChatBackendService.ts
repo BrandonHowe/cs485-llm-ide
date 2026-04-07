@@ -302,7 +302,10 @@ export class VSCloneUnifiedChatBackendService extends Disposable implements IVSC
 			// Mark the backend initialized before persisting any retention cleanup so the save path
 			// can materialize the pruned snapshot during the first successful restore.
 			this.initialized = true;
-			if (retention.deletedThreadIds.length > 0) {
+			// Persist if retention pruned threads OR if the model recovered streaming/pending turns
+			// from a crashed previous session. Both rewrite turn state that the UI should never
+			// see again on the next restart.
+			if (retention.deletedThreadIds.length > 0 || this.model.hasRecoveredInterruptedTurns) {
 				await this.persistNow();
 			}
 

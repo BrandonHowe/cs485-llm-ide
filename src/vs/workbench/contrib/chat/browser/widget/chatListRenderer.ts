@@ -147,6 +147,7 @@ export interface IChatListItemTemplate {
 	readonly checkpointToolbar: MenuWorkbenchToolBar;
 	readonly checkpointRestoreToolbar: MenuWorkbenchToolBar;
 	readonly checkpointContainer: HTMLElement;
+	readonly checkpointDiffStats: HTMLElement;
 	readonly checkpointRestoreContainer: HTMLElement;
 }
 
@@ -459,6 +460,7 @@ export class ChatListItemRenderer extends Disposable implements ITreeRenderer<Ch
 		const checkpointContainer = dom.append(rowContainer, $('.checkpoint-container'));
 		const codiconContainer = dom.append(checkpointContainer, $('.codicon-container'));
 		dom.append(codiconContainer, $('span.codicon.codicon-bookmark'));
+		const checkpointDiffStats = dom.append(checkpointContainer, $('span.checkpoint-diff-stats'));
 
 		const checkpointToolbar = templateDisposables.add(scopedInstantiationService.createInstance(MenuWorkbenchToolBar, checkpointContainer, MenuId.ChatMessageCheckpoint, {
 			actionViewItemProvider: (action, options) => {
@@ -557,7 +559,7 @@ export class ChatListItemRenderer extends Disposable implements ITreeRenderer<Ch
 		}));
 		const connectionObserver = document.createElement('connection-observer') as dom.ConnectionObserverElement;
 		dom.append(container, connectionObserver);
-		const template: IChatListItemTemplate = { header, avatarContainer, requestHover, username, detail, value, rowContainer, elementDisposables, templateDisposables, contextKeyService, instantiationService: scopedInstantiationService, agentHover, titleToolbar, footerToolbar, footerDetailsContainer, disabledOverlay, checkpointToolbar, checkpointRestoreToolbar, checkpointContainer, checkpointRestoreContainer };
+		const template: IChatListItemTemplate = { header, avatarContainer, requestHover, username, detail, value, rowContainer, elementDisposables, templateDisposables, contextKeyService, instantiationService: scopedInstantiationService, agentHover, titleToolbar, footerToolbar, footerDetailsContainer, disabledOverlay, checkpointToolbar, checkpointRestoreToolbar, checkpointContainer, checkpointDiffStats, checkpointRestoreContainer };
 
 		connectionObserver.onDidDisconnect = () => {
 			template.renderedPartsMounted = false;
@@ -727,6 +729,38 @@ export class ChatListItemRenderer extends Disposable implements ITreeRenderer<Ch
 		const isPendingRequest = isRequestVM(element) && !!element.pendingKind;
 
 		templateData.checkpointContainer.classList.toggle('hidden', isResponseVM(element) || isPendingRequest || !(checkpointEnabled));
+
+		// Populate diff stats badge for checkpoint
+		if (isRequestVM(element) && checkpointEnabled) {
+			const requestId = element.id;
+			const chatModel = this.chatService.getSession(element.sessionResource);
+			const editingSession = chatModel?.editingSession;
+			if (editingSession && editingSession.hasEditsInRequest(requestId)) {
+				templateData.elementDisposables.add(autorun(r => {
+					const diffs = editingSession.getDiffsForFilesInRequest(requestId).read(r);
+					const files = Array.from(diffs);
+					if (files.length > 0) {
+						let totalAdded = 0;
+						let totalRemoved = 0;
+						for (const diff of files) {
+							totalAdded += diff.added;
+							totalRemoved += diff.removed;
+						}
+						templateData.checkpointDiffStats.textContent = `${files.length} ${files.length === 1 ? 'file' : 'files'} (+${totalAdded} / -${totalRemoved})`;
+						templateData.checkpointDiffStats.classList.remove('hidden');
+					} else {
+						templateData.checkpointDiffStats.textContent = '';
+						templateData.checkpointDiffStats.classList.add('hidden');
+					}
+				}));
+			} else {
+				templateData.checkpointDiffStats.textContent = '';
+				templateData.checkpointDiffStats.classList.add('hidden');
+			}
+		} else {
+			templateData.checkpointDiffStats.textContent = '';
+			templateData.checkpointDiffStats.classList.add('hidden');
+		}
 
 		// Only show restore container when we have a checkpoint and not editing, and not a pending request
 		const shouldShowRestore = this.viewModel?.model.checkpoint && !this.viewModel?.editing && (index === this.delegate.getListLength() - 1) && !isPendingRequest;

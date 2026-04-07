@@ -2377,41 +2377,15 @@ export class ChatModel extends Disposable implements IChatModel {
 
 	setCheckpoint(requestId: string | undefined) {
 		let checkpoint: ChatRequestModel | undefined;
-		let checkpointIndex = -1;
 		if (requestId !== undefined) {
-			this._requests.forEach((request, index) => {
-				if (request.id === requestId) {
-					checkpointIndex = index;
-					checkpoint = request;
-					request.setShouldBeBlocked(true);
-				}
-			});
-
+			checkpoint = this._requests.find(request => request.id === requestId);
 			if (!checkpoint) {
 				return; // Invalid request ID
 			}
 		}
 
-		for (let i = this._requests.length - 1; i >= 0; i -= 1) {
-			const request = this._requests[i];
-			if (this._checkpoint && !checkpoint) {
-				request.setShouldBeBlocked(false);
-				if (request.response) {
-					request.response.setBlockedState(false);
-				}
-			} else if (checkpoint && i >= checkpointIndex) {
-				request.setShouldBeBlocked(true);
-				if (request.response) {
-					request.response.setBlockedState(true);
-				}
-			} else if (checkpoint && i < checkpointIndex) {
-				request.setShouldBeBlocked(false);
-				if (request.response) {
-					request.response.setBlockedState(false);
-				}
-			}
-		}
-
+		// Only track the checkpoint for file restoration purposes.
+		// Conversation messages are never blocked or grayed out.
 		this._checkpoint = checkpoint;
 	}
 

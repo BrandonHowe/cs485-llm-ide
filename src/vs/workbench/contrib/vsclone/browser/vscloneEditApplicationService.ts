@@ -33,6 +33,25 @@ export interface IVSCloneEditApplyResult {
 	readonly appliedEdits: number;
 	readonly modifiedFiles: readonly URI[];
 	readonly failures: readonly string[];
+	/**
+	 * Per-file metadata describing what changed during the apply. This powers the post-apply
+	 * summary UI (file rows + line stats) and supplies the original content snapshots needed
+	 * to undo each change.
+	 */
+	readonly fileChanges: readonly IVSCloneEditFileChange[];
+}
+
+export interface IVSCloneEditFileChange {
+	readonly uri: URI;
+	readonly displayPath: string;
+	readonly addedLines: number;
+	readonly removedLines: number;
+	readonly action: 'create' | 'modify';
+	/**
+	 * The full content of the file before the edit ran. Undefined for files that were created by
+	 * the apply operation, since the undo path for those is a delete instead of a write-back.
+	 */
+	readonly originalContent: string | undefined;
 }
 
 export function parseSearchReplaceBlocks(responseText: string): readonly IVSCloneParsedEdit[] {
@@ -109,6 +128,12 @@ export interface IVSCloneEditApplicationService {
 	hasSearchReplaceBlocks(responseText: string): boolean;
 	parseSearchReplaceBlocks(responseText: string): readonly IVSCloneParsedEdit[];
 	applySearchReplaceBlocks(responseText: string): Promise<IVSCloneEditApplyResult>;
+	undoEditApply(fileChanges: readonly IVSCloneEditFileChange[]): Promise<IVSCloneEditUndoResult>;
+}
+
+export interface IVSCloneEditUndoResult {
+	readonly revertedFiles: readonly URI[];
+	readonly failures: readonly string[];
 }
 
 export class VSCloneEditApplicationService implements IVSCloneEditApplicationService {
@@ -139,6 +164,7 @@ export class VSCloneEditApplicationService implements IVSCloneEditApplicationSer
 				appliedEdits: 0,
 				modifiedFiles: [],
 				failures: ['No SEARCH/REPLACE blocks were found.'],
+				fileChanges: [],
 			};
 		}
 
@@ -164,6 +190,7 @@ export class VSCloneEditApplicationService implements IVSCloneEditApplicationSer
 
 		const resourceEdits: (ResourceTextEdit | ResourceFileEdit)[] = [];
 		const modifiedFiles: URI[] = [];
+		const pendingFileChanges = new Map<string, IVSCloneEditFileChange>();
 		let appliedEdits = 0;
 
 		for (const { uri, edits } of groupedByTarget.values()) {
@@ -185,6 +212,14 @@ export class VSCloneEditApplicationService implements IVSCloneEditApplicationSer
 					contents: Promise.resolve(VSBuffer.fromString(createEdit.replaceText)),
 				}));
 				modifiedFiles.push(uri);
+				pendingFileChanges.set(uri.toString(), {
+					uri,
+					displayPath: this.deriveDisplayPath(uri, workspaceFolders.map(folder => folder.uri)),
+					addedLines: countLines(createEdit.replaceText),
+					removedLines: 0,
+					action: 'create',
+					originalContent: undefined,
+				});
 				appliedEdits += 1;
 
 				if (creationEdits.length > 1) {
@@ -206,13 +241,15 @@ export class VSCloneEditApplicationService implements IVSCloneEditApplicationSer
 
 			try {
 				const model = modelReference.object.textEditorModel;
-				const content = model.getValue();
-				const { resolved, failed } = resolveContentEdits(content, replacementEdits);
+				const originalContent = model.getValue();
+				const { resolved, failed } = resolveContentEdits(originalContent, replacementEdits);
 				for (const failedEdit of failed) {
 					failures.push(`SEARCH block did not match in ${uri.toString()}: ${trimForError(failedEdit.searchText)}`);
 				}
 
 				const ordered = [...resolved].sort((left, right) => right.startOffset - left.startOffset);
+				let addedLines = 0;
+				let removedLines = 0;
 				for (const resolvedEdit of ordered) {
 					const start = model.getPositionAt(resolvedEdit.startOffset);
 					const end = model.getPositionAt(resolvedEdit.endOffset);
@@ -220,10 +257,22 @@ export class VSCloneEditApplicationService implements IVSCloneEditApplicationSer
 						range: new Range(start.lineNumber, start.column, end.lineNumber, end.column),
 						text: resolvedEdit.replaceText,
 					}));
+					removedLines += countLines(originalContent.slice(resolvedEdit.startOffset, resolvedEdit.endOffset));
+					addedLines += countLines(resolvedEdit.replaceText);
 				}
 
 				if (ordered.length > 0) {
 					modifiedFiles.push(uri);
+					pendingFileChanges.set(uri.toString(), {
+						uri,
+						displayPath: this.deriveDisplayPath(uri, workspaceFolders.map(folder => folder.uri)),
+						addedLines,
+						removedLines,
+						action: 'modify',
+						// Snapshot the pre-edit text so the UI can offer an undo that restores the
+						// exact prior state, even if the user has typed in the file since the apply.
+						originalContent,
+					});
 					appliedEdits += ordered.length;
 				}
 			} finally {
@@ -237,6 +286,7 @@ export class VSCloneEditApplicationService implements IVSCloneEditApplicationSer
 				appliedEdits: 0,
 				modifiedFiles: [],
 				failures,
+				fileChanges: [],
 			};
 		}
 
@@ -250,6 +300,7 @@ export class VSCloneEditApplicationService implements IVSCloneEditApplicationSer
 				appliedEdits: 0,
 				modifiedFiles: [],
 				failures: [...failures, 'Workspace edit was not applied.'],
+				fileChanges: [],
 			};
 		}
 
@@ -262,7 +313,80 @@ export class VSCloneEditApplicationService implements IVSCloneEditApplicationSer
 			appliedEdits,
 			modifiedFiles,
 			failures,
+			fileChanges: [...pendingFileChanges.values()],
 		};
+	}
+
+	async undoEditApply(fileChanges: readonly IVSCloneEditFileChange[]): Promise<IVSCloneEditUndoResult> {
+		const revertedFiles: URI[] = [];
+		const failures: string[] = [];
+		const resourceEdits: (ResourceTextEdit | ResourceFileEdit)[] = [];
+
+		for (const change of fileChanges) {
+			if (change.action === 'create') {
+				// Files conjured by an edit apply are reverted by deleting them outright; the apply
+				// path explicitly refused to overwrite an existing file, so the user could not have
+				// pre-existing content to preserve here.
+				resourceEdits.push(new ResourceFileEdit(change.uri, undefined, {
+					ignoreIfNotExists: true,
+				}));
+				revertedFiles.push(change.uri);
+				continue;
+			}
+
+			if (change.originalContent === undefined) {
+				failures.push(`No original snapshot recorded for ${change.uri.toString()}`);
+				continue;
+			}
+
+			let modelReference;
+			try {
+				modelReference = await this.textModelService.createModelReference(change.uri);
+			} catch {
+				failures.push(`Could not open ${change.uri.toString()} to undo the change.`);
+				continue;
+			}
+
+			try {
+				const model = modelReference.object.textEditorModel;
+				const lineCount = model.getLineCount();
+				const lastLineLength = model.getLineMaxColumn(lineCount);
+				resourceEdits.push(new ResourceTextEdit(change.uri, {
+					range: new Range(1, 1, lineCount, lastLineLength),
+					text: change.originalContent,
+				}));
+				revertedFiles.push(change.uri);
+			} finally {
+				modelReference.dispose();
+			}
+		}
+
+		if (resourceEdits.length === 0) {
+			return { revertedFiles: [], failures };
+		}
+
+		const applyResult = await this.bulkEditService.apply(resourceEdits, {
+			label: 'Undo VSClone suggested changes',
+		});
+		if (!applyResult.isApplied) {
+			return {
+				revertedFiles: [],
+				failures: [...failures, 'Workspace undo edit was not applied.'],
+			};
+		}
+
+		return { revertedFiles, failures };
+	}
+
+	private deriveDisplayPath(uri: URI, workspaceFolderUris: readonly URI[]): string {
+		for (const folderUri of workspaceFolderUris) {
+			const folderPath = folderUri.path.endsWith('/') ? folderUri.path : `${folderUri.path}/`;
+			if (uri.path.startsWith(folderPath)) {
+				return uri.path.slice(folderPath.length);
+			}
+		}
+		const segments = uri.path.split('/').filter(Boolean);
+		return segments[segments.length - 1] ?? uri.toString();
 	}
 
 	private async resolveEditTargetUri(filePath: string, workspaceFolderUris: readonly URI[]): Promise<URI | undefined> {
@@ -385,4 +509,16 @@ function trimForError(value: string): string {
 		return compact;
 	}
 	return `${compact.slice(0, 77)}...`;
+}
+
+/**
+ * Counts logical lines in a unified-diff sense: an empty string is zero, a trailing newline is
+ * not a separate line, and otherwise the count is the number of `\n`-separated segments.
+ */
+function countLines(text: string): number {
+	if (text.length === 0) {
+		return 0;
+	}
+	const trimmed = text.endsWith('\n') ? text.slice(0, -1) : text;
+	return trimmed.split('\n').length;
 }

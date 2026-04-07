@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from '../../../../base/common/buffer.js';
-import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
+import { CancellationError } from '../../../../base/common/errors.js';
 import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IBulkEditService, ResourceTextEdit } from '../../../../editor/browser/services/bulkEditService.js';
@@ -39,7 +40,7 @@ export const IVSCloneToolExecutionService = createDecorator<IVSCloneToolExecutio
 
 export interface IVSCloneToolExecutionService {
 	readonly _serviceBrand: undefined;
-	executeTool(toolName: string, params: Record<string, string>, mode?: VSCloneChatMode): Promise<IVSCloneToolExecutionResult>;
+	executeTool(toolName: string, params: Record<string, string>, mode?: VSCloneChatMode, token?: CancellationToken): Promise<IVSCloneToolExecutionResult>;
 }
 
 interface IParsedSearchReplaceBlock {
@@ -69,10 +70,16 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 	) {
 	}
 
-	async executeTool(toolName: string, params: Record<string, string>, mode: VSCloneChatMode = 'act'): Promise<IVSCloneToolExecutionResult> {
+	async executeTool(toolName: string, params: Record<string, string>, mode: VSCloneChatMode = 'act', token: CancellationToken = CancellationToken.None): Promise<IVSCloneToolExecutionResult> {
 		const invocationLog = `[VSCloneToolExecution] Executing ${toolName} (${summarizeToolParams(params)})`;
 		this.logService.info(invocationLog);
 		console.info(invocationLog);
+		if (token.isCancellationRequested) {
+			return {
+				success: false,
+				output: `Tool ${toolName} was cancelled before it could finish.`,
+			};
+		}
 		try {
 			// Plan mode is enforced here as the last runtime gate so prompt drift or model disobedience
 			// cannot silently turn a read-only planning turn into a workspace mutation.
@@ -93,7 +100,7 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 				case 'list_directory':
 					return this.executeListDirectory(params);
 				case 'search_files':
-					return this.executeSearchFiles(params);
+					return this.executeSearchFiles(params, token);
 				case 'edit_file':
 					return this.executeEditFile(params);
 				case 'create_file':
@@ -110,6 +117,12 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 					};
 			}
 		} catch (error) {
+			if (error instanceof CancellationError || token.isCancellationRequested) {
+				return {
+					success: false,
+					output: `Tool ${toolName} was cancelled before it could finish.`,
+				};
+			}
 			const message = error instanceof Error ? error.message : String(error);
 			this.logService.error('[VSCloneToolExecution] Tool execution failed', error);
 			console.error('[VSCloneToolExecution] Tool execution failed', error);
@@ -192,7 +205,7 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		};
 	}
 
-	private async executeSearchFiles(params: Record<string, string>): Promise<IVSCloneToolExecutionResult> {
+	private async executeSearchFiles(params: Record<string, string>, externalToken: CancellationToken = CancellationToken.None): Promise<IVSCloneToolExecutionResult> {
 		const path = params.path;
 		const pattern = params.pattern;
 		if (!path) {
@@ -200,6 +213,19 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		}
 		if (!pattern) {
 			return { success: false, output: 'Missing required parameter: pattern' };
+		}
+
+		// Models occasionally emit malformed regex (e.g. unbalanced parens) that the underlying
+		// search engine handles inconsistently across platforms. Validating up front turns the
+		// failure into a fast, actionable error instead of relying on the engine to bail out.
+		try {
+			void new RegExp(pattern);
+		} catch (regexError) {
+			const message = regexError instanceof Error ? regexError.message : String(regexError);
+			return {
+				success: false,
+				output: `Invalid regex pattern /${pattern}/: ${message}`,
+			};
 		}
 
 		const target = this.resolveWorkspacePath(path);
@@ -225,7 +251,11 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 			maxResults: maxSearchMatches,
 		});
 
+		// Local CTS is used to halt the search once the result cap is reached. The external token
+		// is forwarded so that the agent loop's cancel button (and tool-execution timeout) can also
+		// terminate an in-flight search instead of leaving the chat stuck.
 		const cts = new CancellationTokenSource();
+		const externalCancelListener = externalToken.onCancellationRequested(() => cts.cancel());
 		const lines: string[] = [];
 		let matchCount = 0;
 		let limited = false;
@@ -264,7 +294,12 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 				throw error;
 			}
 		} finally {
+			externalCancelListener.dispose();
 			cts.dispose();
+		}
+
+		if (externalToken.isCancellationRequested && !limited) {
+			throw new CancellationError();
 		}
 
 		if (lines.length === 0) {

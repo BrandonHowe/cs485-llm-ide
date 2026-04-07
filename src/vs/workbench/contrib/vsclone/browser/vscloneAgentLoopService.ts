@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DeferredPromise } from '../../../../base/common/async.js';
+import { DeferredPromise, raceTimeout } from '../../../../base/common/async.js';
+import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -17,10 +18,14 @@ import { sanitizeAgentModelOutput } from '../common/vscloneAgentTranscriptSaniti
 import { formatToolResult } from '../common/vscloneToolDefinitions.js';
 import { parseToolCalls } from '../common/vscloneToolCallParser.js';
 import type { IVSCloneImageAttachment } from '../common/vscloneImageAttachmentTypes.js';
-import { IVSCloneToolExecutionService } from './vscloneToolExecutionService.js';
+import { IVSCloneToolExecutionResult, IVSCloneToolExecutionService } from './vscloneToolExecutionService.js';
 
 const maxAgentIterations = 25;
 const maxToolUsageReprompts = 2;
+// Tools that legitimately take a long time (large search, large edit) should still finish well
+// under this cap. Anything beyond it is treated as a hung call so the agent loop can recover
+// instead of leaving the chat permanently stuck on a single tool invocation.
+const toolExecutionTimeoutMs = 90_000;
 
 export const IVSCloneAgentLoopService = createDecorator<IVSCloneAgentLoopService>('vscloneAgentLoopService');
 
@@ -54,6 +59,7 @@ interface ILoopState {
 	cancelled: boolean;
 	finished: boolean;
 	activeRequest: IVSCloneApiRequestHandle | undefined;
+	activeToolTokenSource: CancellationTokenSource | undefined;
 }
 
 interface ILoopMessage {
@@ -89,6 +95,7 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 			cancelled: false,
 			finished: false,
 			activeRequest: undefined,
+			activeToolTokenSource: undefined,
 		};
 
 		void this.runLoop(options, state).then(() => {
@@ -105,7 +112,11 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 					return;
 				}
 				state.cancelled = true;
+				// Cancel both the streaming API request and any in-flight tool execution. Without
+				// the latter, pressing Stop while a tool is running would do nothing because the
+				// active request handle is undefined during tool execution.
 				state.activeRequest?.cancel();
+				state.activeToolTokenSource?.cancel();
 			},
 		};
 	}
@@ -208,13 +219,18 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 				const toolAttemptTrace = this.describeToolAttemptTrace(toolCall.name, toolCall.params);
 				this.emitAgentTrace(options, 'tool', toolAttemptTrace, 'start');
 				this.logTrace('info', `[Tool Attempt] ${toolAttemptTrace}`);
-				const toolResult = await this.toolExecutionService.executeTool(toolCall.name, toolCall.params, options.mode);
+				const toolResult = await this.executeToolWithCancellation(toolCall.name, toolCall.params, options.mode, state);
 				const formattedToolResult = formatToolResult(toolCall.name, toolResult);
 				toolResults.push(formattedToolResult);
 				const toolResultTrace = this.describeToolResultTrace(toolCall.name, toolResult.success);
 				this.emitAgentTrace(options, 'tool_result', toolResultTrace, toolResult.success ? 'success' : 'error');
 				this.logTrace(toolResult.success ? 'info' : 'warn', `[Tool Result] ${toolResultTrace}`);
 				this.appendAssistantDelta(options, `\n${formattedToolResult}\n`);
+
+				if (state.cancelled) {
+					this.applyCancel(options, state);
+					return;
+				}
 
 				if (toolCall.name === 'attempt_completion') {
 					this.applyComplete(options, state);
@@ -227,6 +243,47 @@ export class VSCloneAgentLoopService extends Disposable implements IVSCloneAgent
 		}
 
 		this.applyError(options, state, `Agent loop exceeded the safety limit of ${maxAgentIterations} iterations.`);
+	}
+
+	/**
+	 * Tool execution can hang for several reasons (slow search providers, an extension host that
+	 * has not yet finished registering, malformed regex that the underlying engine never reports
+	 * back on, etc.). We wrap each call in two safety nets:
+	 *
+	 * 1. A `CancellationTokenSource` exposed via `state.activeToolTokenSource` so that the user
+	 *    pressing Stop on the chat actually reaches the in-flight tool. Without this hook the
+	 *    cancel button only aborts the streaming API request, which is undefined while a tool
+	 *    is running.
+	 * 2. A hard `raceTimeout` ceiling so that even if a tool ignores cancellation entirely, the
+	 *    loop still recovers and surfaces a clear error to the model rather than freezing forever.
+	 */
+	private async executeToolWithCancellation(
+		toolName: string,
+		params: Record<string, string>,
+		mode: VSCloneChatMode,
+		state: ILoopState,
+	): Promise<IVSCloneToolExecutionResult> {
+		const tokenSource = new CancellationTokenSource();
+		state.activeToolTokenSource = tokenSource;
+		try {
+			const execution = this.toolExecutionService.executeTool(toolName, params, mode, tokenSource.token);
+			const result = await raceTimeout(execution, toolExecutionTimeoutMs, () => {
+				this.logTrace('warn', `Tool ${toolName} exceeded ${toolExecutionTimeoutMs}ms; cancelling and continuing.`);
+				tokenSource.cancel();
+			});
+			if (result) {
+				return result;
+			}
+			return {
+				success: false,
+				output: `Tool ${toolName} did not finish within ${Math.round(toolExecutionTimeoutMs / 1000)} seconds and was cancelled.`,
+			};
+		} finally {
+			if (state.activeToolTokenSource === tokenSource) {
+				state.activeToolTokenSource = undefined;
+			}
+			tokenSource.dispose();
+		}
 	}
 
 	private async runModelIteration(

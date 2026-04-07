@@ -2202,13 +2202,9 @@ export class ChatWidget extends Disposable implements IChatWidget {
 		this.input.validateAgentMode();
 
 		if (this.viewModel.model.checkpoint) {
-			const requests = this.viewModel.model.getRequests();
-			for (let i = requests.length - 1; i >= 0; i -= 1) {
-				const request = requests[i];
-				if (request.shouldBeBlocked) {
-					this.chatService.removeRequest(this.viewModel.sessionResource, request.id);
-				}
-			}
+			// Clear the checkpoint tracker; conversation messages are preserved,
+			// only file state was rewound.
+			this.viewModel.model.setCheckpoint(undefined);
 		}
 		if (this.viewModel.sessionResource && !options.queue) {
 			// todo@connor4312: move chatAccessibilityService.acceptRequest to a refcount model to handle queue messages

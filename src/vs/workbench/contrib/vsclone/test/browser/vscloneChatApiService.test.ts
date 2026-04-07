@@ -151,7 +151,9 @@ function createEditApplicationService(): IVSCloneEditApplicationService {
 			appliedEdits: 0,
 			modifiedFiles: [],
 			failures: [],
+			fileChanges: [],
 		}),
+		undoEditApply: async () => ({ revertedFiles: [], failures: [] }),
 	};
 }
 

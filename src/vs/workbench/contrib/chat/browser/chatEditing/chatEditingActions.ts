@@ -16,6 +16,7 @@ import { EditorContextKeys } from '../../../../../editor/common/editorContextKey
 import { isLocation, Location } from '../../../../../editor/common/languages.js';
 import { ITextModel } from '../../../../../editor/common/model.js';
 import { ILanguageFeaturesService } from '../../../../../editor/common/services/languageFeatures.js';
+import { IModelService } from '../../../../../editor/common/services/model.js';
 import { ITextModelService } from '../../../../../editor/common/services/resolverService.js';
 import { localize, localize2 } from '../../../../../nls.js';
 import { Action2, IAction2Options, MenuId, registerAction2 } from '../../../../../platform/actions/common/actions.js';
@@ -423,9 +424,8 @@ registerAction2(ViewAllSessionChangesAction);
 async function restoreSnapshotWithConfirmationByRequestId(accessor: ServicesAccessor, sessionResource: URI, requestId: string): Promise<void> {
 	const configurationService = accessor.get(IConfigurationService);
 	const dialogService = accessor.get(IDialogService);
-	const chatWidgetService = accessor.get(IChatWidgetService);
-	const widget = chatWidgetService.getWidgetBySessionResource(sessionResource);
 	const chatService = accessor.get(IChatService);
+	const modelService = accessor.get(IModelService);
 	const chatModel = chatService.getSession(sessionResource);
 	if (!chatModel) {
 		return;
@@ -442,42 +442,61 @@ async function restoreSnapshotWithConfirmationByRequestId(accessor: ServicesAcce
 		return;
 	}
 
-	const editsToUndo = chatRequests.length - itemIndex;
+	// Gather files that will be affected by the restore
+	const requestsAfterCheckpoint = chatRequests.slice(itemIndex);
+	const requestIdsAfterCheckpoint = new Set(requestsAfterCheckpoint.map(request => request.id));
+	const entriesModifiedAfterCheckpoint = session.entries.get().filter((entry) => requestIdsAfterCheckpoint.has(entry.lastModifyingRequestId)) ?? [];
 
-	const requestsToRemove = chatRequests.slice(itemIndex);
-	const requestIdsToRemove = new Set(requestsToRemove.map(request => request.id));
-	const entriesModifiedInRequestsToRemove = session.entries.get().filter((entry) => requestIdsToRemove.has(entry.lastModifyingRequestId)) ?? [];
-	const shouldPrompt = entriesModifiedInRequestsToRemove.length > 0 && configurationService.getValue('chat.editing.confirmEditRequestRemoval') === true;
+	// Detect files with manual user edits that would be lost on restore.
+	// Compare current editor model content against the snapshot at the latest
+	// request to find files the user has manually modified after the agent.
+	const filesWithManualEdits: string[] = [];
+	const lastRequest = chatRequests[chatRequests.length - 1];
+	if (lastRequest) {
+		for (const entry of entriesModifiedAfterCheckpoint) {
+			const currentModel = modelService.getModel(entry.modifiedURI);
+			if (currentModel) {
+				const snapshotContent = await session.getSnapshotContents(lastRequest.id, entry.modifiedURI, undefined);
+				if (snapshotContent) {
+					const snapshotStr = snapshotContent.toString();
+					if (currentModel.getValue() !== snapshotStr) {
+						filesWithManualEdits.push(basename(entry.modifiedURI));
+					}
+				}
+			}
+		}
+	}
+
+	const hasManualEdits = filesWithManualEdits.length > 0;
+	const shouldPrompt = (entriesModifiedAfterCheckpoint.length > 0 && configurationService.getValue('chat.editing.confirmEditRequestRemoval') === true) || hasManualEdits;
 
 	let message: string;
-	if (editsToUndo === 1) {
-		if (entriesModifiedInRequestsToRemove.length === 1) {
-			message = localize('chat.removeLast.confirmation.message2', "This will remove your last request and undo the edits made to {0}. Do you want to proceed?", basename(entriesModifiedInRequestsToRemove[0].modifiedURI));
-		} else {
-			message = localize('chat.removeLast.confirmation.multipleEdits.message', "This will remove your last request and undo edits made to {0} files in your working set. Do you want to proceed?", entriesModifiedInRequestsToRemove.length);
-		}
+	if (entriesModifiedAfterCheckpoint.length === 1) {
+		message = localize('chat.restoreCheckpoint.confirmation.message.single', "This will revert file changes made to {0} back to this checkpoint. The conversation will not be affected. Do you want to proceed?", basename(entriesModifiedAfterCheckpoint[0].modifiedURI));
 	} else {
-		if (entriesModifiedInRequestsToRemove.length === 1) {
-			message = localize('chat.remove.confirmation.message2', "This will remove all subsequent requests and undo edits made to {0}. Do you want to proceed?", basename(entriesModifiedInRequestsToRemove[0].modifiedURI));
-		} else {
-			message = localize('chat.remove.confirmation.multipleEdits.message', "This will remove all subsequent requests and undo edits made to {0} files in your working set. Do you want to proceed?", entriesModifiedInRequestsToRemove.length);
-		}
+		message = localize('chat.restoreCheckpoint.confirmation.message.multiple', "This will revert file changes made to {0} files back to this checkpoint. The conversation will not be affected. Do you want to proceed?", entriesModifiedAfterCheckpoint.length);
+	}
+
+	// Warn about manual edits that will be lost
+	if (hasManualEdits) {
+		const manualEditWarning = filesWithManualEdits.length === 1
+			? localize('chat.restoreCheckpoint.manualEdits.single', "\n\nWarning: {0} has been manually edited since the last agent change. These manual edits will be lost.", filesWithManualEdits[0])
+			: localize('chat.restoreCheckpoint.manualEdits.multiple', "\n\nWarning: {0} files have been manually edited since the last agent change. These manual edits will be lost: {1}", filesWithManualEdits.length, filesWithManualEdits.join(', '));
+		message += manualEditWarning;
 	}
 
 	const confirmation = shouldPrompt
 		? await dialogService.confirm({
-			title: editsToUndo === 1
-				? localize('chat.removeLast.confirmation.title', "Do you want to undo your last edit?")
-				: localize('chat.remove.confirmation.title', "Do you want to undo {0} edits?", editsToUndo),
+			title: localize('chat.restoreCheckpoint.confirmation.title', "Restore file changes to this checkpoint?"),
 			message: message,
-			primaryButton: localize('chat.remove.confirmation.primaryButton', "Yes"),
-			checkbox: { label: localize('chat.remove.confirmation.checkbox', "Don't ask again"), checked: false },
-			type: 'info'
+			primaryButton: localize('chat.restoreCheckpoint.confirmation.primaryButton', "Restore"),
+			checkbox: hasManualEdits ? undefined : { label: localize('chat.restoreCheckpoint.confirmation.checkbox', "Don't ask again"), checked: false },
+			type: hasManualEdits ? 'warning' : 'info'
 		})
 		: { confirmed: true };
 
 	if (!confirmation.confirmed) {
-		widget?.viewModel?.model.setCheckpoint(undefined);
+		chatModel.setCheckpoint(undefined);
 		return;
 	}
 
@@ -485,7 +504,7 @@ async function restoreSnapshotWithConfirmationByRequestId(accessor: ServicesAcce
 		await configurationService.updateValue('chat.editing.confirmEditRequestRemoval', false);
 	}
 
-	// Restore the snapshot to what it was before the request(s) that we deleted
+	// Restore file state to the checkpoint; conversation remains intact
 	const snapshotRequestId = chatRequests[itemIndex].id;
 	await session.restoreSnapshot(snapshotRequestId, undefined);
 }
@@ -650,8 +669,8 @@ registerAction2(class RestoreLastCheckpoint extends Action2 {
 
 		widget?.viewModel?.model.setCheckpoint(checkpointRequest.id);
 		widget?.focusInput();
-		widget?.input.setValue(checkpointRequest.message.text, false);
 
+		// Restore file state only; conversation remains intact
 		await restoreSnapshotWithConfirmationByRequestId(accessor, sessionResource, checkpointRequest.id);
 	}
 });

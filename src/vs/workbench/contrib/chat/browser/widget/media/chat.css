@@ -2626,6 +2626,21 @@ have to be updated for changes to the rules above, or to support more deeply nes
 			color: var(--vscode-chat-checkpointSeparator);
 		}
 
+		.checkpoint-diff-stats {
+			font-size: 11px;
+			color: var(--vscode-descriptionForeground);
+			background-color: var(--vscode-sideBar-background);
+			padding: 2px 6px;
+			position: absolute;
+			top: 5px;
+			right: 0;
+			white-space: nowrap;
+		}
+
+		.checkpoint-diff-stats.hidden {
+			display: none;
+		}
+
 		.monaco-toolbar {
 			opacity: 0;
 			height: fit-content;

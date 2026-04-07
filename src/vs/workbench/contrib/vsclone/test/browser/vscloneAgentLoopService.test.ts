@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DeferredPromise } from '../../../../../base/common/async.js';
+import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { Event } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
@@ -54,7 +56,7 @@ class TestChatApiService implements IVSCloneChatApiService {
 class TestToolExecutionService implements IVSCloneToolExecutionService {
 	declare readonly _serviceBrand: undefined;
 
-	async executeTool(toolName: string, params: Record<string, string>, _mode?: VSCloneChatMode): Promise<IVSCloneToolExecutionResult> {
+	async executeTool(toolName: string, params: Record<string, string>, _mode?: VSCloneChatMode, _token: CancellationToken = CancellationToken.None): Promise<IVSCloneToolExecutionResult> {
 		switch (toolName) {
 			case 'list_directory':
 				return {
@@ -195,6 +197,80 @@ suite('VSCloneAgentLoopService', () => {
 			assert.ok(persistedTurn.responsePlainText.includes('<tool_result tool_name="list_directory" success="true">'));
 			assert.ok(persistedTurn.responsePlainText.includes('<tool_result tool_name="attempt_completion" success="true">'));
 			assert.ok(!persistedTurn.responsePlainText.includes('<tool_result>\ntestgame/\n</tool_result>'));
+		} finally {
+			service.dispose();
+		}
+	});
+
+	test('cancel() aborts an in-flight tool execution and finalizes the turn as cancelled', async () => {
+		// Stalls forever until the agent loop cancels its token, modeling a hung tool call so the
+		// test can verify that pressing Stop unblocks the chat instead of leaving it spinning.
+		class HangingToolExecutionService implements IVSCloneToolExecutionService {
+			declare readonly _serviceBrand: undefined;
+			toolStarted = new DeferredPromise<void>();
+			cancellationObserved = false;
+
+			async executeTool(_toolName: string, _params: Record<string, string>, _mode?: VSCloneChatMode, token: CancellationToken = CancellationToken.None): Promise<IVSCloneToolExecutionResult> {
+				this.toolStarted.complete();
+				const cancelled = new DeferredPromise<void>();
+				const listener = token.onCancellationRequested(() => cancelled.complete());
+				if (token.isCancellationRequested) {
+					cancelled.complete();
+				}
+				try {
+					await cancelled.p;
+				} finally {
+					listener.dispose();
+				}
+				this.cancellationObserved = true;
+				return {
+					success: false,
+					output: 'cancelled',
+				};
+			}
+		}
+
+		const scriptedResponse = [
+			'Thinking: I will run a long search.',
+			'<tool_call>',
+			'<tool_name>search_files</tool_name>',
+			'<path>.</path>',
+			'<pattern>foo</pattern>',
+			'</tool_call>',
+		].join('\n');
+		const historyService = new TestHistoryService();
+		const toolService = new HangingToolExecutionService();
+		const service = new VSCloneAgentLoopService(
+			new TestChatApiService(scriptedResponse),
+			toolService,
+			historyService,
+			new NullLogService(),
+		);
+
+		try {
+			await withMutedConsole(async () => {
+				const handle = service.runAgentLoop({
+					threadId: 'thread-cancel',
+					turnId: 'turn-cancel',
+					sequence: 1,
+					sessionResource: 'vsclone://api/thread-cancel',
+					promptText: 'search the workspace for foo',
+					mode: 'act',
+					vendor: 'openai' as VSCloneModelVendor,
+					modelId: 'gpt-5.3-codex',
+					modelIdentifier: 'openai/gpt-5.3-codex',
+					previousTurns: [],
+					systemMessage: 'SYSTEM',
+				});
+
+				await toolService.toolStarted.p;
+				handle.cancel();
+				await handle.done;
+			});
+
+			assert.strictEqual(toolService.cancellationObserved, true);
+			const cancelUpdate = historyService.updates.find(update => update.phase === 'cancel');
+			assert.ok(cancelUpdate, 'expected the agent loop to emit a cancel turn update after Stop is pressed');
 		} finally {
 			service.dispose();
 		}

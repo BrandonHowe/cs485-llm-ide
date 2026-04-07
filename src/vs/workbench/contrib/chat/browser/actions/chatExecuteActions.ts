@@ -81,34 +81,24 @@ abstract class SubmitAction extends Action2 {
 				const itemIndex = chatRequests.findIndex(request => request.id === requestId);
 				const editsToUndo = chatRequests.length - itemIndex;
 
-				const requestsToRemove = chatRequests.slice(itemIndex);
-				const requestIdsToRemove = new Set(requestsToRemove.map(request => request.id));
-				const entriesModifiedInRequestsToRemove = session.entries.get().filter((entry) => requestIdsToRemove.has(entry.lastModifyingRequestId)) ?? [];
-				const shouldPrompt = entriesModifiedInRequestsToRemove.length > 0 && configurationService.getValue('chat.editing.confirmEditRequestRemoval') === true;
+				const requestsAfterCheckpoint = chatRequests.slice(itemIndex);
+				const requestIdsAfterCheckpoint = new Set(requestsAfterCheckpoint.map(request => request.id));
+				const entriesModifiedAfterCheckpoint = session.entries.get().filter((entry) => requestIdsAfterCheckpoint.has(entry.lastModifyingRequestId)) ?? [];
+				const shouldPrompt = entriesModifiedAfterCheckpoint.length > 0 && configurationService.getValue('chat.editing.confirmEditRequestRemoval') === true;
 
 				let message: string;
-				if (editsToUndo === 1) {
-					if (entriesModifiedInRequestsToRemove.length === 1) {
-						message = localize('chat.removeLast.confirmation.message2', "This will remove your last request and undo the edits made to {0}. Do you want to proceed?", basename(entriesModifiedInRequestsToRemove[0].modifiedURI));
-					} else {
-						message = localize('chat.removeLast.confirmation.multipleEdits.message', "This will remove your last request and undo edits made to {0} files in your working set. Do you want to proceed?", entriesModifiedInRequestsToRemove.length);
-					}
+				if (entriesModifiedAfterCheckpoint.length === 1) {
+					message = localize('chat.editRestore.confirmation.message.single', "This will revert file changes made to {0} back to this checkpoint and re-send your edited request. The conversation history will be preserved. Do you want to proceed?", basename(entriesModifiedAfterCheckpoint[0].modifiedURI));
 				} else {
-					if (entriesModifiedInRequestsToRemove.length === 1) {
-						message = localize('chat.remove.confirmation.message2', "This will remove all subsequent requests and undo edits made to {0}. Do you want to proceed?", basename(entriesModifiedInRequestsToRemove[0].modifiedURI));
-					} else {
-						message = localize('chat.remove.confirmation.multipleEdits.message', "This will remove all subsequent requests and undo edits made to {0} files in your working set. Do you want to proceed?", entriesModifiedInRequestsToRemove.length);
-					}
+					message = localize('chat.editRestore.confirmation.message.multiple', "This will revert file changes made to {0} files back to this checkpoint and re-send your edited request. The conversation history will be preserved. Do you want to proceed?", entriesModifiedAfterCheckpoint.length);
 				}
 
 				const confirmation = shouldPrompt
 					? await dialogService.confirm({
-						title: editsToUndo === 1
-							? localize('chat.removeLast.confirmation.title', "Do you want to undo your last edit?")
-							: localize('chat.remove.confirmation.title', "Do you want to undo {0} edits?", editsToUndo),
+						title: localize('chat.editRestore.confirmation.title', "Revert file changes and re-send?"),
 						message: message,
-						primaryButton: localize('chat.remove.confirmation.primaryButton', "Yes"),
-						checkbox: { label: localize('chat.remove.confirmation.checkbox', "Don't ask again"), checked: false },
+						primaryButton: localize('chat.editRestore.confirmation.primaryButton', "Restore and Send"),
+						checkbox: { label: localize('chat.editRestore.confirmation.checkbox', "Don't ask again"), checked: false },
 						type: 'info'
 					})
 					: { confirmed: true };

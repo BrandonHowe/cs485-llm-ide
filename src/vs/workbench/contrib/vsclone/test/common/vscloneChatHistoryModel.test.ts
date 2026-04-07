@@ -128,4 +128,44 @@ suite('VSCloneChatHistoryModel', () => {
 		model.setThreadState(baseThread, [turn('t', 1, 'a'), turn('t', 2, 'b'), turn('t', 3, 'c')]);
 		assert.strictEqual(model.getTurns('t').length, 3);
 	});
+
+	test('marks streaming and pending turns from a previous session as failed on initialize', () => {
+		const model = new VSCloneChatHistoryModel();
+		const interruptedStreaming: IVSCloneChatHistoryTurn = {
+			...turn('alpha', 1, 'in-flight'),
+			status: 'streaming',
+			responseMarkdown: 'partial markdown',
+			responsePlainText: 'partial plain',
+		};
+		const interruptedPending: IVSCloneChatHistoryTurn = {
+			...turn('alpha', 2, 'queued'),
+			status: 'pending',
+			responseMarkdown: '',
+			responsePlainText: '',
+		};
+		const completed: IVSCloneChatHistoryTurn = turn('alpha', 3, 'fine');
+
+		model.initialize({
+			updatedAt: 1,
+			threads: [thread('alpha', 100)],
+			turnsByThreadId: {
+				alpha: [interruptedStreaming, interruptedPending, completed],
+			},
+			modeByThread: {},
+			selectedByThread: {},
+			selectedByLocation: {},
+			recentModelIdentifiers: [],
+		});
+
+		const restored = model.getTurns('alpha');
+		assert.deepStrictEqual(
+			restored.map(t => ({ id: t.turnId, status: t.status, errorCode: t.errorCode, includesNotice: t.responsePlainText.includes('interrupted') })),
+			[
+				{ id: 'alpha-1', status: 'failed', errorCode: 'interrupted', includesNotice: true },
+				{ id: 'alpha-2', status: 'failed', errorCode: 'interrupted', includesNotice: true },
+				{ id: 'alpha-3', status: 'completed', errorCode: undefined, includesNotice: false },
+			],
+		);
+		assert.ok(restored[0].responsePlainText.startsWith('partial plain'));
+	});
 });

@@ -24,6 +24,7 @@
   3. **Conversation only** - keep code but reset context
 - **Limitations**: Does NOT track files modified by bash commands. Only direct file edits
 - **Persistence**: Checkpoints persist across sessions (30-day cleanup)
+- **Note for our implementation**: We will NOT support conversation rewinding (modes 1 and 3). Our checkpoints are code-only.
 
 #### Windsurf (Cascade)
 - **Storage**: Snapshots of project state at each step
@@ -38,6 +39,7 @@
 3. Restoration is all-or-nothing for a given checkpoint point
 4. They complement git, not replace it
 5. UI is typically inline in the chat message timeline
+6. Some tools (Claude Code) support rewinding the conversation alongside code. **We will NOT do this** - our checkpoints rewind file changes only. The conversation history always remains intact.
 
 ---
 
@@ -63,7 +65,7 @@ VSClone already has a substantial checkpoint/timeline infrastructure:
 2. **Operations tracked**: Every file create/delete/rename/text-edit/notebook-edit is recorded as a `FileOperation` with an epoch
 3. **Navigation**: `navigateToCheckpoint()` reconstructs file state by replaying operations up to the target epoch
 4. **UI**: Checkpoint bookmark icon and toolbar appear on chat request messages. A "Checkpoint Restored" bar shows when rewound
-5. **Blocked requests**: When a checkpoint is set, all requests after it are "blocked" (grayed out visually)
+5. **Blocked requests**: When a checkpoint is set, all requests after it are "blocked" (grayed out visually). **Note**: The existing code grays out/blocks conversation messages after the checkpoint. We need to change this - conversation should remain fully visible and unblocked after a restore. Only the file state rewinds.
 6. **Restore flow**: User clicks checkpoint action -> confirmation dialog -> `restoreSnapshot()` called -> files reverted on disk
 
 ### What's Missing / Needs Enhancement
@@ -73,6 +75,17 @@ Based on the user's request ("save diffs after every single message the agent do
 1. **Verification**: Confirm checkpoints are actually being created for every agent response that produces file edits
 2. **User-facing polish**: The checkpoint UI (behind `chat.checkpoints.enabled` config) may need to be enabled by default or made more discoverable
 3. **Handling user edits on rewind**: The key subtlety - what happens to manual edits made between checkpoints
+
+---
+
+## Scope Decision: Code-Only Checkpoints (No Conversation Rewind)
+
+Checkpoints in our system rewind **file changes only**. The conversation history is never modified, removed, or rewound. When a user restores a checkpoint:
+- Files on disk revert to their state at that checkpoint
+- All chat messages (requests and responses) remain visible and intact
+- The user can continue the conversation from the current point with the restored file state
+
+This is simpler to implement, easier to reason about, and avoids the complexity of conversation branching/forking. It matches Cursor's approach and is the "code only" mode from Claude Code.
 
 ---
 
@@ -172,8 +185,11 @@ Based on the user's request ("save diffs after every single message the agent do
 ### Q: What about files modified by terminal/bash commands?
 **A: Not tracked**, matching Claude Code's limitation. Only edits made through the chat editing system are checkpointed. Document this clearly.
 
+### Q: Does restoring a checkpoint affect the conversation?
+**A: No.** Checkpoints only rewind file changes. The full conversation history remains visible and intact. There is no conversation rewinding, forking, or message removal. After restoring, the user continues the conversation normally with the reverted file state.
+
 ### Q: Can the user "branch" from a checkpoint?
-**A: Yes, implicitly.** After restoring to a checkpoint, the user can send a new message which effectively creates a new branch of history. The "blocked" requests after the checkpoint remain in the UI but are grayed out. This matches Cursor's behavior.
+**A: Not explicitly.** After restoring file state to a checkpoint, the user simply continues the conversation. There is no conversation branching - the chat is a single linear thread. The next agent response will work with the restored file state.
 
 ---
 
@@ -183,6 +199,7 @@ Based on the user's request ("save diffs after every single message the agent do
 |----------|------|--------|
 | P0 | `chat.contribution.ts` | Verify/enable `checkpoints.enabled` default |
 | P0 | `chatEditingSession.ts` | Verify checkpoint creation on every response with diffs |
+| P0 | `chatModel.ts` / `chatEditingActions.ts` | Remove conversation blocking on checkpoint restore (no grayed-out messages) |
 | P1 | `chatEditingActions.ts` | Enhance restore confirmation to detect user manual changes |
 | P1 | `chatListRenderer.ts` | Add per-message diff stats badge |
 | P2 | `chatEditingSessionStorage.ts` | Verify persistence works correctly |
