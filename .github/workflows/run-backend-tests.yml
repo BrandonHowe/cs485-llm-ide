@@ -1,6 +1,9 @@
 name: Run Backend Tests
 
 on:
+  # Keep this workflow runnable on its own, but also expose it as a reusable gate
+  # so the release pipeline cannot drift away from the exact VSClone backend checks.
+  workflow_call:
   push:
   pull_request:
   workflow_dispatch:

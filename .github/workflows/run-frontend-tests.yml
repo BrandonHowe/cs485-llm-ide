@@ -1,6 +1,9 @@
 name: Run Frontend Tests
 
 on:
+  # Reuse the same browser test definition from the release workflow so packaging
+  # is blocked by the exact VSClone UI checks that already protect pull requests.
+  workflow_call:
   push:
   pull_request:
   workflow_dispatch:

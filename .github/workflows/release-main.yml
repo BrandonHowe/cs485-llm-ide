@@ -1,0 +1,355 @@
+name: Release Main Builds
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  # Only the newest main build should publish because older runs would otherwise
+  # race to overwrite the shared rolling release and fixed tag.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  backend-tests:
+    name: VSClone Backend Tests
+    uses: ./.github/workflows/run-backend-tests.yml
+
+  frontend-tests:
+    name: VSClone Frontend Tests
+    uses: ./.github/workflows/run-frontend-tests.yml
+
+  build-windows:
+    name: Build Windows Installer
+    runs-on: windows-2022
+    needs:
+      - backend-tests
+      - frontend-tests
+    permissions:
+      contents: read
+    env:
+      npm_config_arch: x64
+      VSCODE_ARCH: x64
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Workspace Dependencies
+        shell: pwsh
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Built-In Extensions
+        shell: pwsh
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Windows Client
+        shell: pwsh
+        run: npm run gulp "vscode-win32-x64-min-ci" "vscode-win32-x64-inno-updater" "vscode-win32-x64-user-setup"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage Windows Release Asset
+        shell: pwsh
+        run: |
+          $Version = node -p "require('./package.json').version"
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item ".build/win32-x64/user-setup/VSCodeSetup.exe" "release/VSCodeUserSetup-x64-$Version.exe"
+
+      - name: Upload Windows Release Asset
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-release-assets
+          path: release/*.exe
+          if-no-files-found: error
+
+  build-macos-x64:
+    name: Build macOS Intel Bundle
+    runs-on: macos-13
+    needs:
+      - backend-tests
+      - frontend-tests
+    permissions:
+      contents: read
+    env:
+      npm_config_arch: x64
+      VSCODE_ARCH: x64
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Workspace Dependencies
+        run: |
+          set -e
+          c++ --version
+          xcode-select -print-path
+          python3 -m pip install setuptools
+          npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # VS Code's macOS jobs rely on this to avoid the dlopen Kerberos path
+          # that is brittle on hosted runners.
+          GYP_DEFINES: "kerberos_use_rtld=false"
+
+      - name: Download Built-In Extensions
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build macOS x64 Client
+        run: npm run gulp "vscode-darwin-x64-min-ci"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage macOS x64 Intermediate Artifact
+        run: |
+          set -e
+          mkdir -p release
+          # Keep the app bundle intact because the later universal merge step
+          # expects a normal `Code - OSS.app` tree on disk.
+          ditto -c -k --sequesterRsrc --keepParent "../VSCode-darwin-x64/Code - OSS.app" "release/VSCode-darwin-x64.zip"
+
+      - name: Upload macOS x64 Intermediate Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-x64-release-input
+          path: release/VSCode-darwin-x64.zip
+          if-no-files-found: error
+
+  build-macos-arm64:
+    name: Build macOS Apple Silicon Bundle
+    runs-on: macos-14
+    needs:
+      - backend-tests
+      - frontend-tests
+    permissions:
+      contents: read
+    env:
+      npm_config_arch: arm64
+      VSCODE_ARCH: arm64
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Workspace Dependencies
+        run: |
+          set -e
+          c++ --version
+          xcode-select -print-path
+          python3 -m pip install setuptools
+          npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Match the upstream workaround so native auth dependencies resolve
+          # the same way on GitHub-hosted Apple Silicon runners.
+          GYP_DEFINES: "kerberos_use_rtld=false"
+
+      - name: Download Built-In Extensions
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build macOS arm64 Client
+        run: npm run gulp "vscode-darwin-arm64-min-ci"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage macOS arm64 Intermediate Artifact
+        run: |
+          set -e
+          mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent "../VSCode-darwin-arm64/Code - OSS.app" "release/VSCode-darwin-arm64.zip"
+
+      - name: Upload macOS arm64 Intermediate Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-arm64-release-input
+          path: release/VSCode-darwin-arm64.zip
+          if-no-files-found: error
+
+  build-macos-universal:
+    name: Build macOS Universal Bundle
+    runs-on: macos-14
+    needs:
+      - build-macos-x64
+      - build-macos-arm64
+    permissions:
+      contents: read
+    env:
+      VSCODE_ARCH: universal
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: build/package-lock.json
+
+      - name: Install Build Dependencies
+        working-directory: build
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download macOS x64 Intermediate Artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: macos-x64-release-input
+          path: release-inputs/x64
+
+      - name: Download macOS arm64 Intermediate Artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: macos-arm64-release-input
+          path: release-inputs/arm64
+
+      - name: Merge Universal App Bundle
+        run: |
+          set -e
+          mkdir -p universal-build/VSCode-darwin-x64 universal-build/VSCode-darwin-arm64 release
+          unzip -q release-inputs/x64/VSCode-darwin-x64.zip -d universal-build/VSCode-darwin-x64
+          unzip -q release-inputs/arm64/VSCode-darwin-arm64.zip -d universal-build/VSCode-darwin-arm64
+          DEBUG=* node build/darwin/create-universal-app.ts universal-build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Universal Mach-O Objects
+        run: |
+          set -e
+          APP_PATH="$PWD/universal-build/VSCode-darwin-universal/Code - OSS.app" node build/darwin/verify-macho.ts universal
+
+      - name: Stage macOS Universal Release Asset
+        run: |
+          set -e
+          VERSION="$(node -p "require('./package.json').version")"
+          # The unsigned distribution target here is a zipped `.app` bundle because
+          # the repo is not configured for a polished unsigned DMG/notarization path.
+          ditto -c -k --sequesterRsrc --keepParent "universal-build/VSCode-darwin-universal/Code - OSS.app" "release/VSCode-darwin-universal-${VERSION}.zip"
+
+      - name: Upload macOS Universal Release Asset
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-universal-release-assets
+          path: release/*.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish Rolling GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - build-windows
+      - build-macos-universal
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows Release Asset
+        uses: actions/download-artifact@v5
+        with:
+          name: windows-release-assets
+          path: release-assets
+
+      - name: Download macOS Universal Release Asset
+        uses: actions/download-artifact@v5
+        with:
+          name: macos-universal-release-assets
+          path: release-assets
+
+      - name: Move Fixed Release Tag To Current Commit
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f main-latest "$GITHUB_SHA"
+          git push origin refs/tags/main-latest --force
+
+      - name: Create Or Update Rolling Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="main-latest"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TITLE="Latest Main Build (${SHORT_SHA})"
+          NOTES_FILE="$(mktemp)"
+
+          cat > "$NOTES_FILE" <<EOF
+          Automated rolling build for commit \`${GITHUB_SHA}\`.
+
+          Assets:
+          - Windows: unsigned x64 installer \`.exe\`
+          - macOS: unsigned universal \`.app\` bundle packaged as \`.zip\`
+
+          Install notes:
+          - Windows: if SmartScreen warns, click "More info" and then "Run anyway".
+          - macOS: if Gatekeeper blocks the app, use "Open Anyway" in Privacy & Security and relaunch it once.
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            RELEASE_ID="$(gh release view "$TAG" --json id --jq '.id')"
+
+            gh release view "$TAG" --json assets --jq '.assets[]?.name' | while IFS= read -r asset_name; do
+              if [ -n "$asset_name" ]; then
+                gh release delete-asset "$TAG" "$asset_name" --yes
+              fi
+            done
+
+            gh release upload "$TAG" release-assets/* --clobber
+            gh api "repos/{owner}/{repo}/releases/${RELEASE_ID}" \
+              --method PATCH \
+              -f tag_name="$TAG" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="$TITLE" \
+              -F body@"$NOTES_FILE" \
+              -F draft=false \
+              -F prerelease=false \
+              -F make_latest=true \
+              --silent
+          else
+            gh release create "$TAG" release-assets/* \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes-file "$NOTES_FILE" \
+              --latest
+          fi
