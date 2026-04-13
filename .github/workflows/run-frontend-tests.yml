@@ -39,14 +39,40 @@ jobs:
 
       - name: Install Build Dependencies
         working-directory: build
-        run: npm ci
+        run: |
+          # Browser CI pulls the same native toolchain payloads as the backend
+          # workflow, so retries keep one-off upstream 5xx responses from
+          # failing the UI gate before any VSClone code has actually run.
+          for attempt in 1 2 3; do
+            if npm ci; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Workspace Dependencies
         run: |
-          source ./build/azure-pipelines/linux/setup-env.sh
-          npm ci
+          # setup-env.sh performs the same libc++ fetches that are flaking in CI,
+          # so the retry loop has to rerun that bootstrap phase as well as npm ci.
+          for attempt in 1 2 3; do
+            # The retry needs to start from a clean toolchain and node_modules state,
+            # otherwise a half-fetched bootstrap can keep breaking later attempts.
+            if [ "$attempt" -gt 1 ]; then
+              rm -rf node_modules .build/CR_Clang .build/libcxx-objects .build/libcxx_headers .build/libcxxabi_headers
+            fi
+            if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

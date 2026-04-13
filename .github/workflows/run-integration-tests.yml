@@ -1,0 +1,213 @@
+name: Run Integration Tests
+
+on:
+  # Keep the workflow reusable from other pipelines while also running it for
+  # direct pushes and pull requests during day-to-day CI verification.
+  workflow_call:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend-integration-tests:
+    name: VSClone Backend Integration Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      npm_config_arch: x64
+      VSCODE_ARCH: x64
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            build/package-lock.json
+
+      - name: Install Linux System Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config xvfb libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 rpm
+
+      - name: Install Build Dependencies
+        working-directory: build
+        run: |
+          # A short retry loop keeps transient registry failures from turning the
+          # whole integration gate red before the actual test steps even start.
+          for attempt in 1 2 3; do
+            if npm ci; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Workspace Dependencies
+        run: |
+          # The Linux environment bootstrap performs the flaky artifact downloads,
+          # so rerun the full bootstrap-plus-install sequence on transient errors.
+          for attempt in 1 2 3; do
+            # Partial libc++ downloads and failed native module builds can poison the
+            # next retry, so clear the transient bootstrap outputs before rerunning.
+            if [ "$attempt" -gt 1 ]; then
+              rm -rf node_modules .build/CR_Clang .build/libcxx-objects .build/libcxx_headers .build/libcxxabi_headers
+            fi
+            if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Built-In Extensions
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Transpile Client and Extensions
+        run: npm run gulp transpile-client-esbuild transpile-extensions
+
+      - name: Download Electron Runtime
+        run: npm run electron -- x64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Linux Electron Sandbox
+        # Policy export integration tests launch scripts/code.sh directly, so the
+        # downloaded chrome-sandbox helper needs the standard Linux ownership and mode.
+        run: |
+          if [ -f .build/electron/chrome-sandbox ]; then
+            sudo chown root:root .build/electron/chrome-sandbox
+            sudo chmod 4755 .build/electron/chrome-sandbox
+          fi
+
+      - name: Build Integration Test Extensions
+        # The integration runners execute compiled extension test bundles, so CI
+        # needs this explicit build step instead of relying on runtime ts-node behavior.
+        run: |
+          npm run gulp \
+            compile-extension:configuration-editing \
+            compile-extension:css-language-features-server \
+            compile-extension:emmet \
+            compile-extension:git \
+            compile-extension:github-authentication \
+            compile-extension:html-language-features-server \
+            compile-extension:ipynb \
+            compile-extension:notebook-renderers \
+            compile-extension:json-language-features-server \
+            compile-extension:markdown-language-features \
+            compile-extension-media \
+            compile-extension:microsoft-authentication \
+            compile-extension:typescript-language-features \
+            compile-extension:vscode-api-tests \
+            compile-extension:vscode-colorize-tests \
+            compile-extension:vscode-colorize-perf-tests \
+            compile-extension:vscode-test-resolver
+
+      - name: Run Backend Integration Tests
+        run: xvfb-run -a ./scripts/test-integration.sh --no-sandbox --disable-gpu-sandbox --tfs "Integration Tests"
+
+  frontend-integration-tests:
+    name: VSClone Frontend Integration Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      npm_config_arch: x64
+      VSCODE_ARCH: x64
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            build/package-lock.json
+
+      - name: Install Linux System Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config xvfb libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 rpm
+
+      - name: Install Build Dependencies
+        working-directory: build
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Workspace Dependencies
+        run: |
+          # Frontend integration needs the same bootstrap retry behavior because
+          # setup-env.sh fetches native toolchain assets before npm ci runs.
+          for attempt in 1 2 3; do
+            # Clean transient bootstrap outputs between retries so a partial fetch
+            # does not leave native dependency builds in a permanently bad state.
+            if [ "$attempt" -gt 1 ]; then
+              rm -rf node_modules .build/CR_Clang .build/libcxx-objects .build/libcxx_headers .build/libcxxabi_headers
+            fi
+            if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Built-In Extensions
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Transpile Client and Extensions
+        run: npm run gulp transpile-client-esbuild transpile-extensions
+
+      - name: Install Playwright Chromium
+        run: npm exec -- playwright install chromium
+
+      - name: Build Integration Test Extensions
+        run: |
+          npm run gulp \
+            compile-extension:configuration-editing \
+            compile-extension:emmet \
+            compile-extension:git \
+            compile-extension:ipynb \
+            compile-extension:markdown-language-features \
+            compile-extension:typescript-language-features \
+            compile-extension:vscode-api-tests
+
+      - name: Run Frontend Integration Tests
+        run: ./scripts/test-web-integration.sh --browser chromium
