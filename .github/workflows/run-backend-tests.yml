@@ -39,14 +39,37 @@ jobs:
 
       - name: Install Build Dependencies
         working-directory: build
-        run: npm ci
+        run: |
+          # GitHub-hosted runners occasionally hit transient 5xx responses while
+          # restoring large native toolchain artifacts, so retry the install a
+          # few times before treating the backend test gate as genuinely broken.
+          for attempt in 1 2 3; do
+            if npm ci; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Workspace Dependencies
         run: |
           source ./build/azure-pipelines/linux/setup-env.sh
-          npm ci
+          # The workspace install pulls the same cached native artifacts as the
+          # build install, so it needs matching retry behavior to keep the CI
+          # signal focused on real VSClone regressions instead of flaky downloads.
+          for attempt in 1 2 3; do
+            if npm ci; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

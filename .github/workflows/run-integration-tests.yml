@@ -43,7 +43,9 @@ jobs:
           # A short retry loop keeps transient registry failures from turning the
           # whole integration gate red before the actual test steps even start.
           for attempt in 1 2 3; do
-            npm ci && break
+            if npm ci; then
+              break
+            fi
             if [ "$attempt" -eq 3 ]; then
               exit 1
             fi
@@ -56,7 +58,9 @@ jobs:
         run: |
           source ./build/azure-pipelines/linux/setup-env.sh
           for attempt in 1 2 3; do
-            npm ci && break
+            if npm ci; then
+              break
+            fi
             if [ "$attempt" -eq 3 ]; then
               exit 1
             fi
@@ -145,7 +149,9 @@ jobs:
         working-directory: build
         run: |
           for attempt in 1 2 3; do
-            npm ci && break
+            if npm ci; then
+              break
+            fi
             if [ "$attempt" -eq 3 ]; then
               exit 1
             fi
@@ -158,7 +164,9 @@ jobs:
         run: |
           source ./build/azure-pipelines/linux/setup-env.sh
           for attempt in 1 2 3; do
-            npm ci && break
+            if npm ci; then
+              break
+            fi
             if [ "$attempt" -eq 3 ]; then
               exit 1
             fi
