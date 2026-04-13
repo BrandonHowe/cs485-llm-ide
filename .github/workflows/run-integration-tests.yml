@@ -59,6 +59,11 @@ jobs:
           # The Linux environment bootstrap performs the flaky artifact downloads,
           # so rerun the full bootstrap-plus-install sequence on transient errors.
           for attempt in 1 2 3; do
+            # Partial libc++ downloads and failed native module builds can poison the
+            # next retry, so clear the transient bootstrap outputs before rerunning.
+            if [ "$attempt" -gt 1 ]; then
+              rm -rf node_modules .build/CR_Clang .build/libcxx-objects .build/libcxx_headers .build/libcxxabi_headers
+            fi
             if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
               break
             fi
@@ -166,6 +171,11 @@ jobs:
           # Frontend integration needs the same bootstrap retry behavior because
           # setup-env.sh fetches native toolchain assets before npm ci runs.
           for attempt in 1 2 3; do
+            # Clean transient bootstrap outputs between retries so a partial fetch
+            # does not leave native dependency builds in a permanently bad state.
+            if [ "$attempt" -gt 1 ]; then
+              rm -rf node_modules .build/CR_Clang .build/libcxx-objects .build/libcxx_headers .build/libcxxabi_headers
+            fi
             if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
               break
             fi
