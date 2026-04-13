@@ -109,7 +109,9 @@ jobs:
           set -e
           c++ --version
           xcode-select -print-path
-          python3 -m pip install setuptools
+          # Centralize the PEP 668 workaround so macOS runner image changes do not
+          # leave the release workflow out of sync with the other Darwin jobs.
+          node build/lib/pythonPackages.ts setuptools
           npm ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -171,7 +173,9 @@ jobs:
           set -e
           c++ --version
           xcode-select -print-path
-          python3 -m pip install setuptools
+          # Keep the Apple Silicon install path aligned with the Intel job because
+          # both runners now use Homebrew-managed Python that enforces PEP 668.
+          node build/lib/pythonPackages.ts setuptools
           npm ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -77,7 +77,9 @@ steps:
       set -e
       c++ --version
       xcode-select -print-path
-      python3 -m pip install setuptools
+      # Route Darwin pip installs through the shared helper so both CI systems
+      # stay aligned when hosted macOS images tighten Python packaging rules.
+      node build/lib/pythonPackages.ts setuptools
 
       for i in {1..5}; do # try 5 times
         npm ci && break
@@ -240,8 +242,9 @@ steps:
 
     - script: |
         set -e
-        # Needed for https://github.com/dmgbuild/dmgbuild/blob/main/src/dmgbuild/badge.py
-        python3 -m pip install pyobjc-framework-Quartz
+        # Needed for https://github.com/dmgbuild/dmgbuild/blob/main/src/dmgbuild/badge.py.
+        # The helper keeps this install compatible with PEP 668-enforcing runners.
+        node build/lib/pythonPackages.ts pyobjc-framework-Quartz
         DMG_OUT="$(Pipeline.Workspace)/vscode_client_darwin_$(VSCODE_ARCH)_dmg"
         mkdir -p $DMG_OUT
         node build/darwin/create-dmg.ts $(agent.builddirectory) $DMG_OUT

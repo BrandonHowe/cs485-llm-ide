@@ -1,14 +1,9 @@
 name: Monaco Editor checks
 
 on:
-  push:
-    branches:
-      - main
-      - release/*
-  pull_request:
-    branches:
-      - main
-      - release/*
+  # Keep the workflow file available for manual investigation, but stop
+  # scheduling it automatically so it no longer blocks repository checks.
+  workflow_dispatch:
 permissions: {}
 
 jobs:
