@@ -1164,7 +1164,10 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		const target = pane as unknown as IRenderAssistantMessageTarget;
 		// The prototype-only harness bypasses constructor field initialization, so tests that
 		// exercise the apply-button branch need to seed the per-turn state map explicitly.
-		target.editApplyStateByTurnId = new Map();
+		target.editApplyStateByTurnId = new Map([
+			// The manual apply button only appears after the auto-apply pass records a failed state.
+			['turn-2', { phase: 'failed' }],
+		]);
 		target.editApplicationService = {
 			hasSearchReplaceBlocks: () => true,
 		};
