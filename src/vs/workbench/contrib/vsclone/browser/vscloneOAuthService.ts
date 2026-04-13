@@ -438,9 +438,10 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 				if (tokenSet.expiresAt && tokenSet.expiresAt < Date.now()) {
 					// Token expired - try to refresh if we have a refresh token
 					if (tokenSet.refreshToken) {
-						this._setProviderStatus(vendor, 'refreshing');
 						try {
-							await this._doRefresh(vendor, tokenSet);
+							// Route restore-time refreshes through the same epoch-aware helper used by
+							// interactive calls so late responses cannot overwrite a newer sign-in state.
+							await this._ensureRefreshed(vendor, tokenSet);
 							continue;
 						} catch {
 							this.logService.warn(`[VSCloneOAuth] Failed to refresh expired token for ${vendor}`);
