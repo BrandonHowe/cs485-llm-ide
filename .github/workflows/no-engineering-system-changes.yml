@@ -31,9 +31,7 @@ jobs:
         id: get_permissions
         if: ${{ steps.engineering_systems_check.outputs.engineering_systems_modified == 'true' && github.event.pull_request.user.login != 'Copilot' }}
         with:
-          # Use the actual repository under test so forks can evaluate collaborator
-          # permissions locally instead of querying the upstream microsoft/vscode ACL.
-          route: GET /repos/${{ github.repository }}/collaborators/${{ github.event.pull_request.user.login }}/permission
+          route: GET /repos/microsoft/vscode/collaborators/${{ github.event.pull_request.user.login }}/permission
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Set control output variable
