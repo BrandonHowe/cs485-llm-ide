@@ -1129,6 +1129,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
+		// Wait for restore-backed state before reading the visible composer controls so an eager send
+		// cannot capture fallback defaults while thread selections and plan mode are still hydrating.
+		await this.planModeService.initialize();
+		await this.modelSelectionService.initialize();
 		const selectedModel = this.getCurrentComposerModelSelection(activeThreadId);
 		const existingThread = activeThreadId
 			? this.resolveThreadById(activeThreadId)
@@ -1385,8 +1389,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.threadsById.set(thread.threadId, thread);
 		}
 
+		const previousActiveThreadId = this.activeThreadId;
 		if (this.activeThreadId && !this.threadsById.has(this.activeThreadId)) {
 			this.activeThreadId = undefined;
+		}
+		// Clearing history through the backend removes the active thread before the pane gets an
+		// explicit UI callback, so normalize that backend-only path back to the fresh composer state.
+		if (previousActiveThreadId && !this.activeThreadId && threads.length === 0) {
+			this.showComposerForNewChat();
+			return;
 		}
 
 		const rows = toVSCloneRailRows(threads, this.activeThreadId, (timestamp) =>

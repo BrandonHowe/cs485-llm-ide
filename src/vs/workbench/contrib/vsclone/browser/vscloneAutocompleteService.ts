@@ -20,6 +20,7 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { localize } from '../../../../nls.js';
 import { IVSCloneCompletionBackend, VSCloneCompletionPredictionType } from '../common/vscloneCompletionTypes.js';
+import { IVSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { IVSCloneCompletionContextService } from './vscloneCompletionContextService.js';
 
 export const VSCloneAutocompleteEnabledSetting = 'vsclone.autocomplete.enabled';
@@ -102,10 +103,20 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@ILogService private readonly logService: ILogService,
+		@IVSCloneThreadModelSelectionService selectionService: IVSCloneThreadModelSelectionService,
 	) {
 		super();
 		this.inlineSuggestionVisibleContextKey = VSCloneInlineSuggestionVisibleContextKey.bindTo(contextKeyService);
 		this._register(languageFeaturesService.inlineCompletionsProvider.register({ pattern: '**' }, this));
+		this._register(selectionService.onDidChangeSelection(event => {
+			if (event.current?.location !== 'editorInline' && event.previous?.location !== 'editorInline') {
+				return;
+			}
+			// Completion cache entries are only valid for the inline model that generated them.
+			// Clear every document cache when the editorInline selection changes so the next request
+			// re-enters backend selection resolution instead of replaying stale ghost text.
+			this.cacheByResource.clear();
+		}));
 	}
 
 	override dispose(): void {

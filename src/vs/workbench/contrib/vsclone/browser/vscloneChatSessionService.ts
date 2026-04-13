@@ -66,12 +66,12 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			return undefined;
 		}
 
-		await this.modelSelectionService.initialize();
 		await this.planModeService.initialize();
-		const baseSelection = options.modelSelection ?? this.modelSelectionService.getCurrentSelectionForThread(options.threadId ?? '', 'chat');
 		// Mode is snapshotted once per submission so prompt assembly, tool execution, and transcript
 		// rendering all agree even if the user flips the composer toggle while the turn is streaming.
 		const mode = this.planModeService.getModeForThread(options.threadId);
+		await this.modelSelectionService.initialize();
+		const baseSelection = options.modelSelection ?? this.modelSelectionService.getCurrentSelectionForThread(options.threadId ?? '', 'chat');
 		const apiVendor = this.getApiVendor(baseSelection);
 		// VSClone now owns chat transport entirely, so every send must resolve to a concrete
 		// provider/model pair instead of falling back to an implicit transport.
@@ -128,6 +128,10 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 				});
 				if (turn.responsePlainText) {
 					previousTurns.push({ role: 'assistant', content: turn.responsePlainText });
+				} else if (turn.responseMarkdown) {
+					// Restored history can legitimately retain only markdown output, so treat that as
+					// the assistant transcript for follow-up turns instead of dropping the response.
+					previousTurns.push({ role: 'assistant', content: turn.responseMarkdown });
 				}
 			}
 		}

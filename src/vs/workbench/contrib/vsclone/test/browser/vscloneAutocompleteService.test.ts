@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import { CancellationTokenSource } from '../../../../../base/common/cancellation.js';
+import { Event } from '../../../../../base/common/event.js';
 import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { LRUCache } from '../../../../../base/common/map.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -22,6 +23,7 @@ import {
 	VSCloneAutocompleteService,
 	VSCloneInlineSuggestionVisibleContextKey,
 } from '../../browser/vscloneAutocompleteService.js';
+import { IVSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { IVSCloneCompletionBackend, IVSCloneCompletionRequest } from '../../common/vscloneCompletionTypes.js';
 import { IVSCloneCompletionContextService } from '../../browser/vscloneCompletionContextService.js';
 
@@ -102,6 +104,17 @@ function createAutocompleteService(
 		new TestConfigurationService(options.configuration ?? Object.create(null)),
 		contextKeyService,
 		new NullLogService(),
+		{
+			_serviceBrand: undefined,
+			onDidChangeSelection: Event.None,
+			initialize: async () => undefined,
+			getCurrentSelectionForThread: () => undefined,
+			setSelectionForThread: async () => undefined,
+			switchToNextModel: async () => undefined,
+			resetSelectionForThread: async () => undefined,
+			hasSelectionForThread: () => false,
+			getRecentModelIdentifiers: () => [],
+		} as IVSCloneThreadModelSelectionService,
 	);
 
 	return { service, contextKeyService };

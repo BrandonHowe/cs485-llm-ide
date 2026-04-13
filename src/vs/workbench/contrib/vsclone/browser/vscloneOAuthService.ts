@@ -395,6 +395,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	private _state: IVSCloneOAuthState;
 	private readonly _tokenSets = new Map<VSCloneModelVendor, IVSCloneOAuthTokenSet>();
 	private readonly _refreshPromises = new Map<VSCloneModelVendor, DeferredPromise<void>>();
+	private readonly _authEpochByVendor = new Map<VSCloneModelVendor, number>();
 	private _initialized = false;
 	private loopbackChannel: IChannel | undefined;
 
@@ -693,6 +694,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	async signOut(vendor: VSCloneModelVendor): Promise<void> {
 		await this.initialize();
 
+		this._authEpochByVendor.set(vendor, (this._authEpochByVendor.get(vendor) ?? 0) + 1);
 		this._tokenSets.delete(vendor);
 		this._refreshPromises.delete(vendor);
 		await this.secretStorageService.delete(oauthSecretKey(vendor));
@@ -831,11 +833,12 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 			return existing.p;
 		}
 
+		const authEpoch = this._authEpochByVendor.get(vendor) ?? 0;
 		const deferred = new DeferredPromise<void>();
 		this._refreshPromises.set(vendor, deferred);
 
 		try {
-			await this._doRefresh(vendor, tokenSet);
+			await this._doRefresh(vendor, tokenSet, authEpoch);
 			deferred.complete();
 		} catch (err) {
 			deferred.error(err instanceof Error ? err : new Error(String(err)));
@@ -845,7 +848,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		}
 	}
 
-	private async _doRefresh(vendor: VSCloneModelVendor, tokenSet: IVSCloneOAuthTokenSet): Promise<void> {
+	private async _doRefresh(vendor: VSCloneModelVendor, tokenSet: IVSCloneOAuthTokenSet, authEpoch: number): Promise<void> {
 		if (!tokenSet.refreshToken) {
 			throw new Error('No refresh token available');
 		}
@@ -855,6 +858,9 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 
 		try {
 			const tokenResponse = await refreshAccessToken(this._getLoopbackChannel()!, config, tokenSet.refreshToken);
+			if ((this._authEpochByVendor.get(vendor) ?? 0) !== authEpoch) {
+				return;
+			}
 			const { userDisplayName, providerMetadata } = extractMetadata(vendor, tokenResponse);
 
 			const newTokenSet: IVSCloneOAuthTokenSet = {
@@ -881,6 +887,9 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 
 			this.logService.info(`[VSCloneOAuth] Token refreshed for ${vendor}`);
 		} catch (err) {
+			if ((this._authEpochByVendor.get(vendor) ?? 0) !== authEpoch) {
+				return;
+			}
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			this.logService.error(`[VSCloneOAuth] Token refresh failed for ${vendor}:`, err);
 			this._setProviderStatus(vendor, 'error', { errorMessage });
