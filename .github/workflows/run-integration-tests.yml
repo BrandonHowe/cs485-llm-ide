@@ -78,6 +78,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Configure Linux Electron Sandbox
+        # Policy export integration tests launch scripts/code.sh directly, so the
+        # downloaded chrome-sandbox helper needs the standard Linux ownership and mode.
+        run: |
+          if [ -f .build/electron/chrome-sandbox ]; then
+            sudo chown root:root .build/electron/chrome-sandbox
+            sudo chmod 4755 .build/electron/chrome-sandbox
+          fi
+
       - name: Build Integration Test Extensions
         # The integration runners execute compiled extension test bundles, so CI
         # needs this explicit build step instead of relying on runtime ts-node behavior.
