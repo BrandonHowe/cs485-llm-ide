@@ -9,6 +9,7 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { IServerChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { getVendorAdapter, type IVSCloneVendorAdapter } from '../common/vscloneChatApiAdapters.js';
+import { recordRequestStart, recordFirstToken, recordRequestEnd, recordError } from './vscloneMetrics.js';
 import {
 	IVSCloneChatApiAbortRequest,
 	IVSCloneChatApiAbortedEvent,
@@ -38,6 +39,7 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 
 	// Each request gets its own AbortController so renderer-side cancel can stop an in-flight stream.
 	private readonly runningRequests = new Map<string, AbortController>();
+	private readonly requestVendors = new Map<string, string>();
 
 	constructor(
 		private readonly logService: ILogService,
@@ -81,12 +83,14 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 
 		const abortController = new AbortController();
 		this.runningRequests.set(request.requestId, abortController);
+		this.requestVendors.set(request.requestId, request.options.vendor);
 
 		void this.streamRequest(request, abortController.signal).finally(() => {
 			const active = this.runningRequests.get(request.requestId);
 			if (active === abortController) {
 				this.runningRequests.delete(request.requestId);
 			}
+			this.requestVendors.delete(request.requestId);
 		});
 	}
 
@@ -96,6 +100,12 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 
 	private async streamRequest(request: IVSCloneChatApiSubmitRequest, signal: AbortSignal): Promise<void> {
 		const { requestId, options, headers } = request;
+		// Record request start for metrics
+		try {
+			recordRequestStart(requestId, options.vendor);
+		} catch (e) {
+			// swallow metric failures
+		}
 		const adapter = getVendorAdapter(options.vendor);
 		const { url, body } = adapter.buildRequest(options);
 
@@ -163,11 +173,13 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 		} catch (error) {
 			if (signal.aborted) {
 				this.onAbortedEmitter.fire({ requestId });
+				try { recordRequestEnd(requestId, options.vendor, 'aborted'); } catch {}
 				return;
 			}
 
 			const message = error instanceof Error ? error.message : String(error);
 			this.logService.error(`[VSCloneChatApiChannel] Stream error for ${options.vendor}:`, error);
+			try { recordError(requestId, options.vendor, 'stream_error'); } catch {}
 			this.onErrorEmitter.fire({ requestId, message });
 		}
 	}
@@ -196,23 +208,33 @@ export class VSCloneChatApiChannel extends Disposable implements IServerChannel 
 				}
 
 				bufferedChunk += decoder.decode(value, { stream: true });
+				const hadStreamed = state.streamedAnyContent;
 				const processedChunk = this.processBufferedSseText(bufferedChunk, requestId, adapter, state, false);
 				bufferedChunk = processedChunk.remainder;
+				if (!hadStreamed && state.streamedAnyContent) {
+					try { recordFirstToken(requestId, options.vendor); } catch {}
+				}
 				if (processedChunk.completed) {
+					try { recordRequestEnd(requestId, options.vendor, 'success'); } catch {}
 					return;
 				}
 			}
 
 			// Providers do not always terminate the final SSE event with a newline, so we must
 			// flush the decoder and parse any buffered tail to avoid truncating tool-call XML.
-			const processedTail = this.processBufferedSseText(bufferedChunk + decoder.decode(), requestId, adapter, state, true);
-			if (processedTail.completed) {
-				return;
-			}
+				const processedTail = this.processBufferedSseText(bufferedChunk + decoder.decode(), requestId, adapter, state, true);
+				if (!state.streamedAnyContent && processedTail && processedTail.completed && state.streamedAnyContent) {
+					try { recordFirstToken(requestId, options.vendor); } catch {}
+				}
+				if (processedTail.completed) {
+					try { recordRequestEnd(requestId, options.vendor, 'success'); } catch {}
+					return;
+				}
 
 			// Some providers end the SSE stream without a terminal done event.
 			if (state.streamedAnyContent) {
 				this.onCompleteEmitter.fire({ requestId });
+				try { recordRequestEnd(requestId, options.vendor, 'success'); } catch {}
 			}
 		} finally {
 			reader.releaseLock();

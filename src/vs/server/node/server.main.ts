@@ -48,8 +48,6 @@ const BUILTIN_EXTENSIONS_FOLDER_PATH = join(APP_ROOT, 'extensions');
 args['builtin-extensions-dir'] = BUILTIN_EXTENSIONS_FOLDER_PATH;
 args['extensions-dir'] = args['extensions-dir'] || join(REMOTE_DATA_FOLDER, 'extensions');
 
-// The remote agent bootstraps these folders up front so later services can
-// assume the writable data layout exists even on a brand-new machine.
 [REMOTE_DATA_FOLDER, args['extensions-dir'], USER_DATA_PATH, APP_SETTINGS_HOME, MACHINE_SETTINGS_HOME, GLOBAL_STORAGE_HOME, LOCAL_HISTORY_HOME].forEach(f => {
 	try {
 		if (!fs.existsSync(f)) {

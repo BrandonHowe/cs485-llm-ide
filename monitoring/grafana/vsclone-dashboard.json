@@ -1,0 +1,55 @@
+{
+  "id": null,
+  "uid": "vsclone-metrics",
+  "title": "VSClone - API Performance",
+  "timezone": "browser",
+  "schemaVersion": 30,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Request Duration (ms) p50/p95/p99",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(vsclone_request_duration_ms_bucket[5m])) by (le, vendor))", "legendFormat": "p50 {{vendor}}" },
+        { "expr": "histogram_quantile(0.95, sum(rate(vsclone_request_duration_ms_bucket[5m])) by (le, vendor))", "legendFormat": "p95 {{vendor}}" },
+        { "expr": "histogram_quantile(0.99, sum(rate(vsclone_request_duration_ms_bucket[5m])) by (le, vendor))", "legendFormat": "p99 {{vendor}}" }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Time To First Token (ms) p95",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(vsclone_time_to_first_token_ms_bucket[5m])) by (le, vendor))", "legendFormat": "p95 {{vendor}}" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "In-flight Requests",
+      "gridPos": { "x": 12, "y": 6, "w": 6, "h": 4 },
+      "targets": [ { "expr": "sum(vsclone_requests_in_flight) by (vendor)", "legendFormat": "{{vendor}}" } ]
+    },
+    {
+      "type": "graph",
+      "title": "Error Rate (errors / requests)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "(sum(rate(vsclone_request_errors_total[5m])) by (vendor)) / (sum(rate(vsclone_request_duration_ms_count[5m])) by (vendor))", "legendFormat": "error_rate {{vendor}}" }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Process CPU / Memory",
+      "gridPos": { "x": 12, "y": 10, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "process_cpu_seconds_total", "legendFormat": "CPU seconds" },
+        { "expr": "process_resident_memory_bytes", "legendFormat": "RSS bytes" }
+      ]
+    }
+  ],
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" }
+}

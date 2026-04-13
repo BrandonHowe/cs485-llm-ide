@@ -8,7 +8,7 @@ import * as cp from 'child_process';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { isLinux, isWindows } from '../../../../../base/common/platform.js';
+import { isWindows } from '../../../../../base/common/platform.js';
 import { dirname, join } from '../../../../../base/common/path.js';
 import { FileAccess } from '../../../../../base/common/network.js';
 import * as util from 'util';
@@ -37,12 +37,9 @@ suite('PolicyExport Integration Tests', () => {
 			const scriptPath = isWindows
 				? join(rootPath, 'scripts', 'code.bat')
 				: join(rootPath, 'scripts', 'code.sh');
-			const sandboxArgs = isLinux ? ' --no-sandbox --disable-gpu-sandbox' : '';
 
-			// Skip prelaunch to avoid redownloading electron while the parent VS Code is using it.
-			// Linux CI mounts the workspace without a usable setuid sandbox, so the export command
-			// needs the same no-sandbox flags as the rest of the Electron integration suite.
-			await exec(`"${scriptPath}" --export-policy-data="${tempFile}"${sandboxArgs}`, {
+			// Skip prelaunch to avoid redownloading electron while the parent VS Code is using it
+			await exec(`"${scriptPath}" --export-policy-data="${tempFile}"`, {
 				cwd: rootPath,
 				env: { ...process.env, VSCODE_SKIP_PRELAUNCH: '1' }
 			});

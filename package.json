@@ -119,7 +119,13 @@
     "vscode-regexpp": "^3.1.0",
     "vscode-textmate": "^9.3.2",
     "yauzl": "^3.0.0",
+    "prom-client": "^14.2.1",
     "yazl": "^2.4.3"
+  },
+  "dependenciesMeta": {
+    "prom-client": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",

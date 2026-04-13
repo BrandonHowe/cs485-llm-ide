@@ -39,41 +39,14 @@ jobs:
 
       - name: Install Build Dependencies
         working-directory: build
-        run: |
-          # GitHub-hosted runners occasionally hit transient 5xx responses while
-          # restoring large native toolchain artifacts, so retry the install a
-          # few times before treating the backend test gate as genuinely broken.
-          for attempt in 1 2 3; do
-            if npm ci; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep 5
-          done
+        run: npm ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Workspace Dependencies
         run: |
-          # setup-env.sh performs the flaky libc++ and sysroot downloads before
-          # npm ever starts, so the retry boundary has to cover the sourced
-          # script and the install together instead of only retrying npm ci.
-          for attempt in 1 2 3; do
-            # Failed bootstrap attempts can leave partial toolchain artifacts and
-            # native module outputs behind, so reset those directories before retrying.
-            if [ "$attempt" -gt 1 ]; then
-              rm -rf node_modules .build/CR_Clang .build/libcxx-objects .build/libcxx_headers .build/libcxxabi_headers
-            fi
-            if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep 5
-          done
+          source ./build/azure-pipelines/linux/setup-env.sh
+          npm ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

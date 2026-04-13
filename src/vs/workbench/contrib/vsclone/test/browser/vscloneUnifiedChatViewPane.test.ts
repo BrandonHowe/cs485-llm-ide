@@ -1001,12 +1001,8 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			}),
 		};
 		target.modelSelectionService = {
-			initialize: async () => undefined,
 			getCurrentSelectionForThread: () => selectedModel,
 			setSelectionForThread: async (threadId: string) => { boundThreadId = threadId; },
-		};
-		target.planModeService = {
-			initialize: async () => undefined,
 		};
 		target.sessionService = {
 			submitPrompt: async (_prompt: string, options: IVSCloneChatSubmitOptions) => {
@@ -1162,12 +1158,6 @@ suite('VSCloneUnifiedChatViewPane', () => {
 	test('plan-mode assistant turns do not render apply changes buttons', () => {
 		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
 		const target = pane as unknown as IRenderAssistantMessageTarget;
-		// The prototype-only harness bypasses constructor field initialization, so tests that
-		// exercise the apply-button branch need to seed the per-turn state map explicitly.
-		target.editApplyStateByTurnId = new Map([
-			// The manual apply button only appears after the auto-apply pass records a failed state.
-			['turn-2', { phase: 'failed' }],
-		]);
 		target.editApplicationService = {
 			hasSearchReplaceBlocks: () => true,
 		};
