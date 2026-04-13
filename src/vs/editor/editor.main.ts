@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// This entrypoint is intentionally side-effect driven: importing these modules
+// registers standalone editor contributions before consumers pull from editor.api.js.
 import './editor.all.js';
 import './standalone/browser/iPadShowKeyboard/iPadShowKeyboard.js';
 import './standalone/browser/inspectTokens/inspectTokens.js';
