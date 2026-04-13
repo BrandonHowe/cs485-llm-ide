@@ -57,11 +57,10 @@ jobs:
 
       - name: Install Workspace Dependencies
         run: |
-          source ./build/azure-pipelines/linux/setup-env.sh
-          # This install path also downloads cached native artifacts, so use the
-          # same retry policy here to avoid flaking on transient dependency fetches.
+          # setup-env.sh performs the same libc++ fetches that are flaking in CI,
+          # so the retry loop has to rerun that bootstrap phase as well as npm ci.
           for attempt in 1 2 3; do
-            if npm ci; then
+            if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then

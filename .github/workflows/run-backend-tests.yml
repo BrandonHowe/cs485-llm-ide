@@ -57,12 +57,11 @@ jobs:
 
       - name: Install Workspace Dependencies
         run: |
-          source ./build/azure-pipelines/linux/setup-env.sh
-          # The workspace install pulls the same cached native artifacts as the
-          # build install, so it needs matching retry behavior to keep the CI
-          # signal focused on real VSClone regressions instead of flaky downloads.
+          # setup-env.sh performs the flaky libc++ and sysroot downloads before
+          # npm ever starts, so the retry boundary has to cover the sourced
+          # script and the install together instead of only retrying npm ci.
           for attempt in 1 2 3; do
-            if npm ci; then
+            if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then

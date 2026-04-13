@@ -56,9 +56,10 @@ jobs:
 
       - name: Install Workspace Dependencies
         run: |
-          source ./build/azure-pipelines/linux/setup-env.sh
+          # The Linux environment bootstrap performs the flaky artifact downloads,
+          # so rerun the full bootstrap-plus-install sequence on transient errors.
           for attempt in 1 2 3; do
-            if npm ci; then
+            if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then
@@ -162,9 +163,10 @@ jobs:
 
       - name: Install Workspace Dependencies
         run: |
-          source ./build/azure-pipelines/linux/setup-env.sh
+          # Frontend integration needs the same bootstrap retry behavior because
+          # setup-env.sh fetches native toolchain assets before npm ci runs.
           for attempt in 1 2 3; do
-            if npm ci; then
+            if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then
