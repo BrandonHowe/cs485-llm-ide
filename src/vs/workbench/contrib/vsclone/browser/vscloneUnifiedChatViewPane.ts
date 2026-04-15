@@ -1508,6 +1508,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const body = document.createElement("div");
 		body.className = "vsclone-thread-message-body";
 		const text = turn.responsePlainText || turn.responseMarkdown;
+		const isStreaming = turn.status === "streaming";
 		if (text.trim().length > 0) {
 			if (
 				text.includes("<tool_call>") ||
@@ -1517,8 +1518,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				this.renderToolAwareAssistantText(
 					body,
 					text,
-					turn.status === "streaming",
+					isStreaming,
 				);
+			} else if (text.includes("<<<<<<< SEARCH") || (isStreaming && this.looksLikePartialSearchReplaceBlock(text))) {
+				this.renderSearchReplaceAwareText(body, text, isStreaming);
 			} else {
 				this.appendMarkdownSegment(
 					body,
@@ -2578,6 +2581,208 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			segment,
 		);
 		this.renderedMarkdownDisposables.add(rendered);
+	}
+
+	/**
+	 * Checks whether the text ends with what looks like the beginning of a search/replace block
+	 * that hasn't been completed yet (e.g. a trailing `File: xxx` followed by a partial
+	 * `<<<<<<< SEARCH` marker or search content without a closing `>>>>>>> REPLACE`).
+	 */
+	private looksLikePartialSearchReplaceBlock(text: string): boolean {
+		const normalized = text.replace(/\r\n/g, '\n');
+		// Look for a File: line near the end followed by partial SEARCH block content
+		const trailingPattern = /(?:^|\n)(?:[*-]\s*)?File:\s*.+(?:\n[\s\S]*)?$/;
+		const trailingMatch = normalized.match(trailingPattern);
+		if (!trailingMatch) {
+			return false;
+		}
+		const trailing = normalized.slice(trailingMatch.index!);
+		// Must have at least a File: line and either partial or no SEARCH marker
+		return /(?:^|\n)(?:[*-]\s*)?File:\s*.+/i.test(trailing) &&
+			(trailing.includes('<') || trailing.includes('<<<<<<< SEARCH')) &&
+			!trailing.includes('>>>>>>> REPLACE');
+	}
+
+	/**
+	 * Renders response text that contains search/replace blocks. Completed blocks
+	 * are shown as diff cards; any in-progress block shows an "Editing..." indicator.
+	 * Prose text between blocks is rendered as markdown.
+	 */
+	private renderSearchReplaceAwareText(
+		container: HTMLElement,
+		text: string,
+		streaming: boolean,
+	): void {
+		const normalized = text.replace(/\r\n/g, '\n');
+
+		// Match complete SEARCH/REPLACE blocks
+		const blockPattern = /<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+
+		interface IBlockRegion {
+			/** Start of the File: line (or block marker if no File: line found) */
+			readonly regionStart: number;
+			/** End of the >>>>>>> REPLACE line */
+			readonly regionEnd: number;
+			readonly filePath: string;
+			readonly searchText: string;
+			readonly replaceText: string;
+		}
+
+		const blocks: IBlockRegion[] = [];
+		let match: RegExpExecArray | null;
+
+		while ((match = blockPattern.exec(normalized)) !== null) {
+			// Walk backwards from the block start to find the File: line
+			let regionStart = match.index;
+			const before = normalized.slice(0, match.index);
+			const lines = before.split('\n');
+			for (let i = lines.length - 1; i >= 0; i--) {
+				const line = lines[i].trim();
+				if (!line) {
+					continue;
+				}
+				if (/^(?:[*-]\s*)?File:\s*.+$/i.test(line)) {
+					regionStart = before.lastIndexOf(lines[i]);
+				}
+				break;
+			}
+
+			// Extract the file path
+			const beforeBlock = normalized.slice(regionStart, match.index);
+			const fileMatch = beforeBlock.match(/(?:^|\n)(?:[*-]\s*)?File:\s*(.+?)[\t ]*(?:\n|$)/i);
+			const filePath = fileMatch?.[1]?.trim() ?? '';
+
+			blocks.push({
+				regionStart,
+				regionEnd: match.index + match[0].length,
+				filePath,
+				searchText: match[1],
+				replaceText: match[2],
+			});
+		}
+
+		// Build interleaved segments
+		let cursor = 0;
+		for (const block of blocks) {
+			const prose = normalized.slice(cursor, block.regionStart).trim();
+			if (prose) {
+				this.appendMarkdownSegment(container, prose, "vsclone-thread-message-text-segment");
+			}
+			container.appendChild(
+				this.renderSearchReplaceDiffCard(block.filePath, block.searchText, block.replaceText),
+			);
+			cursor = block.regionEnd;
+		}
+
+		// Handle remaining text after the last complete block
+		const remaining = normalized.slice(cursor);
+
+		if (streaming) {
+			// Detect trailing partial block (File: line + incomplete SEARCH block)
+			const partialPattern = /(?:^|\n)((?:[*-]\s*)?File:\s*(.+?)[\t ]*)\n(?:(?:<{1,7}[\s\S]*)|(?:<<<<<<< SEARCH[\s\S]*))$/;
+			const partialMatch = remaining.match(partialPattern);
+			if (partialMatch && !remaining.slice(remaining.indexOf(partialMatch[0])).includes('>>>>>>> REPLACE')) {
+				const proseBeforePartial = remaining.slice(0, partialMatch.index! + (remaining[partialMatch.index!] === '\n' ? 1 : 0)).trim();
+				if (proseBeforePartial) {
+					this.appendMarkdownSegment(container, proseBeforePartial, "vsclone-thread-message-text-segment");
+				}
+
+				const fileName = partialMatch[2]?.trim();
+				const indicator = document.createElement("div");
+				indicator.className = "vsclone-streaming-edit-indicator";
+
+				const icon = document.createElement("span");
+				icon.className = "codicon codicon-loading codicon-modifier-spin";
+				indicator.appendChild(icon);
+
+				const label = document.createElement("span");
+				label.textContent = fileName
+					? localize("vsclone.thread.assistant.editingFile", "Editing {0}...", fileName)
+					: localize("vsclone.thread.assistant.editing", "Editing...");
+				indicator.appendChild(label);
+
+				container.appendChild(indicator);
+				return;
+			}
+		}
+
+		// Render any remaining prose (strip stray File: lines that aren't followed by blocks)
+		const strippedRemaining = remaining.replace(/(?:^|\n)(?:[*-]\s*)?File:\s*.+[\t ]*(?:\n|$)/gi, '\n').trim();
+		if (strippedRemaining) {
+			this.appendMarkdownSegment(container, strippedRemaining, "vsclone-thread-message-text-segment");
+		}
+	}
+
+	/**
+	 * Renders a search/replace block as a compact diff card showing removed and added lines.
+	 */
+	private renderSearchReplaceDiffCard(
+		filePath: string,
+		searchText: string,
+		replaceText: string,
+	): HTMLElement {
+		const card = document.createElement("div");
+		card.className = "vsclone-tool-diff-card";
+
+		// Title bar
+		const titleBar = document.createElement("div");
+		titleBar.className = "vsclone-tool-diff-title";
+
+		const fileIcon = document.createElement("span");
+		fileIcon.className = "codicon codicon-file vsclone-tool-diff-title-icon";
+		titleBar.appendChild(fileIcon);
+
+		const filename = filePath.split('/').pop() ?? filePath;
+		const langLabel = this.getLanguageLabelFromFilename(filename);
+		const fileLabel = document.createElement("span");
+		fileLabel.className = "vsclone-tool-diff-title-filename";
+		fileLabel.textContent = `${langLabel} ${filename}`;
+		fileLabel.title = filePath;
+		titleBar.appendChild(fileLabel);
+
+		card.appendChild(titleBar);
+
+		// Diff body
+		const body = document.createElement("div");
+		body.className = "vsclone-tool-diff-body";
+
+		const searchLines = searchText.split('\n');
+		const replaceLines = replaceText.split('\n');
+
+		for (const line of searchLines) {
+			const lineEl = document.createElement("div");
+			lineEl.className = "vsclone-tool-diff-line removed";
+
+			const gutter = document.createElement("span");
+			gutter.className = "vsclone-tool-diff-gutter";
+			gutter.textContent = "-";
+			lineEl.appendChild(gutter);
+
+			const content = document.createElement("span");
+			content.textContent = line;
+			lineEl.appendChild(content);
+
+			body.appendChild(lineEl);
+		}
+
+		for (const line of replaceLines) {
+			const lineEl = document.createElement("div");
+			lineEl.className = "vsclone-tool-diff-line added";
+
+			const gutter = document.createElement("span");
+			gutter.className = "vsclone-tool-diff-gutter";
+			gutter.textContent = "+";
+			lineEl.appendChild(gutter);
+
+			const content = document.createElement("span");
+			content.textContent = line;
+			lineEl.appendChild(content);
+
+			body.appendChild(lineEl);
+		}
+
+		card.appendChild(body);
+		return card;
 	}
 
 	private getToolIconClass(toolName: string): string {
