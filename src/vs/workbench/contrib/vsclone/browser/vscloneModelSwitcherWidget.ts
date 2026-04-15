@@ -6,9 +6,11 @@
 import { addDisposableListener, EventType, getWindow } from '../../../../base/browser/dom.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
-import { IVSCloneModelCatalogModelDescriptor, IVSCloneModelCatalogService, IVSCloneModelCatalogState } from '../common/vscloneModelCatalogService.js';
+import { IVSCloneModelCatalogModelDescriptor, IVSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
 import { IVSCloneChatLocation, IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { IVSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
+import { mountVSCloneModelSwitcher } from './preact/out/model-switcher/index.js';
+import type { IVSCloneMountedView, IVSCloneModelSwitcherSection, IVSCloneModelSwitcherViewProps } from './vscloneViewContracts.js';
 
 export interface IVSCloneModelSwitcherContext {
 	threadId: string;
@@ -18,15 +20,15 @@ export interface IVSCloneModelSwitcherContext {
 let switcherIdPool = 0;
 
 export class VSCloneModelSwitcherWidget extends Disposable {
+	private container: HTMLElement | undefined;
 	private root: HTMLElement | undefined;
 	private button: HTMLButtonElement | undefined;
-	private menu: HTMLElement | undefined;
 	private isOpen = false;
 	private readonly switcherId = ++switcherIdPool;
 	private readonly buttonId = `vsclone-model-switcher-button-${this.switcherId}`;
 	private readonly menuId = `vsclone-model-switcher-menu-${this.switcherId}`;
-	private readonly menuDisposables = this._register(new DisposableStore());
 	private readonly windowDisposables = this._register(new DisposableStore());
+	private mountedView: IVSCloneMountedView<IVSCloneModelSwitcherViewProps> | undefined;
 
 	constructor(
 		private readonly catalogService: IVSCloneModelCatalogService,
@@ -41,9 +43,11 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 	}
 
 	render(container: HTMLElement): void {
-		container.replaceChildren();
+		this.container = container;
 		this.windowDisposables.clear();
 
+		// Keep the document-level dismissal behavior outside the component tree so the Preact view
+		// can stay a pure projection of the current selection/menu state.
 		const targetWindow = getWindow(container);
 		this.windowDisposables.add(addDisposableListener(targetWindow.document, EventType.MOUSE_DOWN, (event: MouseEvent) => {
 			if (!this.isOpen || !this.root) {
@@ -62,50 +66,25 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 			}
 		}));
 
-		const root = document.createElement('div');
-		root.className = 'vsclone-model-switcher-root';
-		this.root = root;
+		// The widget's controller keeps global dismissal logic outside the component tree, while the
+		// generated bundle owns the DOM subtree and is updated through a single mount handle.
+		this.mountedView?.dispose();
+		this.mountedView = mountVSCloneModelSwitcher(container, this.createViewProps()) as IVSCloneMountedView<IVSCloneModelSwitcherViewProps> | undefined;
+	}
 
-		const button = document.createElement('button');
-		button.type = 'button';
-		button.className = 'vsclone-model-switcher-button';
-		button.id = this.buttonId;
-		button.setAttribute('aria-haspopup', 'dialog');
-		button.setAttribute('aria-controls', this.menuId);
-		this.button = button;
-		root.appendChild(button);
-
-		const menu = document.createElement('div');
-		menu.className = 'vsclone-model-switcher-menu hidden';
-		menu.id = this.menuId;
-		menu.setAttribute('role', 'dialog');
-		menu.setAttribute('aria-modal', 'false');
-		menu.setAttribute('aria-labelledby', this.buttonId);
-		this.menu = menu;
-		root.appendChild(menu);
-
-		container.appendChild(root);
-
-		this._register(addDisposableListener(button, EventType.CLICK, () => {
-			if (this.isOpen) {
-				this.close({ restoreButtonFocus: true });
-			} else {
-				this.open();
-			}
-		}));
-
-		this.refresh();
+	override dispose(): void {
+		this.mountedView?.dispose();
+		this.mountedView = undefined;
+		super.dispose();
 	}
 
 	open(): void {
-		if (!this.root || !this.menu) {
+		if (!this.container) {
 			return;
 		}
 
 		this.isOpen = true;
-		this.root.classList.add('open');
-		this.menu.classList.remove('hidden');
-		this.refresh();
+		this.renderView();
 
 		const state = this.catalogService.getState();
 		if (state.status === 'idle') {
@@ -114,35 +93,18 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 	}
 
 	close(options?: { restoreButtonFocus?: boolean }): void {
-		if (!this.root || !this.menu) {
+		if (!this.container) {
 			return;
 		}
 		this.isOpen = false;
-		this.root.classList.remove('open');
-		this.menu.classList.add('hidden');
-		this.refresh();
+		this.renderView();
 		if (options?.restoreButtonFocus) {
 			this.button?.focus();
 		}
 	}
 
 	refresh(): void {
-		if (!this.button) {
-			return;
-		}
-
-		const selection = this.getCurrentSelection();
-		this.button.replaceChildren(this.createButtonModelLabel(selection));
-		this.button.appendChild(this.createButtonChevron());
-		this.button.setAttribute('aria-expanded', String(this.isOpen));
-		// Announce the current model in the control name so assistive tech users can verify selection quickly.
-		this.button.setAttribute('aria-label', selection
-			? localize('vsclone.modelSwitcher.aria.currentModel', 'Model: {0}', selection.modelName)
-			: localize('vsclone.modelSwitcher.aria.selectModel', 'Select model'));
-
-		if (this.isOpen) {
-			this.renderMenu();
-		}
+		this.renderView();
 	}
 
 	async refreshCatalog(): Promise<void> {
@@ -171,325 +133,124 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		return this.selectionService.getCurrentSelectionForThread(context.threadId, context.location);
 	}
 
-	private renderMenu(): void {
-		if (!this.menu) {
+	private renderView(): void {
+		if (!this.container || !this.mountedView) {
 			return;
 		}
-		this.menuDisposables.clear();
 
-		this.menu.replaceChildren();
-
-		const header = document.createElement('div');
-		header.className = 'vsclone-model-switcher-menu-header';
-
-		const title = document.createElement('div');
-		title.className = 'vsclone-model-switcher-menu-title';
-		title.textContent = localize('vsclone.modelSwitcher.menu.title', 'Select model');
-		header.appendChild(title);
-
-		const refresh = document.createElement('button');
-		refresh.type = 'button';
-		refresh.className = 'vsclone-model-switcher-refresh';
-		const refreshLabel = localize('vsclone.modelSwitcher.refresh', 'Refresh models');
-		refresh.title = refreshLabel;
-		refresh.setAttribute('aria-label', refreshLabel);
-		refresh.appendChild(this.createCodicon('codicon-refresh'));
-		header.appendChild(refresh);
-
-		this.menuDisposables.add(addDisposableListener(refresh, EventType.CLICK, (event: MouseEvent) => {
-			event.stopPropagation();
-			void this.catalogService.refreshCatalog();
-		}));
-
-		const body = document.createElement('div');
-		body.className = 'vsclone-model-switcher-menu-body';
-
-		const footer = document.createElement('div');
-		footer.className = 'vsclone-model-switcher-menu-footer';
-
-		this.menu.appendChild(header);
-		this.menu.appendChild(body);
-		this.menu.appendChild(footer);
-
-		this.renderBodyState(body);
-		this.renderFooter(footer);
+		this.mountedView.rerender(this.createViewProps());
 	}
 
-	private createButtonModelLabel(selection: IVSCloneModelSelection | undefined): HTMLElement {
-		const model = document.createElement('span');
-		model.className = 'vsclone-model-switcher-button-model';
-		const label = selection?.modelName || localize('vsclone.modelSwitcher.selectModel', 'Select model');
-		model.textContent = label;
-		// Mirror the full label into the native tooltip so truncation in the composer never hides
-		// the exact selected model from mouse users.
-		model.title = label;
-		return model;
-	}
-
-	private createButtonChevron(): HTMLElement {
-		const chevron = document.createElement('span');
-		chevron.className = `vsclone-model-switcher-button-chevron codicon ${this.isOpen ? 'codicon-chevron-up' : 'codicon-chevron-down'}`;
-		return chevron;
-	}
-
-	private renderBodyState(body: HTMLElement): void {
+	private createViewProps(): IVSCloneModelSwitcherViewProps {
 		const state = this.catalogService.getState();
-		if (state.status === 'loading') {
-			body.appendChild(this.createLoadingState());
-			return;
-		}
-
-		if (state.status === 'error') {
-			body.appendChild(this.createErrorState(state));
-			return;
-		}
-
-		if (state.models.length === 0) {
-			body.appendChild(this.createEmptyState());
-			return;
-		}
-
 		const selected = this.getCurrentSelection();
-		const modelByIdentifier = new Map(state.models.map(model => [model.identifier, model]));
+		const sections = this.createSections(state.models);
+		const selection = this.getCurrentSelection();
+		const buttonLabel = selection?.modelName || localize('vsclone.modelSwitcher.selectModel', 'Select model');
+		const buttonAriaLabel = selection
+			? localize('vsclone.modelSwitcher.aria.currentModel', 'Model: {0}', selection.modelName)
+			: localize('vsclone.modelSwitcher.aria.selectModel', 'Select model');
+		const context = this.getContext();
+		const showResetAction = !!context.threadId && this.selectionService.hasSelectionForThread(context.threadId);
+
+		return {
+			isOpen: this.isOpen,
+			buttonId: this.buttonId,
+			menuId: this.menuId,
+			buttonLabel,
+			buttonAriaLabel,
+			state,
+			selected,
+			sections,
+			showResetAction,
+			rootRef: element => { this.root = element ?? undefined; },
+			buttonRef: element => { this.button = element ?? undefined; },
+			onToggleOpen: () => {
+				if (this.isOpen) {
+					this.close({ restoreButtonFocus: true });
+				} else {
+					this.open();
+				}
+			},
+			onRefreshCatalog: () => { void this.catalogService.refreshCatalog(); },
+			onManageProviders: () => { void this.providerBridge.openManageProvidersPicker(); },
+			onResetSelection: () => {
+				if (!context.threadId) {
+					return;
+				}
+				void this.selectionService.resetSelectionForThread(context.threadId);
+			},
+			onSelectModel: model => this.selectModel(model, selected),
+		};
+	}
+
+	private createSections(models: readonly IVSCloneModelCatalogModelDescriptor[]): readonly IVSCloneModelSwitcherSection[] {
+		const state = this.catalogService.getState();
+		const selected = this.getCurrentSelection();
+		const sections: IVSCloneModelSwitcherSection[] = [];
+		const modelByIdentifier = new Map(models.map(model => [model.identifier, model]));
 		const recentModels = this.selectionService
 			.getRecentModelIdentifiers(3)
 			.map(identifier => modelByIdentifier.get(identifier))
 			.filter((model): model is IVSCloneModelCatalogModelDescriptor => !!model);
 
 		if (recentModels.length > 0) {
-			body.appendChild(this.createSectionHeader(localize('vsclone.modelSwitcher.section.recent', 'RECENT')));
-			for (const model of recentModels) {
-				body.appendChild(this.createModelRow(model, selected));
-			}
+			sections.push({
+				label: localize('vsclone.modelSwitcher.section.recent', 'RECENT'),
+				models: recentModels,
+			});
 		}
 
 		for (const provider of state.providers) {
-			const models = state.models.filter(model => model.vendor === provider.vendor);
-			if (models.length === 0) {
+			const providerModels = models.filter(model => model.vendor === provider.vendor);
+			if (providerModels.length === 0) {
 				continue;
 			}
 
-			body.appendChild(this.createSectionHeader(provider.displayName.toUpperCase(), provider.modelCount));
-			for (const model of models) {
-				body.appendChild(this.createModelRow(model, selected));
+			sections.push({
+				label: provider.displayName.toUpperCase(),
+				count: provider.modelCount,
+				models: providerModels,
+			});
+		}
+
+		// Keep the selected model visible even if catalog grouping becomes temporarily inconsistent
+		// during provider refreshes so the menu never appears to "lose" the user's current choice.
+		if (selected && !sections.some(section => section.models.some(model => model.identifier === selected.modelIdentifier))) {
+			const selectedModel = models.find(model => model.identifier === selected.modelIdentifier);
+			if (selectedModel) {
+				sections.unshift({
+					label: localize('vsclone.modelSwitcher.section.selected', 'SELECTED'),
+					models: [selectedModel],
+				});
 			}
 		}
+
+		return sections;
 	}
 
-	private renderFooter(footer: HTMLElement): void {
-		const manage = document.createElement('button');
-		manage.type = 'button';
-		manage.className = 'vsclone-model-switcher-footer-button';
-		manage.appendChild(this.createCodicon('codicon-settings-gear'));
-		const manageLabel = document.createElement('span');
-		manageLabel.textContent = localize('vsclone.modelSwitcher.manageProviders', 'Manage Providers');
-		manage.appendChild(manageLabel);
-		footer.appendChild(manage);
-		this.menuDisposables.add(addDisposableListener(manage, EventType.CLICK, (event: MouseEvent) => {
-			event.stopPropagation();
+	private selectModel(model: IVSCloneModelCatalogModelDescriptor, selected: IVSCloneModelSelection | undefined): void {
+		if (!model.isSelectable) {
 			void this.providerBridge.openManageProvidersPicker();
-		}));
-
-		const context = this.getContext();
-		if (!context.threadId || !this.selectionService.hasSelectionForThread(context.threadId)) {
-			footer.classList.add('single-action');
 			return;
 		}
 
-		const reset = document.createElement('button');
-		reset.type = 'button';
-		reset.className = 'vsclone-model-switcher-footer-button';
-		reset.appendChild(this.createCodicon('codicon-history'));
-		const resetLabel = document.createElement('span');
-		resetLabel.textContent = localize('vsclone.modelSwitcher.resetSelection', 'Reset Selection');
-		reset.appendChild(resetLabel);
-		footer.appendChild(reset);
-		this.menuDisposables.add(addDisposableListener(reset, EventType.CLICK, (event: MouseEvent) => {
-			event.stopPropagation();
-			void this.selectionService.resetSelectionForThread(context.threadId);
-		}));
-	}
-
-	private createModelRow(model: IVSCloneModelCatalogModelDescriptor, selected: IVSCloneModelSelection | undefined): HTMLElement {
-		const row = document.createElement('button');
-		row.type = 'button';
-		row.className = 'vsclone-model-switcher-row';
-		if (selected?.modelIdentifier === model.identifier) {
-			row.classList.add('selected');
-		}
-		row.setAttribute('aria-pressed', String(selected?.modelIdentifier === model.identifier));
-		if (!model.isSelectable) {
-			row.classList.add('locked');
-		}
-		row.setAttribute(
-			'aria-label',
-			model.isSelectable
-				? localize('vsclone.modelSwitcher.row.aria', '{0} model', model.modelName)
-				: localize('vsclone.modelSwitcher.row.requiresSignIn.aria', '{0} model, provider requires sign in', model.modelName),
-		);
-
-		const title = document.createElement('span');
-		title.className = 'vsclone-model-switcher-row-label';
-		title.textContent = model.modelName;
-		// Keep the full model name inspectable even when the menu row has to ellipsize inside the
-		// fixed-width dropdown panel.
-		title.title = model.modelName;
-		row.appendChild(title);
-
-		if (selected?.modelIdentifier === model.identifier) {
-			const selectedGlyph = document.createElement('span');
-			selectedGlyph.className = 'vsclone-model-switcher-row-check codicon codicon-check';
-			row.appendChild(selectedGlyph);
-		}
-
-		if (!model.isSelectable) {
-			const lockGlyph = document.createElement('span');
-			lockGlyph.className = 'vsclone-model-switcher-row-lock codicon codicon-lock';
-			row.appendChild(lockGlyph);
-
-			const subtext = document.createElement('div');
-			subtext.className = 'vsclone-model-switcher-row-subtext';
-			subtext.textContent = localize('vsclone.modelSwitcher.requiresSignIn', 'Sign in to use this provider');
-			row.appendChild(subtext);
-		}
-
-		this.menuDisposables.add(addDisposableListener(row, EventType.CLICK, (event: MouseEvent) => {
-			event.stopPropagation();
-			if (!model.isSelectable) {
-				void this.providerBridge.openManageProvidersPicker();
-				return;
-			}
-
-			const context = this.getContext();
-			const preservedReasoningEffort = selected?.modelIdentifier === model.identifier && selected.reasoningEffort
-				? selected.reasoningEffort
-				: undefined;
-			const nextSelection: IVSCloneModelSelection = {
-				threadId: context.threadId || undefined,
-				location: context.location,
-				modelIdentifier: model.identifier,
-				vendor: model.vendor,
-				modelId: model.modelId,
-				modelName: model.modelName,
-				// Preserve the user's current level when re-selecting the same reasoning model.
-				reasoningEffort: preservedReasoningEffort,
-				selectedAt: Date.now(),
-			};
-			void this.selectionService.setSelectionForThread(context.threadId, nextSelection);
-			this.close({ restoreButtonFocus: true });
-		}));
-
-		return row;
-	}
-
-	private createSectionHeader(label: string, count?: number): HTMLElement {
-		const header = document.createElement('div');
-		header.className = 'vsclone-model-switcher-section';
-
-		const title = document.createElement('span');
-		title.className = 'vsclone-model-switcher-section-label';
-		title.textContent = label;
-		header.appendChild(title);
-
-		if (count !== undefined) {
-			const suffix = document.createElement('span');
-			suffix.className = 'vsclone-model-switcher-section-count';
-			suffix.textContent = `${count}`;
-			header.appendChild(suffix);
-		}
-
-		return header;
-	}
-
-	private createLoadingState(): HTMLElement {
-		const root = document.createElement('div');
-		root.className = 'vsclone-model-switcher-state';
-
-		const spinner = document.createElement('span');
-		spinner.className = 'vsclone-model-switcher-spinner codicon codicon-loading codicon-modifier-spin';
-		root.appendChild(spinner);
-
-		const text = document.createElement('div');
-		text.className = 'vsclone-model-switcher-state-title';
-		text.textContent = localize('vsclone.modelSwitcher.loading', 'Loading models...');
-		root.appendChild(text);
-
-		return root;
-	}
-
-	private createErrorState(state: IVSCloneModelCatalogState): HTMLElement {
-		const root = document.createElement('div');
-		root.className = 'vsclone-model-switcher-state error';
-
-		const leading = document.createElement('div');
-		leading.className = 'vsclone-model-switcher-state-leading';
-		const icon = this.createCodicon('codicon-error');
-		icon.classList.add('vsclone-model-switcher-state-icon');
-		leading.appendChild(icon);
-
-		const title = document.createElement('div');
-		title.className = 'vsclone-model-switcher-state-title';
-		title.textContent = localize('vsclone.modelSwitcher.errorTitle', 'Error loading models');
-		leading.appendChild(title);
-		root.appendChild(leading);
-
-		const description = document.createElement('div');
-		description.className = 'vsclone-model-switcher-state-description';
-		description.textContent = state.errorMessage || localize('vsclone.modelSwitcher.errorDescription', 'Failed to fetch model catalog. Check your network connection.');
-		root.appendChild(description);
-
-		const retry = document.createElement('button');
-		retry.type = 'button';
-		retry.className = 'vsclone-model-switcher-state-action';
-		retry.textContent = localize('vsclone.modelSwitcher.tryAgain', 'Try again');
-		root.appendChild(retry);
-		this.menuDisposables.add(addDisposableListener(retry, EventType.CLICK, (event: MouseEvent) => {
-			event.stopPropagation();
-			void this.catalogService.refreshCatalog();
-		}));
-
-		return root;
-	}
-
-	private createEmptyState(): HTMLElement {
-		const root = document.createElement('div');
-		root.className = 'vsclone-model-switcher-state';
-
-		const icon = this.createCodicon('codicon-info');
-		icon.classList.add('vsclone-model-switcher-state-icon');
-		root.appendChild(icon);
-
-		const title = document.createElement('div');
-		title.className = 'vsclone-model-switcher-state-title';
-		title.textContent = localize('vsclone.modelSwitcher.emptyTitle', 'No models available');
-		root.appendChild(title);
-
-		const description = document.createElement('div');
-		description.className = 'vsclone-model-switcher-state-description';
-		description.textContent = localize('vsclone.modelSwitcher.emptyDescription', 'Sign in to a provider to get started');
-		root.appendChild(description);
-
-		const manage = document.createElement('button');
-		manage.type = 'button';
-		manage.className = 'vsclone-model-switcher-state-action';
-		manage.appendChild(this.createCodicon('codicon-settings-gear'));
-		const manageLabel = document.createElement('span');
-		manageLabel.textContent = localize('vsclone.modelSwitcher.emptyAction', 'Manage Providers');
-		manage.appendChild(manageLabel);
-		root.appendChild(manage);
-		this.menuDisposables.add(addDisposableListener(manage, EventType.CLICK, (event: MouseEvent) => {
-			event.stopPropagation();
-			void this.providerBridge.openManageProvidersPicker();
-		}));
-
-		return root;
-	}
-
-	private createCodicon(codicon: string): HTMLElement {
-		const icon = document.createElement('span');
-		icon.className = `codicon ${codicon}`;
-		// Codicon-only spans are decorative next to text labels and should not be announced separately.
-		icon.setAttribute('aria-hidden', 'true');
-		return icon;
+		const context = this.getContext();
+		const preservedReasoningEffort = selected?.modelIdentifier === model.identifier && selected.reasoningEffort
+			? selected.reasoningEffort
+			: undefined;
+		const nextSelection: IVSCloneModelSelection = {
+			threadId: context.threadId || undefined,
+			location: context.location,
+			modelIdentifier: model.identifier,
+			vendor: model.vendor,
+			modelId: model.modelId,
+			modelName: model.modelName,
+			// Preserve the user's current level when re-selecting the same reasoning model.
+			reasoningEffort: preservedReasoningEffort,
+			selectedAt: Date.now(),
+		};
+		void this.selectionService.setSelectionForThread(context.threadId, nextSelection);
+		this.close({ restoreButtonFocus: true });
 	}
 }

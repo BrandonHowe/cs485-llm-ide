@@ -18,6 +18,10 @@ REQUIRED_BUILD_ARTIFACTS=(
 	"$ROOT/extensions/emmet/out/node/emmetNodeMain.js"
 	"$ROOT/extensions/git-base/out/extension.js"
 	"$ROOT/extensions/merge-conflict/out/mergeConflictMain.js"
+	# The workbench controllers import generated Preact entrypoints from `out/`, so startup must
+	# wait for those emitted files instead of assuming the generic client build is sufficient.
+	"$ROOT/out/vs/workbench/contrib/vsclone/browser/preact/out/chat-history-rail/index.js"
+	"$ROOT/out/vs/workbench/contrib/vsclone/browser/preact/out/model-switcher/index.js"
 )
 STARTUP_TIMEOUT_SECONDS="${DEV_STARTUP_TIMEOUT_SECONDS:-900}"
 STARTUP_PROGRESS_INTERVAL_SECONDS="${DEV_STARTUP_PROGRESS_INTERVAL_SECONDS:-15}"
@@ -28,6 +32,7 @@ cleanup() {
 		echo "Stopping watcher (${WATCH_PID})..."
 		kill "${WATCH_PID}" >/dev/null 2>&1 || true
 	fi
+
 }
 
 trap cleanup EXIT INT TERM
@@ -104,7 +109,9 @@ wait_for_artifact() {
 	done
 }
 
-echo "Starting TypeScript watchers..."
+# `npm run watch` now includes the VSClone Preact bundle watcher, so the launcher only needs one
+# long-lived process and can treat its emitted artifacts as part of the normal boot contract.
+echo "Starting watchers..."
 npm run watch &
 WATCH_PID=$!
 
