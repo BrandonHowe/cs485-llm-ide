@@ -11,6 +11,7 @@ import {
 import type {
 	IVSCloneThreadRuntimeAssistantEditApplication,
 	IVSCloneThreadRuntimeAssistantEditApplicationState,
+	IVSCloneThreadRuntimeCatalogEntry,
 	IVSCloneThreadRuntimeCheckpoint,
 	IVSCloneThreadRuntimeConversationMessageMetadata,
 	IVSCloneThreadRuntimeEditApplyResult,
@@ -19,6 +20,7 @@ import type {
 	IVSCloneThreadRuntimePausedApproval,
 	IVSCloneThreadRuntimeSnapshot,
 	IVSCloneThreadRuntimeState,
+	VSCloneThreadRuntimeCatalogStatus,
 	VSCloneThreadStreamState,
 } from '../vscloneThreadRuntimeTypes.js';
 import type { IVSCloneImageAttachment } from '../vscloneImageAttachmentTypes.js';
@@ -31,6 +33,7 @@ interface IVSCloneThreadRuntimeIndexPayload {
 	workspaceId: string;
 	updatedAt: number;
 	threadIds: string[];
+	deletedThreadIds?: string[];
 }
 
 interface ISerializedThreadRuntimeSnapshot {
@@ -38,6 +41,20 @@ interface ISerializedThreadRuntimeSnapshot {
 	existed: boolean;
 	content?: string;
 	isDirectory: boolean;
+}
+
+interface ISerializedThreadRuntimeCatalogEntry {
+	threadId: string;
+	sessionResource?: string;
+	title: string;
+	activeModelIdentifier?: string;
+	createdAt: number;
+	updatedAt: number;
+	status: string;
+	archived: boolean;
+	turnCount: number;
+	lastTurnPreview: string;
+	importedFromHistory?: boolean;
 }
 
 interface ISerializedThreadRuntimeCheckpoint {
@@ -134,6 +151,7 @@ interface IVSCloneThreadRuntimeThreadPayload {
 	schemaVersion: 1;
 	state: {
 		threadId: string;
+		catalog?: ISerializedThreadRuntimeCatalogEntry;
 		turnId?: string;
 		mode?: string;
 		streamState: VSCloneThreadStreamState;
@@ -146,6 +164,10 @@ interface IVSCloneThreadRuntimeThreadPayload {
 		isRunning: boolean;
 		lastUpdatedAt: number;
 	};
+}
+
+function isCatalogStatus(value: unknown): value is VSCloneThreadRuntimeCatalogStatus {
+	return value === 'active' || value === 'completed' || value === 'failed' || value === 'archived';
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -174,6 +196,21 @@ function isCheckpoint(value: unknown): value is ISerializedThreadRuntimeCheckpoi
 		&& typeof value.toolName === 'string'
 		&& Array.isArray(value.snapshots)
 		&& value.snapshots.every(isSnapshot);
+}
+
+function isCatalogEntry(value: unknown): value is ISerializedThreadRuntimeCatalogEntry {
+	return isObject(value)
+		&& typeof value.threadId === 'string'
+		&& (value.sessionResource === undefined || typeof value.sessionResource === 'string')
+		&& typeof value.title === 'string'
+		&& (value.activeModelIdentifier === undefined || typeof value.activeModelIdentifier === 'string')
+		&& typeof value.createdAt === 'number'
+		&& typeof value.updatedAt === 'number'
+		&& isCatalogStatus(value.status)
+		&& typeof value.archived === 'boolean'
+		&& typeof value.turnCount === 'number'
+		&& typeof value.lastTurnPreview === 'string'
+		&& (value.importedFromHistory === undefined || typeof value.importedFromHistory === 'boolean');
 }
 
 function isEditFileChange(value: unknown): value is ISerializedThreadRuntimeEditFileChange {
@@ -305,6 +342,61 @@ function serializeCheckpoint(checkpoint: IVSCloneThreadRuntimeCheckpoint): ISeri
 		toolName: checkpoint.toolName,
 		snapshots: checkpoint.snapshots.map(serializeSnapshot),
 	};
+}
+
+function serializeCatalogEntry(catalog: IVSCloneThreadRuntimeCatalogEntry): ISerializedThreadRuntimeCatalogEntry {
+	return { ...catalog };
+}
+
+function deriveFallbackCatalogEntry(
+	threadId: string,
+	messages: readonly IVSCloneThreadRuntimeMessage[],
+	lastUpdatedAt: number,
+	streamState: VSCloneThreadStreamState,
+	isRunning: boolean,
+): IVSCloneThreadRuntimeCatalogEntry {
+	const conversationMessages = messages.filter((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'user' | 'assistant' }> =>
+		message.role === 'user' || message.role === 'assistant',
+	);
+	const firstConversationMessage = conversationMessages[0];
+	const latestConversationMessage = [...conversationMessages].reverse()[0];
+	const latestToolMessage = [...messages].reverse().find((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }> => message.role === 'tool');
+	const titleSource = firstConversationMessage?.content?.trim() || latestConversationMessage?.content?.trim() || threadId;
+	const previewSource = latestConversationMessage?.content?.trim()
+		|| latestToolMessage?.output?.trim()
+		|| titleSource;
+	const status: VSCloneThreadRuntimeCatalogStatus = isRunning || streamState.kind !== 'idle'
+		? 'active'
+		: latestToolMessage?.type === 'tool_error' || latestToolMessage?.type === 'rejected'
+			? 'failed'
+			: messages.length > 0
+				? 'completed'
+				: 'active';
+
+	return {
+		threadId,
+		title: titleSource.slice(0, 120),
+		createdAt: firstConversationMessage?.createdAt ?? messages[0]?.createdAt ?? lastUpdatedAt,
+		updatedAt: lastUpdatedAt,
+		status,
+		archived: false,
+		turnCount: conversationMessages.filter(message => message.role === 'user').length,
+		lastTurnPreview: previewSource.slice(0, 280),
+	};
+}
+
+function deserializeCatalogEntry(
+	catalog: ISerializedThreadRuntimeCatalogEntry | undefined,
+	threadId: string,
+	messages: readonly IVSCloneThreadRuntimeMessage[],
+	lastUpdatedAt: number,
+	streamState: VSCloneThreadStreamState,
+	isRunning: boolean,
+): IVSCloneThreadRuntimeCatalogEntry {
+	if (!catalog) {
+		return deriveFallbackCatalogEntry(threadId, messages, lastUpdatedAt, streamState, isRunning);
+	}
+	return { ...catalog };
 }
 
 function deserializeCheckpoint(checkpoint: ISerializedThreadRuntimeCheckpoint): IVSCloneThreadRuntimeCheckpoint {
@@ -509,12 +601,13 @@ function deserializeMessage(
 }
 
 export class VSCloneThreadRuntimeSerializer {
-	serializeIndex(workspaceId: string, updatedAt: number, threadIds: readonly string[]): string {
+	serializeIndex(workspaceId: string, updatedAt: number, threadIds: readonly string[], deletedThreadIds: readonly string[] = []): string {
 		const payload: IVSCloneThreadRuntimeIndexPayload = {
 			schemaVersion: 1,
 			workspaceId,
 			updatedAt,
 			threadIds: [...new Set(threadIds)].sort((left, right) => left.localeCompare(right)),
+			deletedThreadIds: [...new Set(deletedThreadIds)].sort((left, right) => left.localeCompare(right)),
 		};
 		return JSON.stringify(payload, undefined, 2);
 	}
@@ -524,7 +617,14 @@ export class VSCloneThreadRuntimeSerializer {
 		if (!isObject(parsed)) {
 			throw new Error('Runtime index is not an object');
 		}
-		if (parsed.schemaVersion !== 1 || typeof parsed.workspaceId !== 'string' || typeof parsed.updatedAt !== 'number' || !Array.isArray(parsed.threadIds) || !parsed.threadIds.every(entry => typeof entry === 'string')) {
+		if (
+			parsed.schemaVersion !== 1
+			|| typeof parsed.workspaceId !== 'string'
+			|| typeof parsed.updatedAt !== 'number'
+			|| !Array.isArray(parsed.threadIds)
+			|| !parsed.threadIds.every(entry => typeof entry === 'string')
+			|| (parsed.deletedThreadIds !== undefined && (!Array.isArray(parsed.deletedThreadIds) || !parsed.deletedThreadIds.every(entry => typeof entry === 'string')))
+		) {
 			throw new Error('Runtime index is malformed');
 		}
 
@@ -533,6 +633,7 @@ export class VSCloneThreadRuntimeSerializer {
 			workspaceId: parsed.workspaceId,
 			updatedAt: parsed.updatedAt,
 			threadIds: [...new Set(parsed.threadIds)].sort((left, right) => left.localeCompare(right)),
+			deletedThreadIds: [...new Set(parsed.deletedThreadIds ?? [])].sort((left, right) => left.localeCompare(right)),
 		};
 	}
 
@@ -541,6 +642,7 @@ export class VSCloneThreadRuntimeSerializer {
 			schemaVersion: 1,
 			state: {
 				threadId: state.threadId,
+				catalog: serializeCatalogEntry(state.catalog),
 				turnId: state.turnId,
 				mode: state.mode,
 				streamState: state.streamState,
@@ -573,6 +675,7 @@ export class VSCloneThreadRuntimeSerializer {
 		const state = parsed.state;
 		if (
 			typeof state.threadId !== 'string'
+			|| (state.catalog !== undefined && !isCatalogEntry(state.catalog))
 			|| (state.turnId !== undefined && typeof state.turnId !== 'string')
 			|| (state.mode !== undefined && !isVSCloneChatMode(state.mode))
 			|| !isStreamState(state.streamState)
@@ -614,15 +717,24 @@ export class VSCloneThreadRuntimeSerializer {
 			}
 		}
 
+		const messages = state.messages.map(message => deserializeMessage(message, state.mode ?? 'act'));
 		return {
 			threadId: state.threadId,
+			catalog: deserializeCatalogEntry(
+				state.catalog,
+				state.threadId,
+				messages,
+				state.lastUpdatedAt,
+				state.streamState,
+				state.isRunning,
+			),
 			turnId: state.turnId,
 			mode: state.mode,
 			streamState: state.streamState,
 			// Older payloads may not have per-message mode or import metadata yet. Deserialization
 			// accepts that shape so the runtime service can apply the restore-time compatibility
 			// policy that keeps legacy threads safe instead of rejecting them outright.
-			messages: state.messages.map(message => deserializeMessage(message, state.mode ?? 'act')),
+			messages,
 			assistantEditApplications: state.assistantEditApplications?.map(deserializeAssistantEditApplication),
 			checkpoints: state.checkpoints.map(deserializeCheckpoint),
 			currentCheckpointId: state.currentCheckpointId,

@@ -15,6 +15,19 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 	function createState(): IVSCloneThreadRuntimeState {
 		return {
 			threadId: 'thread-1',
+			catalog: {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Edit src/app.ts and then run the checks.',
+				activeModelIdentifier: 'openai/gpt-5.3-codex',
+				createdAt: 1,
+				updatedAt: 11,
+				status: 'archived',
+				archived: true,
+				turnCount: 2,
+				lastTurnPreview: 'I started applying the follow-up edits.',
+				importedFromHistory: true,
+			},
 			turnId: 'turn-1',
 			mode: 'act',
 			streamState: { kind: 'awaiting_user', toolName: 'edit_file', approvalType: 'edits' },
@@ -398,6 +411,51 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 		assert.strictEqual(restoredConversationMessages[1]?.metadata, undefined);
 	});
 
+	test('deserializes older payloads without a runtime catalog by deriving safe fallback thread metadata', () => {
+		const serializer = new VSCloneThreadRuntimeSerializer();
+		const raw = JSON.stringify({
+			schemaVersion: 1,
+			state: {
+				threadId: 'thread-legacy-catalog',
+				mode: 'act',
+				streamState: { kind: 'idle' },
+				messages: [{
+					id: 'legacy-user',
+					role: 'user',
+					mode: 'act',
+					createdAt: 10,
+					content: 'Legacy prompt text',
+				}, {
+					id: 'legacy-assistant',
+					role: 'assistant',
+					mode: 'act',
+					createdAt: 20,
+					content: 'Legacy assistant response',
+				}],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 30,
+			},
+		});
+
+		const restored = serializer.deserializeState(raw);
+
+		// Older payloads still need a usable runtime catalog so thread listing and lifecycle
+		// actions can operate after migration even before the thread is rewritten. The original
+		// session resource is unknown in this payload shape, so restore must keep that field unset
+		// instead of inventing a synthetic value that later looks authoritative.
+		assert.deepStrictEqual(restored.catalog, {
+			threadId: 'thread-legacy-catalog',
+			title: 'Legacy prompt text',
+			createdAt: 10,
+			updatedAt: 30,
+			status: 'completed',
+			archived: false,
+			turnCount: 1,
+			lastTurnPreview: 'Legacy assistant response',
+		});
+	});
+
 	test('deserializes checkpoint messages into runtime checkpoints', () => {
 		const serializer = new VSCloneThreadRuntimeSerializer();
 		const raw = JSON.stringify({
@@ -441,7 +499,7 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 
 	test('round-trips thread index payloads', () => {
 		const serializer = new VSCloneThreadRuntimeSerializer();
-		const raw = serializer.serializeIndex('workspace-id', 10, ['thread-2', 'thread-1', 'thread-2']);
+		const raw = serializer.serializeIndex('workspace-id', 10, ['thread-2', 'thread-1', 'thread-2'], ['thread-3', 'thread-3']);
 		const restored = serializer.deserializeIndex(raw);
 
 		assert.deepStrictEqual(restored, {
@@ -449,6 +507,7 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 			workspaceId: 'workspace-id',
 			updatedAt: 10,
 			threadIds: ['thread-1', 'thread-2'],
+			deletedThreadIds: ['thread-3'],
 		});
 	});
 

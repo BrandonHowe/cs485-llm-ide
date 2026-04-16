@@ -73,7 +73,10 @@ import { IVSCloneChatSessionService } from "./vscloneChatSessionService.js";
 import { VSCloneModelSwitcherWidget } from "./vscloneModelSwitcherWidget.js";
 import { IVSCloneProviderConfigurationBridge } from "./vscloneProviderConfigurationBridge.js";
 import { IVSCloneThreadRuntimeService } from "./vscloneThreadRuntimeService.js";
-import { toVSCloneRailRows } from "./vscloneChatHistoryRailTree.js";
+import {
+	type IVSCloneThreadCatalogEntry,
+	toVSCloneRailRows,
+} from "./vscloneChatHistoryRailTree.js";
 import {
 	IVSCloneEditApplicationService,
 	type IVSCloneEditApplyResult,
@@ -222,6 +225,23 @@ interface IAssistantApplyTarget {
 	readonly responseText: string;
 }
 
+interface IVSCloneThreadRuntimeCatalogService {
+	getThreads?(
+		query?: IVSCloneChatHistoryQuery,
+	): readonly IVSClonePaneThreadCatalogEntry[];
+	isDeletedThread?(threadId: string): boolean;
+	archiveThread?(threadId: string, archived: boolean): boolean | Promise<boolean>;
+	deleteThread?(threadId: string): boolean | Promise<boolean>;
+}
+
+interface IVSClonePaneThreadCatalogEntry extends IVSCloneThreadCatalogEntry {
+	readonly sessionResource?: string;
+	readonly activeModelIdentifier?: string;
+	readonly createdAt: number;
+	readonly importedFromHistory?: boolean;
+	readonly runtimeOwnedCatalog?: boolean;
+}
+
 export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private readonly composerFocusDisposable = this._register(
 		new MutableDisposable(),
@@ -250,7 +270,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private readonly rail = this._register(
 		this.instantiationService.createInstance(VSCloneChatHistoryRail),
 	);
-	private readonly threadsById = new Map<string, IVSCloneChatHistoryThread>();
+	private readonly threadsById = new Map<string, IVSClonePaneThreadCatalogEntry>();
 	// Durable apply summaries now live on the runtime branch via the assistant-edit application API.
 	// The pane only keeps a transient pending set so repeated refreshes do not launch duplicate
 	// browser-local apply work while the engine bridge is still running.
@@ -380,7 +400,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 						void this.deleteThread(event.threadId);
 						break;
 					case "toggleArchive":
-						void this.historyService.archiveThread(
+						void this.setThreadArchived(
 							event.threadId,
 							!!event.archived,
 						);
@@ -394,6 +414,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				if (!this.historyReady) {
 					return;
 				}
+				// History still carries legacy-only threads during the migration, so every history event
+				// has to refresh the history-backed side of the cache even after the runtime catalog API
+				// exists. Runtime refresh merges afterward and wins for any thread it already owns.
+				this.seedThreadCatalogFromHistory(event);
 
 				const affectsActiveThread =
 					!this.activeThreadId || event.threadIds.includes(this.activeThreadId);
@@ -418,6 +442,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		);
 		this._register(
 			this.threadRuntimeService.onDidChangeState((state) => {
+				// Runtime state is now also the live rail source, so every thread state update keeps the
+				// cached catalog entry fresh instead of waiting for legacy history to catch up.
+				this.syncThreadCatalogEntryFromRuntime(state);
+				this.refreshRailScheduler.schedule(0);
 				if (state.threadId !== this.activeThreadId) {
 					return;
 				}
@@ -1114,6 +1142,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				);
 			}
 
+			const runtimeState = this.getThreadRuntimeState(submission.threadId);
+			if (runtimeState) {
+				this.threadsById.set(
+					submission.threadId,
+					this.buildThreadCatalogEntryFromRuntime(runtimeState, this.threadsById.get(submission.threadId), {
+						sessionResource: submission.sessionResource,
+					}),
+				);
+			}
 			this.activeThreadId = submission.threadId;
 			this.rail.setSelectedThread(submission.threadId);
 			this.railVisible = false;
@@ -1305,6 +1342,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			await this.historyService.initialize();
 			await this.planModeService.initialize();
 			this.historyReady = true;
+			this.seedThreadCatalogFromHistory();
+			this.refreshThreadCatalogFromRuntime();
 			this.refreshRailRows();
 			if (!this.activeThreadId) {
 				// Default to composer mode when opening VSClone with no active thread.
@@ -1329,21 +1368,18 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
+		this.refreshThreadCatalogFromRuntime();
 		const filterState = this.rail.getFilterState();
-		const threads = this.historyService.getThreads(
+		const threads = this.getFilteredThreadCatalog(
 			toVSCloneHistoryQuery(filterState.query, filterState.tab),
 		);
-		this.threadsById.clear();
-		for (const thread of threads) {
-			this.threadsById.set(thread.threadId, thread);
-		}
 
 		const previousActiveThreadId = this.activeThreadId;
-		if (this.activeThreadId && !this.threadsById.has(this.activeThreadId)) {
+		if (this.activeThreadId && !this.resolveThreadById(this.activeThreadId)) {
 			this.activeThreadId = undefined;
 		}
 		// Clearing history through the backend removes the active thread before the pane gets an
-		// explicit UI callback, so normalize that backend-only path back to the fresh composer state.
+		// explicit UI callback, so normalize that catalog-only path back to the fresh composer state.
 		if (previousActiveThreadId && !this.activeThreadId && threads.length === 0) {
 			this.showComposerForNewChat();
 			return;
@@ -1358,6 +1394,198 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		} else {
 			this.rail.setSelectedThread(this.activeThreadId);
 		}
+	}
+
+	private getRuntimeThreadCatalogService(): (IVSCloneThreadRuntimeService & IVSCloneThreadRuntimeCatalogService) | undefined {
+		return this.threadRuntimeService as (IVSCloneThreadRuntimeService & IVSCloneThreadRuntimeCatalogService) | undefined;
+	}
+
+	/**
+	 * History still exists as the migration/import source, so the pane keeps a merged catalog cache:
+	 * history upserts legacy-only threads, runtime overwrites any thread it already owns, and delete
+	 * events prune history-only rows without blowing away runtime-owned entries.
+	 */
+	private seedThreadCatalogFromHistory(
+		event?: {
+			readonly reason?: "initialize" | "turnUpdate" | "archive" | "delete" | "clear" | "error";
+			readonly threadIds?: readonly string[];
+		},
+	): void {
+		const importedThreads = this.historyService.getThreads({ includeArchived: true });
+		const runtimeCatalog = this.getRuntimeThreadCatalogService();
+		const importedThreadIds = new Set(
+			importedThreads
+				.map(thread => thread.threadId)
+				.filter(threadId => !runtimeCatalog?.isDeletedThread?.(threadId)),
+		);
+		if (event?.reason === "clear") {
+			for (const [threadId, entry] of this.threadsById) {
+				if (!entry.runtimeOwnedCatalog) {
+					this.threadsById.delete(threadId);
+				}
+			}
+		} else if (event?.reason === "delete") {
+			for (const threadId of event.threadIds ?? []) {
+				const cached = this.threadsById.get(threadId);
+				if (cached && !cached.runtimeOwnedCatalog) {
+					this.threadsById.delete(threadId);
+				}
+			}
+		}
+
+		for (const [threadId, entry] of this.threadsById) {
+			if (!entry.runtimeOwnedCatalog && !importedThreadIds.has(threadId)) {
+				this.threadsById.delete(threadId);
+			}
+		}
+
+		for (const thread of importedThreads) {
+			if (runtimeCatalog?.isDeletedThread?.(thread.threadId)) {
+				continue;
+			}
+			const existing = this.threadsById.get(thread.threadId);
+			if (existing?.runtimeOwnedCatalog) {
+				continue;
+			}
+			this.threadsById.set(thread.threadId, {
+				...thread,
+				runtimeOwnedCatalog: false,
+			});
+		}
+	}
+
+	private refreshThreadCatalogFromRuntime(): void {
+		const runtimeCatalog = this.getRuntimeThreadCatalogService()?.getThreads?.({
+			includeArchived: true,
+		});
+		if (!runtimeCatalog) {
+			return;
+		}
+
+		const runtimeThreadIds = new Set(runtimeCatalog.map(thread => thread.threadId));
+		for (const [threadId, entry] of this.threadsById) {
+			if (entry.runtimeOwnedCatalog && !runtimeThreadIds.has(threadId)) {
+				this.threadsById.delete(threadId);
+			}
+		}
+
+		for (const thread of runtimeCatalog) {
+			const existing = this.threadsById.get(thread.threadId);
+			this.threadsById.set(thread.threadId, {
+				...existing,
+				...thread,
+				sessionResource: thread.sessionResource ?? existing?.sessionResource,
+				activeModelIdentifier: thread.activeModelIdentifier ?? existing?.activeModelIdentifier,
+				importedFromHistory: thread.importedFromHistory ?? existing?.importedFromHistory,
+				runtimeOwnedCatalog: true,
+			});
+		}
+	}
+
+	private getFilteredThreadCatalog(
+		query: IVSCloneChatHistoryQuery,
+	): readonly IVSCloneThreadCatalogEntry[] {
+		const needle = query.text?.trim().toLocaleLowerCase();
+		const entries = [...this.threadsById.values()]
+			.filter((thread) => {
+				switch (query.tab) {
+					case "active":
+						return !thread.archived;
+					case "archived":
+						return thread.archived;
+					default:
+						return query.includeArchived ? true : !thread.archived;
+				}
+			})
+			.filter((thread) => {
+				if (!needle) {
+					return true;
+				}
+				return (
+					thread.title.toLocaleLowerCase().includes(needle) ||
+					thread.lastTurnPreview.toLocaleLowerCase().includes(needle)
+				);
+			})
+			.sort((left, right) => {
+				if (right.updatedAt !== left.updatedAt) {
+					return right.updatedAt - left.updatedAt;
+				}
+				return right.createdAt - left.createdAt;
+			});
+		return entries;
+	}
+
+	private syncThreadCatalogEntryFromRuntime(
+		state: IVSCloneThreadRuntimeState,
+	): void {
+		if (!this.threadRuntimeService.getState(state.threadId)) {
+			this.threadsById.delete(state.threadId);
+			return;
+		}
+		const existing = this.threadsById.get(state.threadId);
+		const nextEntry = this.buildThreadCatalogEntryFromRuntime(state, existing);
+		this.threadsById.set(state.threadId, nextEntry);
+	}
+
+	private buildThreadCatalogEntryFromRuntime(
+		state: IVSCloneThreadRuntimeState,
+		existing: IVSClonePaneThreadCatalogEntry | undefined,
+		overrides: Partial<IVSClonePaneThreadCatalogEntry> = {},
+	): IVSClonePaneThreadCatalogEntry {
+		const createdAt = existing?.createdAt ?? state.messages[0]?.createdAt ?? state.lastUpdatedAt;
+		const turnCount = state.messages.filter((message) => message.role === "user").length;
+		const title = existing?.title ?? this.summarizeRuntimeCatalogText(
+			state.messages.find((message) => message.role === "user")?.content,
+			localize("vsclone.rail.threadFallbackTitle", "New chat"),
+		);
+		const lastTurnPreview = this.summarizeRuntimeCatalogText(
+			[...state.messages]
+				.reverse()
+				.find((message) => message.role === "assistant" || message.role === "user")
+				?.content,
+			title,
+		);
+		const sessionResource = overrides.sessionResource
+			?? state.catalog.sessionResource
+			?? existing?.sessionResource;
+		return {
+			threadId: state.threadId,
+			sessionResource,
+			title: overrides.title ?? title,
+			activeModelIdentifier: overrides.activeModelIdentifier ?? existing?.activeModelIdentifier,
+			createdAt: overrides.createdAt ?? createdAt,
+			updatedAt: overrides.updatedAt ?? state.lastUpdatedAt,
+			archived: overrides.archived ?? existing?.archived ?? false,
+			status: overrides.status ?? this.getThreadCatalogStatusFromRuntime(state, existing),
+			turnCount: overrides.turnCount ?? turnCount,
+			lastTurnPreview: overrides.lastTurnPreview ?? lastTurnPreview,
+			importedFromHistory: overrides.importedFromHistory ?? existing?.importedFromHistory,
+			runtimeOwnedCatalog: true,
+		};
+	}
+
+	private getThreadCatalogStatusFromRuntime(
+		state: IVSCloneThreadRuntimeState,
+		existing: IVSClonePaneThreadCatalogEntry | undefined,
+	): IVSClonePaneThreadCatalogEntry["status"] {
+		if (existing?.archived) {
+			return "archived";
+		}
+		if (state.isRunning || state.streamState.kind !== "idle") {
+			return "active";
+		}
+		return existing?.status === "failed" ? "failed" : "completed";
+	}
+
+	private summarizeRuntimeCatalogText(
+		value: string | undefined,
+		fallback: string,
+	): string {
+		const normalized = value?.replace(/\s+/g, " ").trim();
+		if (!normalized) {
+			return fallback;
+		}
+		return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
 	}
 
 	private refreshConversation(): void {
@@ -1635,7 +1863,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			nextMessage.type !== undefined &&
 			types.includes(nextMessage.type) &&
 			this.serializeRuntimeToolParams(nextMessage.params) ===
-				this.serializeRuntimeToolParams(message.params)
+			this.serializeRuntimeToolParams(message.params)
 		);
 	}
 
@@ -1755,7 +1983,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			state.streamState.kind !== "awaiting_user" ||
 			state.streamState.toolName !== message.toolName ||
 			this.serializeRuntimeToolParams(latestRuntimeToolParams) !==
-				this.serializeRuntimeToolParams(message.params)
+			this.serializeRuntimeToolParams(message.params)
 		) {
 			return undefined;
 		}
@@ -1954,10 +2182,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					"vsclone.thread.runtime.checkpoint.rewindApplyPending",
 					"Wait for edit application to finish before rewinding.",
 				)
-			: localize(
-				"vsclone.thread.runtime.checkpoint.rewindTooltip",
-				"Restore the files captured in this checkpoint.",
-			);
+				: localize(
+					"vsclone.thread.runtime.checkpoint.rewindTooltip",
+					"Restore the files captured in this checkpoint.",
+				);
 		rewindButton.addEventListener(EventType.CLICK, () => {
 			void this.handleCheckpointRewind(threadId, checkpoint, rewindButton);
 		});
@@ -5055,15 +5283,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private resolveThreadById(
 		threadId: string,
-	): IVSCloneChatHistoryThread | undefined {
-		const cached = this.threadsById.get(threadId);
-		if (cached) {
-			return cached;
-		}
-
-		return this.historyService
-			.getThreads({ includeArchived: true })
-			.find((thread) => thread.threadId === threadId);
+	): IVSClonePaneThreadCatalogEntry | undefined {
+		return this.threadsById.get(threadId);
 	}
 
 	private getModelSwitcherContext(): {
@@ -5078,7 +5299,42 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private async deleteThread(threadId: string): Promise<void> {
 		this.sessionService.cancelThread(threadId);
-		await this.historyService.deleteThread(threadId);
+		const existing = this.threadsById.get(threadId);
+		let deletedInRuntime = false;
+		let legacyCleanupFailed = false;
+		try {
+			const runtimeCatalog = this.getRuntimeThreadCatalogService();
+			if (runtimeCatalog.deleteThread && existing?.runtimeOwnedCatalog !== false) {
+				const deletedByRuntime = await runtimeCatalog.deleteThread(threadId);
+				if (!deletedByRuntime) {
+					throw new Error("Thread delete was rejected by the runtime catalog.");
+				}
+				deletedInRuntime = true;
+				// Runtime delete succeeded, so we also remove the legacy history record during migration.
+				// That keeps the deleted thread from reappearing after a reload when history is still read
+				// as the fallback import source for older workspace state. If that cleanup fails, the
+				// runtime service still persists a deleted-thread tombstone so reloads keep honoring the
+				// runtime delete until history cleanup can eventually succeed.
+				try {
+					await this.historyService.deleteThread(threadId);
+				} catch {
+					legacyCleanupFailed = true;
+				}
+			} else {
+				// Runtime-owned delete is the intended steady state. Falling back to history here only keeps
+				// migration-era builds functional until the runtime catalog service is wired everywhere.
+				await this.historyService.deleteThread(threadId);
+			}
+		} catch {
+			this.notificationService.error(
+				localize(
+					"vsclone.rail.delete.error",
+					"Failed to delete the chat. Please try again.",
+				),
+			);
+			return;
+		}
+		this.threadsById.delete(threadId);
 
 		if (this.activeThreadId === threadId) {
 			this.showComposerForNewChat();
@@ -5087,6 +5343,64 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.refreshRailRows();
 		this.refreshModelControls();
 		this.refreshConversation();
+		if (legacyCleanupFailed && deletedInRuntime) {
+			this.notificationService.error(
+				localize(
+					"vsclone.rail.delete.cleanupError",
+					"Deleted the chat, but failed to clean up legacy history. It may reappear after reload.",
+				),
+			);
+		}
+	}
+
+	private async setThreadArchived(
+		threadId: string,
+		archived: boolean,
+	): Promise<void> {
+		const existing = this.threadsById.get(threadId);
+		const optimisticUpdatedAt = Date.now();
+		if (existing) {
+			this.threadsById.set(threadId, {
+				...existing,
+				archived,
+				status: archived ? "archived" : existing.status === "archived" ? "completed" : existing.status,
+				updatedAt: optimisticUpdatedAt,
+			});
+		}
+
+		try {
+			const runtimeCatalog = this.getRuntimeThreadCatalogService();
+			if (runtimeCatalog.archiveThread && existing?.runtimeOwnedCatalog !== false) {
+				const archivedInRuntime = await runtimeCatalog.archiveThread(threadId, archived);
+				if (archivedInRuntime === false) {
+					throw new Error("Thread archive was rejected by the runtime catalog.");
+				}
+			} else {
+				// History remains the compatibility persistence path until the runtime catalog service owns
+				// archive/delete in every build. The pane cache still updates immediately from runtime data.
+				await this.historyService.archiveThread(threadId, archived);
+			}
+		} catch (error) {
+			if (existing) {
+				this.threadsById.set(threadId, existing);
+			} else {
+				this.threadsById.delete(threadId);
+			}
+			this.refreshRailRows();
+			this.notificationService.error(
+				localize(
+					archived
+						? "vsclone.rail.archive.error"
+						: "vsclone.rail.unarchive.error",
+					archived
+						? "Failed to archive the chat. Please try again."
+						: "Failed to move the chat back to active. Please try again.",
+				),
+			);
+			return;
+		}
+
+		this.refreshRailRows();
 	}
 
 	private showComposerForNewChat(): void {

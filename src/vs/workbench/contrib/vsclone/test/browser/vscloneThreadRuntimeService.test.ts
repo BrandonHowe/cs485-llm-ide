@@ -18,7 +18,7 @@ import { TestStorageService } from '../../../../test/common/workbenchTestService
 import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopOptions, IVSCloneAgentLoopService } from '../../browser/vscloneAgentLoopService.js';
 import { IVSCloneThreadRuntimeRunOptions, VSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
 import { IVSCloneToolExecutionResult, IVSCloneToolExecutionService, IVSCloneToolRuntimeService } from '../../browser/vscloneToolExecutionService.js';
-import { IVSCloneChatHistoryTurn } from '../../common/vscloneChatHistoryTypes.js';
+import { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../../common/vscloneChatHistoryTypes.js';
 import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
 import { formatToolResult } from '../../common/vscloneToolDefinitions.js';
 import { IVSCloneThreadRuntimeState } from '../../common/vscloneThreadRuntimeTypes.js';
@@ -229,6 +229,21 @@ function createThreadOptions(threadId: string, turnId: string, promptText: strin
 		modelIdentifier: 'openai/gpt-5.3-codex',
 		previousTurns: [],
 		systemMessage: 'SYSTEM',
+	};
+}
+
+function createHistoryThread(overrides: Partial<IVSCloneChatHistoryThread> & Pick<IVSCloneChatHistoryThread, 'threadId'>): IVSCloneChatHistoryThread {
+	return {
+		threadId: overrides.threadId,
+		sessionResource: overrides.sessionResource ?? `vsclone://api/${overrides.threadId}`,
+		title: overrides.title ?? `Imported ${overrides.threadId}`,
+		activeModelIdentifier: overrides.activeModelIdentifier ?? 'openai/gpt-5.3-codex',
+		createdAt: overrides.createdAt ?? 1,
+		updatedAt: overrides.updatedAt ?? 2,
+		status: overrides.status ?? 'completed',
+		archived: overrides.archived ?? false,
+		turnCount: overrides.turnCount ?? 1,
+		lastTurnPreview: overrides.lastTurnPreview ?? `Preview for ${overrides.threadId}`,
 	};
 }
 
@@ -1193,6 +1208,204 @@ suite('VSCloneThreadRuntimeService', () => {
 		await runtimeHandle.done;
 
 		first.service.dispose();
+		reopened.service.dispose();
+	});
+
+	test('imports missing history thread metadata once and serves rail queries from the runtime catalog', async () => {
+		const storageService = store.add(new TestStorageService());
+		const harness = createHarness({ storageService });
+		const hydratedTurns: IVSCloneChatHistoryTurn[] = [{
+			turnId: 'thread-imported-completed:turn-1',
+			threadId: 'thread-imported-completed',
+			sequence: 1,
+			executionMode: 'act',
+			promptText: 'Synthetic prompt before full history metadata arrives',
+			responseMarkdown: 'Synthetic assistant response',
+			responsePlainText: 'Synthetic assistant response',
+			startedAt: 3,
+			completedAt: 4,
+			status: 'completed',
+			lastEventAt: 4,
+		}];
+
+		// The explicit import path is a migration seam: it should seed missing runtime metadata one
+		// time and then leave the runtime catalog as the durable owner for later reads and reloads.
+		const importedCompletedThread = createHistoryThread({
+			threadId: 'thread-imported-completed',
+			title: 'Imported planner thread',
+			updatedAt: 10,
+			lastTurnPreview: 'Planner preview text',
+		});
+		const archivedThread = createHistoryThread({
+			threadId: 'thread-imported-archived',
+			title: 'Archived imported thread',
+			updatedAt: 9,
+			status: 'archived',
+			archived: true,
+			lastTurnPreview: 'Archived preview text',
+		});
+		const syntheticHydrated = harness.service.ensureHydratedFromHistory('thread-imported-completed', hydratedTurns);
+		assert.ok(syntheticHydrated);
+		assert.strictEqual(syntheticHydrated?.catalog.sessionResource, undefined);
+		assert.strictEqual(syntheticHydrated?.catalog.title, 'Synthetic prompt before full history metadata arrives');
+		harness.service.ensureCatalogImportedFromHistory(importedCompletedThread);
+		harness.service.ensureCatalogImportedFromHistory(archivedThread);
+		harness.service.ensureCatalogImportedFromHistory({
+			...importedCompletedThread,
+			title: 'History should not win after import',
+			lastTurnPreview: 'This should never replace runtime-owned metadata',
+		});
+
+		const activeHandle = harness.service.runThread(createThreadOptions('thread-live-active', 'turn-live-active', 'Live runtime prompt'));
+		assert.deepStrictEqual(harness.service.getThreads({ tab: 'all' }).map(thread => thread.threadId), [
+			'thread-live-active',
+			'thread-imported-completed',
+			'thread-imported-archived',
+		]);
+		assert.deepStrictEqual(harness.service.getThreads({ tab: 'active' }).map(thread => thread.threadId), ['thread-live-active']);
+		assert.deepStrictEqual(harness.service.getThreads({ tab: 'archived' }).map(thread => thread.threadId), ['thread-imported-archived']);
+		assert.deepStrictEqual(harness.service.getThreads({ text: 'planner', includeArchived: false }).map(thread => thread.threadId), ['thread-imported-completed']);
+		assert.strictEqual(harness.service.getState('thread-imported-completed')?.catalog.title, 'Imported planner thread');
+		assert.strictEqual(harness.service.getState('thread-imported-completed')?.catalog.sessionResource, importedCompletedThread.sessionResource);
+		assert.strictEqual(harness.service.getState('thread-imported-completed')?.catalog.importedFromHistory, true);
+
+		harness.agentLoopService.handles[0]!.complete();
+		await activeHandle.done;
+
+		const reopened = createHarness({
+			storageService: store.add(cloneWorkspaceStorage(storageService)),
+		});
+		assert.deepStrictEqual(reopened.service.getThreads({ tab: 'all' }).map(thread => thread.threadId), [
+			'thread-live-active',
+			'thread-imported-completed',
+			'thread-imported-archived',
+		]);
+		assert.strictEqual(reopened.service.getState('thread-imported-completed')?.catalog.title, 'Imported planner thread');
+		assert.strictEqual(reopened.service.getState('thread-imported-completed')?.catalog.sessionResource, importedCompletedThread.sessionResource);
+		assert.strictEqual(reopened.service.getState('thread-imported-completed')?.catalog.importedFromHistory, true);
+
+		harness.service.dispose();
+		reopened.service.dispose();
+	});
+
+	test('explicit history import upgrades restored synthetic runtime catalog metadata that predates import markers', () => {
+		const storageService = store.add(new TestStorageService());
+		storeRawRuntimePayload(storageService, 'thread-restored-synthetic', JSON.stringify({
+			schemaVersion: 1,
+			state: {
+				threadId: 'thread-restored-synthetic',
+				mode: 'act',
+				streamState: { kind: 'idle' },
+				messages: [{
+					id: 'legacy-user',
+					role: 'user',
+					mode: 'act',
+					createdAt: 5,
+					content: 'Legacy runtime prompt',
+				}, {
+					id: 'legacy-assistant',
+					role: 'assistant',
+					mode: 'act',
+					createdAt: 6,
+					content: 'Legacy runtime response',
+				}],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 7,
+			},
+		}), 7);
+
+		const restored = createHarness({ storageService });
+		const restoredState = restored.service.getState('thread-restored-synthetic');
+		assert.ok(restoredState);
+		assert.strictEqual(restoredState?.catalog.sessionResource, undefined);
+		assert.strictEqual(restoredState?.catalog.importedFromHistory, undefined);
+		assert.strictEqual(restoredState?.catalog.title, 'Legacy runtime prompt');
+
+		const importedThread = createHistoryThread({
+			threadId: 'thread-restored-synthetic',
+			sessionResource: 'vsclone://api/restored-upgrade',
+			title: 'Imported thread title',
+			updatedAt: 11,
+			lastTurnPreview: 'Imported preview',
+		});
+		restored.service.ensureCatalogImportedFromHistory(importedThread);
+
+		const upgraded = restored.service.getState('thread-restored-synthetic');
+		assert.ok(upgraded);
+		assert.strictEqual(upgraded?.catalog.sessionResource, importedThread.sessionResource);
+		assert.strictEqual(upgraded?.catalog.title, 'Imported thread title');
+		assert.strictEqual(upgraded?.catalog.importedFromHistory, true);
+
+		restored.service.ensureCatalogImportedFromHistory({
+			...importedThread,
+			sessionResource: 'vsclone://api/should-not-win',
+			title: 'Second history import should not overwrite runtime',
+		});
+		assert.strictEqual(restored.service.getState('thread-restored-synthetic')?.catalog.sessionResource, importedThread.sessionResource);
+		assert.strictEqual(restored.service.getState('thread-restored-synthetic')?.catalog.title, 'Imported thread title');
+
+		restored.service.dispose();
+	});
+
+	test('persists archive and delete lifecycle changes through the runtime catalog', async () => {
+		const storageService = store.add(new TestStorageService());
+		const harness = createHarness({ storageService });
+		const archivedHandle = harness.service.runThread(createThreadOptions('thread-to-archive', 'turn-to-archive', 'Archive this thread'));
+		const deletedHandle = harness.service.runThread(createThreadOptions('thread-to-delete', 'turn-to-delete', 'Delete this thread'));
+		harness.agentLoopService.handles[0]!.complete();
+		await archivedHandle.done;
+		harness.agentLoopService.handles[1]!.complete();
+		await deletedHandle.done;
+
+		assert.strictEqual(harness.service.archiveThread('thread-to-archive', true), true);
+		assert.strictEqual(harness.service.deleteThread('thread-to-delete'), true);
+		assert.deepStrictEqual(harness.service.getThreads({ tab: 'archived' }).map(thread => thread.threadId), ['thread-to-archive']);
+		assert.strictEqual(harness.service.getState('thread-to-delete'), undefined);
+
+		const reopened = createHarness({
+			storageService: store.add(cloneWorkspaceStorage(storageService)),
+		});
+		assert.deepStrictEqual(reopened.service.getThreads({ tab: 'archived' }).map(thread => thread.threadId), ['thread-to-archive']);
+		assert.strictEqual(reopened.service.getState('thread-to-archive')?.catalog.status, 'archived');
+		assert.strictEqual(reopened.service.getState('thread-to-delete'), undefined);
+		assert.strictEqual(reopened.service.isDeletedThread('thread-to-delete'), true);
+		assert.ok(!reopened.service.getThreads({ tab: 'all' }).some(thread => thread.threadId === 'thread-to-delete'));
+
+		harness.service.dispose();
+		reopened.service.dispose();
+	});
+
+	test('clearAll removes every runtime-owned thread record and its persisted catalog', () => {
+		const storageService = store.add(new TestStorageService());
+		const harness = createHarness({ storageService });
+		harness.service.ensureCatalogImportedFromHistory(createHistoryThread({
+			threadId: 'thread-clear-1',
+			title: 'First imported thread',
+			updatedAt: 10,
+		}));
+		harness.service.ensureCatalogImportedFromHistory(createHistoryThread({
+			threadId: 'thread-clear-2',
+			title: 'Second imported thread',
+			updatedAt: 11,
+			archived: true,
+			status: 'archived',
+		}));
+		assert.strictEqual(harness.service.getThreads({ tab: 'all' }).length, 2);
+
+		harness.service.clearAll();
+
+		assert.deepStrictEqual(harness.service.getThreads({ tab: 'all' }), []);
+		assert.strictEqual(harness.service.getState('thread-clear-1'), undefined);
+		assert.strictEqual(harness.service.getState('thread-clear-2'), undefined);
+		assert.strictEqual(storageService.keys(StorageScope.WORKSPACE, StorageTarget.MACHINE).length, 0);
+
+		const reopened = createHarness({
+			storageService: store.add(cloneWorkspaceStorage(storageService)),
+		});
+		assert.deepStrictEqual(reopened.service.getThreads({ tab: 'all' }), []);
+
+		harness.service.dispose();
 		reopened.service.dispose();
 	});
 

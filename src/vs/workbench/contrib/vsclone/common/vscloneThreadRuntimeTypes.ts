@@ -11,6 +11,40 @@ import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
 import type { VSCloneToolApprovalType } from './vscloneToolRuntimeTypes.js';
 
+export type VSCloneThreadRuntimeCatalogStatus = 'active' | 'completed' | 'failed' | 'archived';
+export type VSCloneThreadRuntimeCatalogTab = 'all' | 'active' | 'archived';
+
+/**
+ * The runtime catalog replaces legacy thread-list ownership for active threads. It persists the
+ * rail-facing metadata alongside the thread state so archive/delete/clear can operate without a
+ * second thread registry staying in sync.
+ */
+export interface IVSCloneThreadRuntimeCatalogEntry {
+	readonly threadId: string;
+	/**
+	 * Older runtime payloads and turn-only history hydration may not know the originating session
+	 * resource. Keep that unknown state explicit instead of fabricating a synthetic value that later
+	 * looks authoritative to thread reuse and migration code.
+	 */
+	readonly sessionResource?: string;
+	readonly title: string;
+	readonly activeModelIdentifier?: string;
+	readonly createdAt: number;
+	readonly updatedAt: number;
+	readonly status: VSCloneThreadRuntimeCatalogStatus;
+	readonly archived: boolean;
+	readonly turnCount: number;
+	readonly lastTurnPreview: string;
+	readonly importedFromHistory?: boolean;
+}
+
+export interface IVSCloneThreadRuntimeCatalogQuery {
+	readonly text?: string;
+	readonly tab?: VSCloneThreadRuntimeCatalogTab;
+	readonly includeArchived?: boolean;
+	readonly limit?: number;
+}
+
 export type VSCloneThreadStreamState =
 	| { readonly kind: 'idle' }
 	| { readonly kind: 'llm' }
@@ -168,6 +202,7 @@ export type IVSCloneThreadRuntimeMessage =
 
 export interface IVSCloneThreadRuntimeState {
 	readonly threadId: string;
+	readonly catalog: IVSCloneThreadRuntimeCatalogEntry;
 	readonly turnId?: string;
 	readonly mode?: VSCloneChatMode;
 	readonly streamState: VSCloneThreadStreamState;

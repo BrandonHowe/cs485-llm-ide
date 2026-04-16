@@ -3,7 +3,21 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IVSCloneChatHistoryThread } from '../common/backend/vscloneChatHistoryService.js';
+import type { VSCloneChatThreadStatus } from '../common/vscloneChatHistoryTypes.js';
+
+/**
+ * The rail only needs presentation metadata, so it accepts any runtime/history-backed catalog
+ * entry that can answer these fields instead of tying the renderer to the legacy history model.
+ */
+export interface IVSCloneThreadCatalogEntry {
+	threadId: string;
+	title: string;
+	lastTurnPreview: string;
+	updatedAt: number;
+	archived: boolean;
+	turnCount: number;
+	status: VSCloneChatThreadStatus;
+}
 
 export interface IVSCloneChatHistoryRailRow {
 	threadId: string;
@@ -12,12 +26,12 @@ export interface IVSCloneChatHistoryRailRow {
 	updatedLabel: string;
 	archived: boolean;
 	turnCount: number;
-	status: IVSCloneChatHistoryThread['status'];
+	status: VSCloneChatThreadStatus;
 	selected: boolean;
 }
 
 export function toVSCloneRailRows(
-	threads: readonly IVSCloneChatHistoryThread[],
+	threads: readonly IVSCloneThreadCatalogEntry[],
 	selectedThreadId: string | undefined,
 	formatRelativeTime: (timestamp: number) => string,
 ): readonly IVSCloneChatHistoryRailRow[] {

@@ -15,13 +15,15 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
-import type { IVSCloneChatHistoryTurn } from '../common/backend/vscloneChatHistoryService.js';
+import type { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../common/backend/vscloneChatHistoryService.js';
 import { VSCloneThreadRuntimeStore } from '../common/backend/vscloneThreadRuntimeStore.js';
 import type { IVSCloneApiConversationMessage } from '../common/vscloneChatApiAdapters.js';
 import { formatToolResult } from '../common/vscloneToolDefinitions.js';
 import {
 	IVSCloneThreadRuntimeAssistantEditApplication,
 	IVSCloneThreadRuntimeAssistantEditApplicationState,
+	IVSCloneThreadRuntimeCatalogEntry,
+	IVSCloneThreadRuntimeCatalogQuery,
 	IVSCloneThreadRuntimeCheckpoint,
 	IVSCloneThreadRuntimeMessage,
 	IVSCloneThreadRuntimePausedApproval,
@@ -54,6 +56,7 @@ export interface IVSCloneThreadRuntimeService {
 	readonly onDidChangeState: Event<IVSCloneThreadRuntimeState>;
 	runThread(options: IVSCloneThreadRuntimeRunOptions): IVSCloneThreadRuntimeHandle;
 	ensureHydratedFromHistory(threadId: string, turns: readonly IVSCloneChatHistoryTurn[]): IVSCloneThreadRuntimeState | undefined;
+	ensureCatalogImportedFromHistory(thread: IVSCloneChatHistoryThread, turns?: readonly IVSCloneChatHistoryTurn[]): IVSCloneThreadRuntimeState;
 	recordRejectedTurn(options: {
 		threadId: string;
 		turnId: string;
@@ -65,6 +68,11 @@ export interface IVSCloneThreadRuntimeService {
 	cancelThread(threadId: string): void;
 	approveLatestToolRequest(threadId: string): boolean;
 	rejectLatestToolRequest(threadId: string, reason?: string): boolean;
+	getThreads(query?: IVSCloneThreadRuntimeCatalogQuery): readonly IVSCloneThreadRuntimeCatalogEntry[];
+	isDeletedThread(threadId: string): boolean;
+	archiveThread(threadId: string, archived: boolean): boolean;
+	deleteThread(threadId: string): boolean;
+	clearAll(): void;
 	getState(threadId: string): IVSCloneThreadRuntimeState | undefined;
 	getAssistantEditApplicationState?(threadId: string, messageId: string): IVSCloneThreadRuntimeAssistantEditApplicationState | undefined;
 	getAssistantEditApplicationStates?(threadId: string): readonly IVSCloneThreadRuntimeAssistantEditApplication[];
@@ -89,7 +97,8 @@ interface IActiveThreadExecution {
 	pendingApproval: IPendingApproval | undefined;
 }
 
-type IThreadRuntimeStore = Pick<VSCloneThreadRuntimeStore, 'loadAll' | 'saveState' | 'deleteState' | 'dispose'>;
+type IThreadRuntimeStore = Pick<VSCloneThreadRuntimeStore, 'loadAll' | 'loadDeletedThreadIds' | 'saveState' | 'deleteState' | 'markDeletedThread' | 'clearAll' | 'dispose'>;
+type IThreadRuntimeStateDraft = Omit<IVSCloneThreadRuntimeState, 'catalog'> & { readonly catalog?: IVSCloneThreadRuntimeCatalogEntry };
 
 /**
  * This service owns the live VSClone thread model: user/assistant/tool/checkpoint messages,
@@ -104,6 +113,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 
 	private readonly store: IThreadRuntimeStore;
 	private readonly states = new Map<string, IVSCloneThreadRuntimeState>();
+	private readonly deletedThreadIds = new Set<string>();
 	private readonly activeExecutions = new Map<string, IActiveThreadExecution>();
 
 	constructor(
@@ -124,8 +134,11 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			? this._register(instantiationService.createInstance(VSCloneThreadRuntimeStore))
 			: {
 				loadAll: () => [],
+				loadDeletedThreadIds: () => [],
 				saveState: () => undefined,
 				deleteState: () => undefined,
+				markDeletedThread: () => undefined,
+				clearAll: () => undefined,
 				dispose: () => undefined,
 			};
 		this.restorePersistedStates();
@@ -145,6 +158,19 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		const nextMessages = [...(baseState?.messages ?? []), ...promptMessage];
 		this.setState(options.threadId, {
 			threadId: options.threadId,
+			catalog: {
+				threadId: options.threadId,
+				sessionResource: options.sessionResource,
+				title: this.truncateCatalogText(options.promptText, 120) || options.threadId,
+				activeModelIdentifier: options.modelIdentifier,
+				createdAt: baseState?.catalog.createdAt ?? Date.now(),
+				updatedAt: Date.now(),
+				status: 'active',
+				archived: baseState?.catalog.archived ?? false,
+				turnCount: baseState?.catalog.turnCount ?? 0,
+				lastTurnPreview: baseState?.catalog.lastTurnPreview ?? '',
+				importedFromHistory: baseState?.catalog.importedFromHistory,
+			},
 			turnId: options.turnId,
 			mode: options.mode,
 			streamState: { kind: 'llm' },
@@ -243,6 +269,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 
 		const hydratedState: IVSCloneThreadRuntimeState = {
 			threadId,
+			catalog: this.createCatalogFromHistoryTurns(threadId, turns, messages),
 			turnId: latestTurn.turnId,
 			// Older history payloads predate per-turn execution mode. Hydration falls back the thread
 			// mode to `act` as well so restored runtime state never carries an undefined default mode
@@ -263,6 +290,43 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		};
 		this.setState(threadId, hydratedState);
 		return hydratedState;
+	}
+
+	ensureCatalogImportedFromHistory(
+		thread: IVSCloneChatHistoryThread,
+		turns: readonly IVSCloneChatHistoryTurn[] = [],
+	): IVSCloneThreadRuntimeState {
+		const existing = this.states.get(thread.threadId);
+		if (existing && !this.shouldUpgradeSyntheticHistoryCatalog(existing)) {
+			return existing;
+		}
+
+		const hydrated = existing ?? (turns.length > 0
+			? this.ensureHydratedFromHistory(thread.threadId, turns)
+			: undefined);
+		const baseState: IThreadRuntimeStateDraft = hydrated ?? {
+			threadId: thread.threadId,
+			turnId: undefined,
+			mode: 'act',
+			streamState: { kind: 'idle' },
+			messages: [],
+			assistantEditApplications: [],
+			checkpoints: [],
+			currentCheckpointId: undefined,
+			branchHeadMessageId: undefined,
+			pausedApproval: undefined,
+			isRunning: false,
+			lastUpdatedAt: thread.updatedAt,
+		};
+		this.setState(thread.threadId, {
+			...baseState,
+			// Turn-only hydration can create a provisional imported catalog before the rail knows the
+			// full history-thread metadata. Upgrade exactly that synthetic shape once, then keep the
+			// runtime catalog authoritative for later reads instead of replaying history over it.
+			catalog: this.createCatalogFromHistoryThread(thread, baseState.messages),
+			lastUpdatedAt: thread.updatedAt,
+		});
+		return this.states.get(thread.threadId)!;
 	}
 
 	recordRejectedTurn(options: {
@@ -411,6 +475,71 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		return true;
 	}
 
+	getThreads(query?: IVSCloneThreadRuntimeCatalogQuery): readonly IVSCloneThreadRuntimeCatalogEntry[] {
+		const normalizedText = query?.text?.trim().toLowerCase();
+		const filtered = [...this.states.values()]
+			.map(state => state.catalog)
+			.filter(catalog => this.matchesCatalogQuery(catalog, query?.tab, query?.includeArchived === true, normalizedText))
+			.sort((left, right) => right.updatedAt - left.updatedAt);
+		if (!query?.limit || query.limit <= 0) {
+			return filtered;
+		}
+		return filtered.slice(0, query.limit);
+	}
+
+	isDeletedThread(threadId: string): boolean {
+		return this.deletedThreadIds.has(threadId);
+	}
+
+	archiveThread(threadId: string, archived: boolean): boolean {
+		const state = this.states.get(threadId);
+		if (!state || state.catalog.archived === archived) {
+			return false;
+		}
+
+		this.setState(threadId, {
+			...state,
+			catalog: {
+				...state.catalog,
+				archived,
+				status: archived ? 'archived' : this.deriveCatalogStatus(state, false, state.catalog.status),
+			},
+			lastUpdatedAt: Date.now(),
+		});
+		return true;
+	}
+
+	deleteThread(threadId: string): boolean {
+		const state = this.states.get(threadId);
+		if (!state) {
+			return false;
+		}
+
+		this.cancelThread(threadId);
+		this.activeExecutions.delete(threadId);
+		this.states.delete(threadId);
+		this.deletedThreadIds.add(threadId);
+		this.store.markDeletedThread(threadId);
+		this._onDidChangeState.fire({
+			...state,
+			catalog: {
+				...state.catalog,
+				updatedAt: Date.now(),
+			},
+		});
+		return true;
+	}
+
+	clearAll(): void {
+		for (const threadId of [...this.activeExecutions.keys()]) {
+			this.cancelThread(threadId);
+		}
+		this.activeExecutions.clear();
+		this.states.clear();
+		this.deletedThreadIds.clear();
+		this.store.clearAll();
+	}
+
 	getState(threadId: string): IVSCloneThreadRuntimeState | undefined {
 		return this.states.get(threadId);
 	}
@@ -526,6 +655,9 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	}
 
 	private restorePersistedStates(): void {
+		for (const threadId of this.store.loadDeletedThreadIds()) {
+			this.deletedThreadIds.add(threadId);
+		}
 		for (const persisted of this.store.loadAll()) {
 			const normalized = this.normalizeRestoredState(persisted);
 			this.states.set(normalized.threadId, normalized);
@@ -922,7 +1054,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		}));
 	}
 
-	private updateState(threadId: string, updater: (state: IVSCloneThreadRuntimeState) => IVSCloneThreadRuntimeState): void {
+	private updateState(threadId: string, updater: (state: IVSCloneThreadRuntimeState) => IThreadRuntimeStateDraft): void {
 		const current = this.states.get(threadId);
 		if (!current) {
 			return;
@@ -934,7 +1066,8 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		});
 	}
 
-	private setState(threadId: string, nextState: IVSCloneThreadRuntimeState): void {
+	private setState(threadId: string, nextState: IThreadRuntimeStateDraft): void {
+		const previous = this.states.get(threadId);
 		const assistantEditApplications = this.normalizeAssistantEditApplications(
 			nextState.assistantEditApplications ?? [],
 			nextState.messages,
@@ -942,10 +1075,12 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		);
 		const normalized: IVSCloneThreadRuntimeState = {
 			...nextState,
+			catalog: this.normalizeCatalogEntry(threadId, nextState, previous),
 			assistantEditApplications,
 			branchHeadMessageId: nextState.branchHeadMessageId ?? nextState.messages.at(-1)?.id,
 		};
 		this.states.set(threadId, normalized);
+		this.deletedThreadIds.delete(threadId);
 		this.store.saveState(normalized);
 		this._onDidChangeState.fire(normalized);
 	}
@@ -990,6 +1125,19 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					toolName: state.pausedApproval.toolName,
 					approvalType: state.pausedApproval.approvalType,
 				},
+				catalog: this.normalizeCatalogEntry(state.threadId, {
+					...state,
+					messages,
+					currentCheckpointId,
+					branchHeadMessageId,
+					assistantEditApplications,
+					streamState: {
+						kind: 'awaiting_user',
+						toolName: state.pausedApproval.toolName,
+						approvalType: state.pausedApproval.approvalType,
+					},
+					isRunning: false,
+				}),
 				isRunning: false,
 			}
 			: {
@@ -999,6 +1147,15 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				branchHeadMessageId,
 				assistantEditApplications,
 				streamState: { kind: 'idle' },
+				catalog: this.normalizeCatalogEntry(state.threadId, {
+					...state,
+					messages,
+					currentCheckpointId,
+					branchHeadMessageId,
+					assistantEditApplications,
+					streamState: { kind: 'idle' },
+					isRunning: false,
+				}),
 				isRunning: false,
 			};
 	}
@@ -1102,6 +1259,173 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			}
 		}
 		return sawConversationMessage;
+	}
+
+	private normalizeCatalogEntry(
+		threadId: string,
+		state: IThreadRuntimeStateDraft,
+		previous?: IVSCloneThreadRuntimeState,
+	): IVSCloneThreadRuntimeCatalogEntry {
+		const fallbackCatalog = state.catalog ?? previous?.catalog;
+		const firstMessage = state.messages[0];
+		const firstConversationMessage = state.messages.find((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'user' | 'assistant' }> =>
+			message.role === 'user' || message.role === 'assistant',
+		);
+		const lastMessage = state.messages.at(-1);
+		const latestConversationMessage = [...state.messages].reverse().find((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'user' | 'assistant' }> =>
+			message.role === 'user' || message.role === 'assistant',
+		);
+		// Titles should be stable once a thread exists, but when older payloads or empty imports do
+		// not have a catalog yet we still need a deterministic fallback sourced from the first real
+		// conversation message rather than a truthy/falsey precedence bug.
+		const titleSource = fallbackCatalog?.title
+			|| firstConversationMessage?.content
+			|| threadId;
+		const previewSource = latestConversationMessage?.content
+			|| fallbackCatalog?.lastTurnPreview
+			|| (lastMessage?.role === 'tool' ? lastMessage.output : '')
+			|| titleSource;
+		const archived = state.catalog?.archived ?? previous?.catalog.archived ?? false;
+		return {
+			threadId,
+			sessionResource: state.catalog?.sessionResource
+				?? previous?.catalog.sessionResource,
+			title: this.truncateCatalogText(titleSource, 120) || threadId,
+			activeModelIdentifier: state.catalog?.activeModelIdentifier ?? previous?.catalog.activeModelIdentifier,
+			createdAt: state.catalog?.createdAt
+				?? previous?.catalog.createdAt
+				?? firstMessage?.createdAt
+				?? state.lastUpdatedAt,
+			updatedAt: state.lastUpdatedAt,
+			status: archived
+				? 'archived'
+				: this.deriveCatalogStatus(state, false, previous?.catalog.status ?? state.catalog?.status),
+			archived,
+			turnCount: this.getRuntimeTurnCount(state.messages, fallbackCatalog?.turnCount ?? 0),
+			lastTurnPreview: this.truncateCatalogText(previewSource, 280),
+			importedFromHistory: state.catalog?.importedFromHistory ?? previous?.catalog.importedFromHistory,
+		};
+	}
+
+	private createCatalogFromHistoryThread(
+		thread: IVSCloneChatHistoryThread,
+		messages: readonly IVSCloneThreadRuntimeMessage[],
+	): IVSCloneThreadRuntimeCatalogEntry {
+		return {
+			threadId: thread.threadId,
+			sessionResource: thread.sessionResource,
+			title: thread.title,
+			activeModelIdentifier: thread.activeModelIdentifier,
+			createdAt: thread.createdAt,
+			updatedAt: thread.updatedAt,
+			status: thread.archived ? 'archived' : thread.status,
+			archived: thread.archived,
+			turnCount: messages.filter(message => message.role === 'user').length || thread.turnCount,
+			lastTurnPreview: this.truncateCatalogText(
+				[...(messages.filter((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' | 'user' }> =>
+					message.role === 'assistant' || message.role === 'user',
+				))].reverse()[0]?.content || thread.lastTurnPreview,
+				280,
+			),
+			importedFromHistory: true,
+		};
+	}
+
+	private createCatalogFromHistoryTurns(
+		threadId: string,
+		turns: readonly IVSCloneChatHistoryTurn[],
+		messages: readonly IVSCloneThreadRuntimeMessage[],
+	): IVSCloneThreadRuntimeCatalogEntry {
+		const firstTurn = turns[0];
+		const latestTurn = turns.at(-1);
+		const status = latestTurn?.status === 'failed' || latestTurn?.status === 'cancelled'
+			? 'failed'
+			: 'completed';
+		return {
+			threadId,
+			// Turn-only migration does not know the original session resource. Preserve that as unknown
+			// so a later explicit history-thread import can upgrade the synthetic catalog safely.
+			sessionResource: undefined,
+			title: this.truncateCatalogText(firstTurn?.promptText, 120) || threadId,
+			activeModelIdentifier: latestTurn?.modelIdentifier,
+			createdAt: firstTurn?.startedAt ?? latestTurn?.startedAt ?? Date.now(),
+			updatedAt: latestTurn?.lastEventAt ?? latestTurn?.completedAt ?? latestTurn?.startedAt ?? Date.now(),
+			status,
+			archived: false,
+			turnCount: turns.length,
+			lastTurnPreview: this.truncateCatalogText(
+				[...(messages.filter((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' | 'user' }> =>
+					message.role === 'assistant' || message.role === 'user',
+				))].reverse()[0]?.content || latestTurn?.responsePlainText || latestTurn?.promptText,
+				280,
+			),
+			importedFromHistory: true,
+		};
+	}
+
+	private shouldUpgradeSyntheticHistoryCatalog(state: IVSCloneThreadRuntimeState): boolean {
+		// The only catalog that should be replaced from a history-thread import is the provisional
+		// synthetic one that still lacks the real session resource. That covers both turn-only imports
+		// and restored pre-catalog runtime payloads. Once runtime already knows a session resource,
+		// later history reads are compatibility input only and must not overwrite runtime-owned
+		// metadata.
+		return !state.catalog.sessionResource;
+	}
+
+	private deriveCatalogStatus(
+		state: Pick<IVSCloneThreadRuntimeState, 'messages' | 'streamState' | 'pausedApproval' | 'isRunning'>,
+		archived: boolean,
+		fallbackStatus: IVSCloneThreadRuntimeCatalogEntry['status'] | undefined,
+	): IVSCloneThreadRuntimeCatalogEntry['status'] {
+		if (archived) {
+			return 'archived';
+		}
+		if (state.isRunning || state.pausedApproval || state.streamState.kind !== 'idle') {
+			return 'active';
+		}
+		const latestToolMessage = [...state.messages].reverse().find((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }> => message.role === 'tool');
+		if (latestToolMessage?.type === 'tool_error' || latestToolMessage?.type === 'rejected') {
+			return 'failed';
+		}
+		if (state.messages.length > 0) {
+			return 'completed';
+		}
+		return fallbackStatus ?? 'active';
+	}
+
+	private getRuntimeTurnCount(messages: readonly IVSCloneThreadRuntimeMessage[], fallbackTurnCount: number): number {
+		const turnCount = messages.filter(message => message.role === 'user').length;
+		return turnCount > 0 ? turnCount : fallbackTurnCount;
+	}
+
+	private truncateCatalogText(value: string | undefined, maxLength: number): string {
+		const normalized = value?.replace(/\s+/g, ' ').trim() ?? '';
+		return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}…`;
+	}
+
+	private matchesCatalogQuery(
+		catalog: IVSCloneThreadRuntimeCatalogEntry,
+		tab: IVSCloneThreadRuntimeCatalogQuery['tab'] | undefined,
+		includeArchived: boolean,
+		normalizedText: string | undefined,
+	): boolean {
+		if (tab === 'archived') {
+			if (!catalog.archived) {
+				return false;
+			}
+		} else if (tab === 'active') {
+			if (catalog.archived || catalog.status !== 'active') {
+				return false;
+			}
+		} else if (!includeArchived && !tab && catalog.archived) {
+			return false;
+		}
+
+		if (!normalizedText) {
+			return true;
+		}
+		const haystack = `${catalog.title}\n${catalog.lastTurnPreview}`.toLowerCase();
+		return haystack.includes(normalizedText);
 	}
 
 	private toAgentLoopConversationMessagesFromRuntime(threadId: string, excludedToolResultMessageId?: string): IVSCloneApiConversationMessage[] {

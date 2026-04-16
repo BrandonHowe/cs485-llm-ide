@@ -38,6 +38,18 @@ suite('VSCloneThreadRuntimeStore', () => {
 	function createState(threadId = 'thread-1'): IVSCloneThreadRuntimeState {
 		return {
 			threadId,
+			catalog: {
+				threadId,
+				sessionResource: `vsclone://api/${threadId}`,
+				title: `Prompt for ${threadId}`,
+				activeModelIdentifier: 'openai/gpt-5.3-codex',
+				createdAt: 1,
+				updatedAt: 3,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Applied the edit suggestion.',
+			},
 			turnId: `${threadId}:turn-1`,
 			mode: 'act',
 			streamState: { kind: 'idle' },
@@ -115,6 +127,30 @@ suite('VSCloneThreadRuntimeStore', () => {
 		assert.strictEqual(storageService.keys(StorageScope.WORKSPACE, StorageTarget.MACHINE).length, 0);
 	});
 
+	test('markDeletedThread persists a tombstone that saveState clears when the thread is recreated', () => {
+		const store = storeDisposables.add(instantiationService.createInstance(VSCloneThreadRuntimeStore));
+		store.saveState(createState('thread-1'));
+
+		store.markDeletedThread('thread-1');
+		assert.deepStrictEqual(store.loadAll(), []);
+		assert.deepStrictEqual(store.loadDeletedThreadIds(), ['thread-1']);
+
+		store.saveState(createState('thread-1'));
+		assert.deepStrictEqual(store.loadDeletedThreadIds(), []);
+		assert.deepStrictEqual(store.loadAll(), [createState('thread-1')]);
+	});
+
+	test('clearAll removes every persisted runtime thread and the shared index', () => {
+		const store = storeDisposables.add(instantiationService.createInstance(VSCloneThreadRuntimeStore));
+		store.saveState(createState('thread-1'));
+		store.saveState(createState('thread-2'));
+
+		store.clearAll();
+
+		assert.deepStrictEqual(store.loadAll(), []);
+		assert.strictEqual(storageService.keys(StorageScope.WORKSPACE, StorageTarget.MACHINE).length, 0);
+	});
+
 	test('rebuilds from per-thread payloads when the index is malformed', () => {
 		const store = storeDisposables.add(instantiationService.createInstance(VSCloneThreadRuntimeStore));
 		const serializer = new VSCloneThreadRuntimeSerializer();
@@ -139,11 +175,124 @@ suite('VSCloneThreadRuntimeStore', () => {
 			StorageScope.WORKSPACE,
 			StorageTarget.MACHINE,
 		);
+		storageService.store(
+			`${STORAGE_PREFIX}.deleted.${encodeURIComponent('thread-deleted')}`,
+			'1',
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
 		storageService.store(INDEX_STORAGE_KEY, '{not valid json', StorageScope.WORKSPACE, StorageTarget.MACHINE);
 
 		const loaded = store.loadAll();
 		assert.deepStrictEqual(loaded.map(state => state.threadId).sort(), ['thread-a', 'thread-b']);
 		assert.ok(loaded.every(state => state.isRunning === false));
+		assert.deepStrictEqual(store.loadDeletedThreadIds(), ['thread-deleted']);
 		assert.ok(storageService.keys(StorageScope.WORKSPACE, StorageTarget.MACHINE).some(key => key.startsWith(THREAD_STORAGE_KEY_PREFIX)));
+	});
+
+	test('loads deleted-thread tombstones even when the shared index key is missing', () => {
+		const store = storeDisposables.add(instantiationService.createInstance(VSCloneThreadRuntimeStore));
+		storageService.store(
+			`${STORAGE_PREFIX}.deleted.${encodeURIComponent('thread-deleted')}`,
+			'1',
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+
+		assert.deepStrictEqual(store.loadAll(), []);
+		assert.deepStrictEqual(store.loadDeletedThreadIds(), ['thread-deleted']);
+	});
+
+	test('rebuilds persisted runtime threads even when the shared index key is missing', () => {
+		const store = storeDisposables.add(instantiationService.createInstance(VSCloneThreadRuntimeStore));
+		const serializer = new VSCloneThreadRuntimeSerializer();
+		storageService.store(
+			`${THREAD_STORAGE_KEY_PREFIX}${encodeURIComponent('thread-orphan')}`,
+			serializer.serializeState(createState('thread-orphan')),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+
+		assert.deepStrictEqual(store.loadAll(), [createState('thread-orphan')]);
+
+		store.clearAll();
+		assert.strictEqual(storageService.keys(StorageScope.WORKSPACE, StorageTarget.MACHINE).length, 0);
+	});
+
+	test('missing-index rebuild prefers a deleted-thread tombstone over a stale thread payload with the same id', () => {
+		const store = storeDisposables.add(instantiationService.createInstance(VSCloneThreadRuntimeStore));
+		const serializer = new VSCloneThreadRuntimeSerializer();
+		storageService.store(
+			`${THREAD_STORAGE_KEY_PREFIX}${encodeURIComponent('thread-conflict')}`,
+			serializer.serializeState(createState('thread-conflict')),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+		storageService.store(
+			`${STORAGE_PREFIX}.deleted.${encodeURIComponent('thread-conflict')}`,
+			'1',
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+
+		assert.deepStrictEqual(store.loadAll(), []);
+		assert.deepStrictEqual(store.loadDeletedThreadIds(), ['thread-conflict']);
+
+		store.clearAll();
+		assert.strictEqual(storageService.keys(StorageScope.WORKSPACE, StorageTarget.MACHINE).length, 0);
+	});
+
+	test('valid index prefers a deleted-thread tombstone over a stale thread payload with the same id', () => {
+		const store = storeDisposables.add(instantiationService.createInstance(VSCloneThreadRuntimeStore));
+		const serializer = new VSCloneThreadRuntimeSerializer();
+		storageService.store(
+			`${THREAD_STORAGE_KEY_PREFIX}${encodeURIComponent('thread-conflict')}`,
+			serializer.serializeState(createState('thread-conflict')),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+		storageService.store(
+			`${STORAGE_PREFIX}.deleted.${encodeURIComponent('thread-conflict')}`,
+			'1',
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+		storageService.store(
+			INDEX_STORAGE_KEY,
+			serializer.serializeIndex(TestWorkspace.id, 10, ['thread-conflict']),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+
+		assert.deepStrictEqual(store.loadAll(), []);
+		assert.deepStrictEqual(store.loadDeletedThreadIds(), ['thread-conflict']);
+	});
+
+	test('valid index rebuild merges orphaned thread payloads that are missing from the index', () => {
+		const store = storeDisposables.add(instantiationService.createInstance(VSCloneThreadRuntimeStore));
+		const serializer = new VSCloneThreadRuntimeSerializer();
+		storageService.store(
+			`${THREAD_STORAGE_KEY_PREFIX}${encodeURIComponent('thread-indexed')}`,
+			serializer.serializeState(createState('thread-indexed')),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+		storageService.store(
+			`${THREAD_STORAGE_KEY_PREFIX}${encodeURIComponent('thread-orphan')}`,
+			serializer.serializeState(createState('thread-orphan')),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+		storageService.store(
+			INDEX_STORAGE_KEY,
+			serializer.serializeIndex(TestWorkspace.id, 10, ['thread-indexed']),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+
+		assert.deepStrictEqual(
+			store.loadAll().map(state => state.threadId).sort(),
+			['thread-indexed', 'thread-orphan'],
+		);
 	});
 });

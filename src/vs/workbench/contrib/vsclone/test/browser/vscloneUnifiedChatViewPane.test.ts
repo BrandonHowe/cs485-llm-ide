@@ -257,11 +257,17 @@ function createPlainTextMarkdownRendererStub() {
 // exercise, so the tests use a prototype-only harness and inject only the members needed by each case.
 function createPaneHarness(): VSCloneUnifiedChatViewPane {
 	const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane & {
+		deletedLegacyThreadIds: Set<string>;
 		pendingAssistantApplyMessageIds: Set<string>;
 		importingRuntimeThreadIds: Set<string>;
+		notificationService: { error: (message: string) => void };
+		threadsById: Map<string, unknown>;
 	};
+	pane.deletedLegacyThreadIds = new Set();
 	pane.pendingAssistantApplyMessageIds = new Set();
 	pane.importingRuntimeThreadIds = new Set();
+	pane.notificationService = { error: () => undefined };
+	pane.threadsById = new Map();
 	return pane;
 }
 
@@ -797,13 +803,11 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.strictEqual(pane.rootContainer.classList.contains('compact-layout'), false);
 	});
 
-	test('history helpers resolve busy state, cached threads, and thread switcher context', () => {
+	test('rail helpers resolve busy state, runtime catalog rows, and thread switcher context', () => {
 		const pane = createPaneHarness() as unknown as {
 			activeThreadId?: string;
 			historyService: {
 				getTurns: (threadId: string) => Array<{ status: 'pending' | 'streaming' | 'completed' }>;
-				getThreads: (query: { includeArchived: boolean }) => Array<{ threadId: string; archived: boolean }>;
-				deleteThread: (threadId: string) => Promise<void>;
 			};
 			threadRuntimeService: {
 				getState: (threadId: string) => {
@@ -814,8 +818,19 @@ suite('VSCloneUnifiedChatViewPane', () => {
 					checkpoints: [];
 					lastUpdatedAt: number;
 				} | undefined;
+				getThreads?: (query?: { includeArchived?: boolean }) => Array<{
+					threadId: string;
+					sessionResource: string;
+					title: string;
+					createdAt: number;
+					updatedAt: number;
+					status: 'active' | 'completed' | 'failed' | 'archived';
+					archived: boolean;
+					turnCount: number;
+					lastTurnPreview: string;
+				}>;
 			};
-			threadsById: Map<string, { threadId: string; archived: boolean }>;
+			threadsById: Map<string, { threadId: string; archived: boolean; sessionResource?: string; title?: string; createdAt?: number; updatedAt?: number; status?: 'active' | 'completed' | 'failed' | 'archived'; turnCount?: number; lastTurnPreview?: string; runtimeOwnedCatalog?: boolean }>;
 			rail: {
 				getSelectedThread: () => string | undefined;
 				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
@@ -823,13 +838,13 @@ suite('VSCloneUnifiedChatViewPane', () => {
 				setSelectedThread: (threadId: string | undefined) => void;
 			};
 			getBusyThreadId: () => string | undefined;
-			resolveThreadById: (threadId: string) => { threadId: string; archived: boolean } | undefined;
+			resolveThreadById: (threadId: string) => { threadId: string; archived: boolean; sessionResource?: string } | undefined;
 			getModelSwitcherContext: () => { threadId: string; location: 'chat' };
 			refreshRailRows: () => void;
 			historyReady: boolean;
 		};
-		const cachedThread = { threadId: 'thread-1', archived: false };
-		const archivedThread = { threadId: 'thread-archived', archived: true };
+		const cachedThread = { threadId: 'thread-1', archived: false, sessionResource: 'vsclone://api/thread-1', title: 'Thread 1 bug', createdAt: 1, updatedAt: 10, status: 'active' as const, turnCount: 2, lastTurnPreview: 'Runtime preview' };
+		const archivedThread = { threadId: 'thread-archived', archived: true, sessionResource: 'vsclone://api/thread-archived', title: 'Archived thread', createdAt: 1, updatedAt: 5, status: 'archived' as const, turnCount: 1, lastTurnPreview: 'Older preview' };
 		let capturedQuery: { includeArchived: boolean } | undefined;
 		let selectedThread: string | undefined;
 		let capturedRows: Array<{ threadId: string; selected: boolean }> | undefined;
@@ -839,11 +854,6 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			getTurns: (threadId: string) => threadId === 'thread-1'
 				? [{ status: 'pending' }, { status: 'streaming' }]
 				: [{ status: 'completed' }],
-			getThreads: (query: { includeArchived: boolean }) => {
-				capturedQuery = query;
-				return [cachedThread, archivedThread];
-			},
-			deleteThread: async () => undefined,
 		};
 		pane.threadRuntimeService = {
 			getState: (threadId: string) => threadId === 'thread-1'
@@ -856,8 +866,15 @@ suite('VSCloneUnifiedChatViewPane', () => {
 					lastUpdatedAt: 1,
 				}
 				: undefined,
+			getThreads: (query?: { includeArchived?: boolean }) => {
+				capturedQuery = { includeArchived: !!query?.includeArchived };
+				return [cachedThread, archivedThread];
+			},
 		};
-		pane.threadsById = new Map([['thread-1', cachedThread]]);
+		pane.threadsById = new Map([
+			['thread-1', cachedThread],
+			['thread-archived', archivedThread],
+		]);
 		pane.rail = {
 			getSelectedThread: () => 'thread-rail',
 			getFilterState: () => ({ query: 'bug', tab: 'all' }),
@@ -880,9 +897,19 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		pane.historyReady = true;
 		pane.activeThreadId = 'thread-1';
 		pane.refreshRailRows();
-		assert.deepStrictEqual(capturedQuery, { text: 'bug', tab: 'all', includeArchived: true });
-		assert.strictEqual(pane.threadsById.get('thread-1'), cachedThread);
-		assert.strictEqual(pane.threadsById.get('thread-archived'), archivedThread);
+		assert.deepStrictEqual(capturedQuery, { includeArchived: true });
+		assert.deepStrictEqual(pane.threadsById.get('thread-1'), {
+			...cachedThread,
+			activeModelIdentifier: undefined,
+			importedFromHistory: undefined,
+			runtimeOwnedCatalog: true,
+		});
+		assert.deepStrictEqual(pane.threadsById.get('thread-archived'), {
+			...archivedThread,
+			activeModelIdentifier: undefined,
+			importedFromHistory: undefined,
+			runtimeOwnedCatalog: true,
+		});
 		assert.strictEqual(selectedThread, 'thread-1');
 		assert.strictEqual(capturedRows?.[0].selected, true);
 	});
@@ -1204,14 +1231,16 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		const pane = createPaneHarness() as unknown as {
 			rootContainer: HTMLElement;
 			railVisible: boolean;
+			threadsById: Map<string, unknown>;
 			rail: {
 				setLoading: () => void;
 				setError: (message: string) => void;
 				setSelectedThread: (threadId: string | undefined) => void;
 			};
 			historyReady: boolean;
-			historyService: { initialize: () => Promise<void>; deleteThread?: (threadId: string) => Promise<void> };
+			historyService: { initialize: () => Promise<void>; getThreads: () => unknown[]; deleteThread?: (threadId: string) => Promise<void> };
 			planModeService: { initialize: () => Promise<void> };
+			threadRuntimeService: { getThreads?: () => unknown[]; deleteThread?: (threadId: string) => Promise<void> | boolean };
 			reloadHistory: () => Promise<void>;
 			refreshRailRows: () => void;
 			refreshConversation: () => void;
@@ -1252,12 +1281,16 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			},
 		};
 		pane.historyReady = false;
+		pane.threadsById = new Map();
 		pane.historyService = {
 			initialize: async () => undefined,
+			getThreads: () => [],
+			deleteThread: async () => undefined,
 		};
 		pane.planModeService = {
 			initialize: async () => undefined,
 		};
+		pane.threadRuntimeService = {};
 		pane.refreshRailRows = () => {
 			refreshRailRowsCalls += 1;
 		};
@@ -1291,6 +1324,7 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			initialize: async () => {
 				throw new Error('boom');
 			},
+			getThreads: () => [],
 		};
 		await pane.reloadHistory();
 		assert.strictEqual(errorMessage, 'Failed to load chat history. Please try again.');
@@ -1311,6 +1345,10 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		};
 		pane.historyService = {
 			initialize: async () => undefined,
+			getThreads: () => [],
+			deleteThread: async () => undefined,
+		};
+		pane.threadRuntimeService = {
 			deleteThread: async (threadId: string) => {
 				deletedThreadId = threadId;
 			},
@@ -1327,6 +1365,31 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		pane.activeThreadId = 'thread-1';
 		pane.railVisible = true;
+		(pane as unknown as {
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+			}>;
+		}).threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+			}],
+		]);
 		refreshRailRowsCalls = 0;
 		refreshPlanModeControlCalls = 0;
 		refreshModelControlsCalls = 0;
@@ -1334,12 +1397,42 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		applyRailLayoutCalls = 0;
 		focusInputCalls = 0;
 		railSelection = 'thread-1';
+		let deletedHistoryThreadId: string | undefined;
+		const historyThreads = [{
+			threadId: 'thread-1',
+			sessionResource: 'vsclone://api/thread-1',
+			title: 'Thread 1',
+			createdAt: 1,
+			updatedAt: 2,
+			status: 'completed' as const,
+			archived: false,
+			turnCount: 1,
+			lastTurnPreview: 'preview',
+		}];
+		pane.historyService = {
+			initialize: async () => undefined,
+			getThreads: () => historyThreads,
+			deleteThread: async (threadId: string) => {
+				deletedHistoryThreadId = threadId;
+				const index = historyThreads.findIndex(thread => thread.threadId === threadId);
+				if (index >= 0) {
+					historyThreads.splice(index, 1);
+				}
+			},
+		};
+		pane.threadRuntimeService = {
+			deleteThread: async (threadId: string) => {
+				deletedThreadId = threadId;
+				return true;
+			},
+		};
 		pane.refreshRailRows = () => {
 			refreshRailRowsCalls += 1;
 		};
 		await pane.deleteThread('thread-1');
 		assert.strictEqual(cancelThreadId, 'thread-1');
 		assert.strictEqual(deletedThreadId, 'thread-1');
+		assert.strictEqual(deletedHistoryThreadId, 'thread-1');
 		assert.strictEqual((pane as { activeThreadId?: string }).activeThreadId, undefined);
 		assert.strictEqual(railSelection, undefined);
 		assert.strictEqual((pane as { railVisible: boolean }).railVisible, false);
@@ -1349,6 +1442,1097 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.strictEqual(refreshConversationCalls, 2);
 		assert.strictEqual(applyRailLayoutCalls, 1);
 		assert.strictEqual(focusInputCalls, 1);
+		(pane as unknown as {
+			seedThreadCatalogFromHistory: (event?: { reason?: 'turnUpdate'; threadIds?: readonly string[] }) => void;
+			threadsById: Map<string, unknown>;
+		}).seedThreadCatalogFromHistory({ reason: 'turnUpdate', threadIds: ['thread-1'] });
+		assert.ok(!(pane as unknown as { threadsById: Map<string, unknown> }).threadsById.has('thread-1'));
+	});
+
+	test('deleteThread refuses a rejected runtime delete and keeps the visible thread state intact', async () => {
+		const pane = createPaneHarness() as unknown as {
+			activeThreadId?: string;
+			railVisible: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+			}>;
+			sessionService: {
+				cancelThread: (threadId: string) => void;
+			};
+			historyService: {
+				deleteThread: (threadId: string) => Promise<void>;
+			};
+			threadRuntimeService: {
+				deleteThread: (threadId: string) => Promise<boolean> | boolean;
+			};
+			rail: {
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			notificationService: {
+				error: (message: string) => void;
+			};
+			deleteThread: (threadId: string) => Promise<void>;
+			refreshRailRows: () => void;
+			refreshModelControls: () => void;
+			refreshConversation: () => void;
+			showComposerForNewChat: () => void;
+		};
+		const notifications: string[] = [];
+		let canceledThreadId: string | undefined;
+		let selectedThread: string | undefined = 'thread-1';
+		let refreshRailRowsCalls = 0;
+		let refreshModelControlsCalls = 0;
+		let refreshConversationCalls = 0;
+		let showComposerCalls = 0;
+		let historyDeleteCalls = 0;
+		pane.activeThreadId = 'thread-1';
+		pane.railVisible = true;
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+			}],
+		]);
+		pane.sessionService = {
+			cancelThread: (threadId: string) => {
+				canceledThreadId = threadId;
+			},
+		};
+		pane.historyService = {
+			deleteThread: async () => {
+				historyDeleteCalls += 1;
+			},
+		};
+		pane.threadRuntimeService = {
+			deleteThread: async () => false,
+		};
+		pane.rail = {
+			setSelectedThread: (threadId: string | undefined) => {
+				selectedThread = threadId;
+			},
+		};
+		pane.notificationService = {
+			error: (message: string) => {
+				notifications.push(message);
+			},
+		};
+		pane.refreshRailRows = () => {
+			refreshRailRowsCalls += 1;
+		};
+		pane.refreshModelControls = () => {
+			refreshModelControlsCalls += 1;
+		};
+		pane.refreshConversation = () => {
+			refreshConversationCalls += 1;
+		};
+		pane.showComposerForNewChat = () => {
+			showComposerCalls += 1;
+			pane.activeThreadId = undefined;
+			pane.railVisible = false;
+			pane.rail.setSelectedThread(undefined);
+		};
+
+		await pane.deleteThread('thread-1');
+
+		assert.strictEqual(canceledThreadId, 'thread-1');
+		assert.strictEqual(historyDeleteCalls, 0);
+		assert.strictEqual(pane.activeThreadId, 'thread-1');
+		assert.strictEqual(selectedThread, 'thread-1');
+		assert.strictEqual(pane.railVisible, true);
+		assert.ok(pane.threadsById.has('thread-1'));
+		assert.strictEqual(refreshRailRowsCalls, 0);
+		assert.strictEqual(refreshModelControlsCalls, 0);
+		assert.strictEqual(refreshConversationCalls, 0);
+		assert.strictEqual(showComposerCalls, 0);
+		assert.deepStrictEqual(notifications, ['Failed to delete the chat. Please try again.']);
+	});
+
+	test('setThreadArchived uses runtime catalog archive and updates the cached rail rows', async () => {
+		const pane = createPaneHarness() as unknown as {
+			historyReady: boolean;
+			activeThreadId?: string;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+			}>;
+			historyService: {
+				archiveThread: (threadId: string, archived: boolean) => Promise<void>;
+			};
+			threadRuntimeService: {
+				archiveThread?: (threadId: string, archived: boolean) => Promise<void> | boolean;
+				getThreads?: () => unknown[];
+			};
+			rail: {
+				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
+				setRows: (rows: Array<{ threadId: string; archived: boolean; status: string }>) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			notificationService: {
+				error: (message: string) => void;
+			};
+			setThreadArchived: (threadId: string, archived: boolean) => Promise<void>;
+			refreshRailRows: () => void;
+		};
+		const archiveCalls: Array<{ threadId: string; archived: boolean }> = [];
+		let renderedRows: Array<{ threadId: string; archived: boolean; status: string }> = [];
+		pane.historyReady = true;
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+			}],
+		]);
+		pane.historyService = {
+			archiveThread: async () => {
+				throw new Error('history archive should not be used when runtime catalog archive exists');
+			},
+		};
+		pane.threadRuntimeService = {
+			archiveThread: async (threadId: string, archived: boolean) => {
+				archiveCalls.push({ threadId, archived });
+			},
+		};
+		pane.rail = {
+			getFilterState: () => ({ query: '', tab: 'all' }),
+			setRows: (rows: Array<{ threadId: string; archived: boolean; status: string }>) => {
+				renderedRows = rows;
+			},
+			setSelectedThread: () => undefined,
+		};
+		pane.notificationService = {
+			error: () => undefined,
+		};
+
+		await pane.setThreadArchived('thread-1', true);
+
+		assert.deepStrictEqual(archiveCalls, [{ threadId: 'thread-1', archived: true }]);
+		assert.strictEqual(pane.threadsById.get('thread-1')?.archived, true);
+		assert.strictEqual(pane.threadsById.get('thread-1')?.status, 'archived');
+		assert.strictEqual(renderedRows[0]?.threadId, 'thread-1');
+	});
+
+	test('setThreadArchived rolls back the optimistic cache when runtime persistence fails', async () => {
+		const pane = createPaneHarness() as unknown as {
+			historyReady: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+			}>;
+			historyService: {
+				archiveThread: (threadId: string, archived: boolean) => Promise<void>;
+			};
+			threadRuntimeService: {
+				archiveThread?: (threadId: string, archived: boolean) => Promise<void> | boolean;
+				getThreads?: () => unknown[];
+			};
+			rail: {
+				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
+				setRows: (rows: Array<{ threadId: string; archived: boolean; status: string }>) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			notificationService: {
+				error: (message: string) => void;
+			};
+			setThreadArchived: (threadId: string, archived: boolean) => Promise<void>;
+		};
+		const notifications: string[] = [];
+		let renderedRows: Array<{ threadId: string; archived: boolean; status: string }> = [];
+		pane.historyReady = true;
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+			}],
+		]);
+		pane.historyService = {
+			archiveThread: async () => {
+				throw new Error('history archive should not be used when runtime catalog archive exists');
+			},
+		};
+		pane.threadRuntimeService = {
+			archiveThread: async () => false,
+			getThreads: () => [],
+		};
+		pane.rail = {
+			getFilterState: () => ({ query: '', tab: 'all' }),
+			setRows: (rows: Array<{ threadId: string; archived: boolean; status: string }>) => {
+				renderedRows = rows;
+			},
+			setSelectedThread: () => undefined,
+		};
+		pane.notificationService = {
+			error: (message: string) => { notifications.push(message); },
+		};
+
+		await pane.setThreadArchived('thread-1', true);
+
+		assert.strictEqual(pane.threadsById.get('thread-1')?.archived, false);
+		assert.strictEqual(pane.threadsById.get('thread-1')?.status, 'completed');
+		assert.strictEqual(renderedRows[0]?.archived, false);
+		assert.strictEqual(notifications.length, 1);
+	});
+
+	test('setThreadArchived falls back to legacy history for a legacy-only cached thread when runtime archive APIs exist', async () => {
+		const pane = createPaneHarness() as unknown as {
+			historyReady: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			historyService: {
+				archiveThread: (threadId: string, archived: boolean) => Promise<void>;
+			};
+			threadRuntimeService: {
+				archiveThread?: (threadId: string, archived: boolean) => Promise<void> | boolean;
+				getThreads?: () => unknown[];
+			};
+			rail: {
+				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
+				setRows: (rows: Array<{ threadId: string; archived: boolean; status: string }>) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			notificationService: {
+				error: (message: string) => void;
+			};
+			setThreadArchived: (threadId: string, archived: boolean) => Promise<void>;
+		};
+		const historyArchiveCalls: Array<{ threadId: string; archived: boolean }> = [];
+		let runtimeArchiveCalls = 0;
+		pane.historyReady = true;
+		pane.threadsById = new Map([
+			['thread-legacy', {
+				threadId: 'thread-legacy',
+				sessionResource: 'vsclone://api/thread-legacy',
+				title: 'Legacy thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.historyService = {
+			archiveThread: async (threadId: string, archived: boolean) => {
+				historyArchiveCalls.push({ threadId, archived });
+			},
+		};
+		pane.threadRuntimeService = {
+			archiveThread: async () => {
+				runtimeArchiveCalls += 1;
+				return false;
+			},
+		};
+		pane.rail = {
+			getFilterState: () => ({ query: '', tab: 'all' }),
+			setRows: () => undefined,
+			setSelectedThread: () => undefined,
+		};
+		pane.notificationService = {
+			error: () => undefined,
+		};
+
+		await pane.setThreadArchived('thread-legacy', true);
+
+		assert.strictEqual(runtimeArchiveCalls, 0);
+		assert.deepStrictEqual(historyArchiveCalls, [{ threadId: 'thread-legacy', archived: true }]);
+		assert.strictEqual(pane.threadsById.get('thread-legacy')?.archived, true);
+	});
+
+	test('deleteThread leaves the merged pane cache untouched when the runtime catalog rejects the delete', async () => {
+		const pane = createPaneHarness() as unknown as {
+			activeThreadId?: string;
+			railVisible: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			sessionService: { cancelThread: (threadId: string) => void };
+			historyService: {
+				deleteThread: (threadId: string) => Promise<void>;
+			};
+			threadRuntimeService: {
+				deleteThread: (threadId: string) => Promise<boolean>;
+				isDeletedThread?: (threadId: string) => boolean;
+				getThreads: (query?: { includeArchived?: boolean }) => Array<unknown>;
+			};
+			notificationService: {
+				error: (message: string) => void;
+			};
+			refreshRailRows: () => void;
+			refreshModelControls: () => void;
+			refreshConversation: () => void;
+			deleteThread: (threadId: string) => Promise<void>;
+		};
+		const errors: string[] = [];
+		let historyDeleteCalls = 0;
+		pane.activeThreadId = 'thread-1';
+		pane.railVisible = true;
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+				runtimeOwnedCatalog: true,
+			}],
+		]);
+		pane.sessionService = {
+			cancelThread: () => undefined,
+		};
+		pane.historyService = {
+			deleteThread: async () => {
+				historyDeleteCalls += 1;
+			},
+		};
+		pane.threadRuntimeService = {
+			deleteThread: async () => false,
+			getThreads: () => [],
+		};
+		pane.notificationService = {
+			error: (message: string) => {
+				errors.push(message);
+			},
+		};
+		let refreshRailRowsCalls = 0;
+		let refreshModelControlsCalls = 0;
+		let refreshConversationCalls = 0;
+		pane.refreshRailRows = () => { refreshRailRowsCalls += 1; };
+		pane.refreshModelControls = () => { refreshModelControlsCalls += 1; };
+		pane.refreshConversation = () => { refreshConversationCalls += 1; };
+
+		await pane.deleteThread('thread-1');
+
+		assert.strictEqual(pane.activeThreadId, 'thread-1');
+		assert.strictEqual(pane.railVisible, true);
+		assert.strictEqual(pane.threadsById.has('thread-1'), true);
+		assert.strictEqual(historyDeleteCalls, 0);
+		assert.strictEqual(errors.length, 1);
+		assert.strictEqual(refreshRailRowsCalls, 0);
+		assert.strictEqual(refreshModelControlsCalls, 0);
+		assert.strictEqual(refreshConversationCalls, 0);
+	});
+
+	test('deleteThread mirrors a successful runtime delete into legacy history so refreshes do not resurrect the thread', async () => {
+		const pane = createPaneHarness() as unknown as {
+			historyReady: boolean;
+			activeThreadId?: string;
+			railVisible: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			sessionService: { cancelThread: (threadId: string) => void };
+			historyService: {
+				getThreads: () => Array<{
+					threadId: string;
+					sessionResource: string;
+					title: string;
+					createdAt: number;
+					updatedAt: number;
+					status: 'active' | 'completed' | 'failed' | 'archived';
+					archived: boolean;
+					turnCount: number;
+					lastTurnPreview: string;
+				}>;
+				deleteThread: (threadId: string) => Promise<void>;
+			};
+			threadRuntimeService: {
+				deleteThread: (threadId: string) => Promise<boolean>;
+				isDeletedThread?: (threadId: string) => boolean;
+				getThreads: (query?: { includeArchived?: boolean }) => Array<unknown>;
+			};
+			rail: {
+				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
+				setRows: (rows: Array<{ threadId: string; selected: boolean }>) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			notificationService: {
+				error: (message: string) => void;
+			};
+			refreshRailRows: () => void;
+			refreshModelControls: () => void;
+			refreshConversation: () => void;
+			deleteThread: (threadId: string) => Promise<void>;
+		};
+		let deletedFromHistory = false;
+		let selectedThread: string | undefined = 'thread-1';
+		let renderedRows: Array<{ threadId: string; selected: boolean }> = [];
+		pane.historyReady = true;
+		pane.activeThreadId = 'thread-1';
+		pane.railVisible = true;
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+				runtimeOwnedCatalog: true,
+			}],
+		]);
+		pane.sessionService = {
+			cancelThread: () => undefined,
+		};
+		pane.historyService = {
+			getThreads: () => deletedFromHistory ? [] : [{
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+			}],
+			deleteThread: async () => {
+				deletedFromHistory = true;
+			},
+		};
+		pane.threadRuntimeService = {
+			deleteThread: async () => true,
+			isDeletedThread: (threadId: string) => threadId === 'thread-1',
+			getThreads: () => [],
+		};
+		pane.rail = {
+			getFilterState: () => ({ query: '', tab: 'all' }),
+			setRows: rows => { renderedRows = rows; },
+			setSelectedThread: threadId => { selectedThread = threadId; },
+		};
+		pane.notificationService = {
+			error: () => undefined,
+		};
+		pane.refreshRailRows = pane.refreshRailRows.bind(pane);
+		pane.refreshModelControls = () => undefined;
+		pane.refreshConversation = () => undefined;
+
+		await pane.deleteThread('thread-1');
+		pane.refreshRailRows();
+
+		assert.strictEqual(deletedFromHistory, true);
+		assert.strictEqual(pane.activeThreadId, undefined);
+		assert.strictEqual(selectedThread, undefined);
+		assert.strictEqual(renderedRows.some(row => row.threadId === 'thread-1'), false);
+		assert.strictEqual(pane.threadsById.has('thread-1'), false);
+	});
+
+	test('deleteThread falls back to legacy history for a legacy-only cached thread even when runtime delete APIs exist', async () => {
+		const pane = createPaneHarness() as unknown as {
+			activeThreadId?: string;
+			railVisible: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			sessionService: { cancelThread: (threadId: string) => void };
+			historyService: {
+				deleteThread: (threadId: string) => Promise<void>;
+			};
+			threadRuntimeService: {
+				deleteThread: (threadId: string) => Promise<boolean>;
+			};
+			refreshRailRows: () => void;
+			refreshModelControls: () => void;
+			refreshConversation: () => void;
+			deleteThread: (threadId: string) => Promise<void>;
+		};
+		let runtimeDeleteCalls = 0;
+		let historyDeleteThreadId: string | undefined;
+		pane.activeThreadId = undefined;
+		pane.railVisible = true;
+		pane.threadsById = new Map([
+			['thread-legacy', {
+				threadId: 'thread-legacy',
+				sessionResource: 'vsclone://api/thread-legacy',
+				title: 'Legacy thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.sessionService = {
+			cancelThread: () => undefined,
+		};
+		pane.historyService = {
+			deleteThread: async (threadId: string) => {
+				historyDeleteThreadId = threadId;
+			},
+		};
+		pane.threadRuntimeService = {
+			deleteThread: async () => {
+				runtimeDeleteCalls += 1;
+				return false;
+			},
+		};
+		pane.refreshRailRows = () => undefined;
+		pane.refreshModelControls = () => undefined;
+		pane.refreshConversation = () => undefined;
+
+		await pane.deleteThread('thread-legacy');
+
+		assert.strictEqual(runtimeDeleteCalls, 0);
+		assert.strictEqual(historyDeleteThreadId, 'thread-legacy');
+	});
+
+	test('deleteThread keeps the thread hidden when runtime delete succeeds but legacy cleanup fails', async () => {
+		const pane = createPaneHarness() as unknown as {
+			historyReady: boolean;
+			activeThreadId?: string;
+			railVisible: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			sessionService: { cancelThread: (threadId: string) => void };
+			historyService: {
+				getThreads: () => Array<{
+					threadId: string;
+					sessionResource: string;
+					title: string;
+					createdAt: number;
+					updatedAt: number;
+					status: 'active' | 'completed' | 'failed' | 'archived';
+					archived: boolean;
+					turnCount: number;
+					lastTurnPreview: string;
+				}>;
+				deleteThread: (threadId: string) => Promise<void>;
+			};
+			threadRuntimeService: {
+				deleteThread: (threadId: string) => Promise<boolean>;
+				isDeletedThread?: (threadId: string) => boolean;
+				getThreads: (query?: { includeArchived?: boolean }) => Array<unknown>;
+			};
+			rail: {
+				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
+				setRows: (rows: Array<{ threadId: string; selected: boolean }>) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			notificationService: {
+				error: (message: string) => void;
+			};
+			refreshRailRows: () => void;
+			refreshModelControls: () => void;
+			refreshConversation: () => void;
+			deleteThread: (threadId: string) => Promise<void>;
+			seedThreadCatalogFromHistory: (event?: { reason?: 'turnUpdate'; threadIds?: readonly string[] }) => void;
+		};
+		const errors: string[] = [];
+		let selectedThread: string | undefined = 'thread-1';
+		let renderedRows: Array<{ threadId: string; selected: boolean }> = [];
+		pane.historyReady = true;
+		pane.activeThreadId = 'thread-1';
+		pane.railVisible = true;
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+				runtimeOwnedCatalog: true,
+			}],
+		]);
+		pane.sessionService = {
+			cancelThread: () => undefined,
+		};
+		pane.historyService = {
+			getThreads: () => [{
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+			}],
+			deleteThread: async () => {
+				throw new Error('legacy cleanup failed');
+			},
+		};
+		pane.threadRuntimeService = {
+			deleteThread: async () => true,
+			isDeletedThread: (threadId: string) => threadId === 'thread-1',
+			getThreads: () => [],
+		};
+		pane.rail = {
+			getFilterState: () => ({ query: '', tab: 'all' }),
+			setRows: rows => { renderedRows = rows; },
+			setSelectedThread: threadId => { selectedThread = threadId; },
+		};
+		pane.notificationService = {
+			error: (message: string) => { errors.push(message); },
+		};
+		pane.refreshRailRows = pane.refreshRailRows.bind(pane);
+		pane.refreshModelControls = () => undefined;
+		pane.refreshConversation = () => undefined;
+
+		await pane.deleteThread('thread-1');
+		pane.seedThreadCatalogFromHistory({ reason: 'turnUpdate', threadIds: ['thread-1'] });
+		pane.refreshRailRows();
+
+		assert.strictEqual(pane.activeThreadId, undefined);
+		assert.strictEqual(selectedThread, undefined);
+		assert.strictEqual(pane.threadsById.has('thread-1'), false);
+		assert.strictEqual(renderedRows.some(row => row.threadId === 'thread-1'), false);
+		assert.deepStrictEqual(errors, ['Deleted the chat, but failed to clean up legacy history. It may reappear after reload.']);
+	});
+
+	test('history seeding keeps runtime-owned rows while refreshing legacy-only cache entries', () => {
+		const pane = createPaneHarness() as unknown as {
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			historyService: {
+				getThreads: () => Array<{
+					threadId: string;
+					sessionResource: string;
+					title: string;
+					createdAt: number;
+					updatedAt: number;
+					status: 'active' | 'completed' | 'failed' | 'archived';
+					archived: boolean;
+					turnCount: number;
+					lastTurnPreview: string;
+				}>;
+			};
+			seedThreadCatalogFromHistory: (event?: { reason?: 'turnUpdate' | 'delete'; threadIds?: readonly string[] }) => void;
+		};
+		pane.threadsById = new Map([
+			['thread-runtime', {
+				threadId: 'thread-runtime',
+				sessionResource: 'vsclone://runtime/thread-runtime',
+				title: 'Runtime thread',
+				createdAt: 1,
+				updatedAt: 5,
+				status: 'active',
+				archived: false,
+				turnCount: 2,
+				lastTurnPreview: 'runtime preview',
+				runtimeOwnedCatalog: true,
+			}],
+			['thread-legacy-stale', {
+				threadId: 'thread-legacy-stale',
+				sessionResource: 'vsclone://api/thread-legacy-stale',
+				title: 'Stale legacy thread',
+				createdAt: 1,
+				updatedAt: 1,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'stale preview',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.historyService = {
+			getThreads: () => [{
+				threadId: 'thread-legacy-fresh',
+				sessionResource: 'vsclone://api/thread-legacy-fresh',
+				title: 'Fresh legacy thread',
+				createdAt: 2,
+				updatedAt: 6,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'fresh preview',
+			}],
+		};
+
+		pane.seedThreadCatalogFromHistory({ reason: 'turnUpdate', threadIds: ['thread-legacy-fresh'] });
+
+		assert.ok(pane.threadsById.has('thread-runtime'));
+		assert.ok(pane.threadsById.has('thread-legacy-fresh'));
+		assert.ok(!pane.threadsById.has('thread-legacy-stale'));
+		assert.strictEqual(pane.threadsById.get('thread-runtime')?.runtimeOwnedCatalog, true);
+	});
+
+	test('refreshThreadCatalogFromRuntime preserves a real history session resource when runtime catalog metadata is incomplete', () => {
+		const pane = createPaneHarness() as unknown as {
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource?: string;
+				activeModelIdentifier?: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				importedFromHistory?: boolean;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			threadRuntimeService: {
+				getThreads: () => Array<{
+					threadId: string;
+					activeModelIdentifier?: string;
+					title: string;
+					createdAt: number;
+					updatedAt: number;
+					status: 'active' | 'completed' | 'failed' | 'archived';
+					archived: boolean;
+					turnCount: number;
+					lastTurnPreview: string;
+					importedFromHistory?: boolean;
+				}>;
+			};
+			refreshThreadCatalogFromRuntime: () => void;
+		};
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				activeModelIdentifier: 'openai/gpt-5.3-codex',
+				title: 'History title',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'History preview',
+				importedFromHistory: true,
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.threadRuntimeService = {
+			getThreads: () => [{
+				threadId: 'thread-1',
+				title: 'Runtime title',
+				createdAt: 1,
+				updatedAt: 5,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Runtime preview',
+			}],
+		};
+
+		pane.refreshThreadCatalogFromRuntime();
+
+		assert.strictEqual(pane.threadsById.get('thread-1')?.sessionResource, 'vsclone://api/thread-1');
+		assert.strictEqual(pane.threadsById.get('thread-1')?.activeModelIdentifier, 'openai/gpt-5.3-codex');
+		assert.strictEqual(pane.threadsById.get('thread-1')?.importedFromHistory, true);
+		assert.strictEqual(pane.threadsById.get('thread-1')?.runtimeOwnedCatalog, true);
+	});
+
+	test('refreshRailRows keeps legacy-only cached threads visible when runtime no longer lists them during migration', () => {
+		const pane = createPaneHarness() as unknown as {
+			historyReady: boolean;
+			activeThreadId?: string;
+			railVisible: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			threadRuntimeService: {
+				getThreads?: () => unknown[];
+			};
+			rail: {
+				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
+				setRows: (rows: Array<{ threadId: string; selected: boolean }>) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			refreshRailRows: () => void;
+			showComposerForNewChat: () => void;
+		};
+		let selectedThread: string | undefined = 'thread-1';
+		let renderedRows: Array<{ threadId: string; selected: boolean }> = [];
+		pane.historyReady = true;
+		pane.activeThreadId = 'thread-1';
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'preview',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.threadRuntimeService = {
+			getThreads: () => [],
+		};
+		pane.rail = {
+			getFilterState: () => ({ query: '', tab: 'all' }),
+			setRows: (rows: Array<{ threadId: string; selected: boolean }>) => {
+				renderedRows = rows;
+			},
+			setSelectedThread: (threadId: string | undefined) => {
+				selectedThread = threadId;
+			},
+		};
+		pane.showComposerForNewChat = () => {
+			assert.fail('legacy-only cached threads should survive runtime refresh during migration');
+		};
+
+		pane.refreshRailRows();
+
+		assert.strictEqual(pane.activeThreadId, 'thread-1');
+		assert.strictEqual(selectedThread, 'thread-1');
+		assert.deepStrictEqual(renderedRows.map(row => row.threadId), ['thread-1']);
+	});
+
+	test('syncThreadCatalogEntryFromRuntime preserves a real history session resource when runtime metadata is incomplete', () => {
+		const pane = createPaneHarness() as unknown as {
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource?: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+			};
+			syncThreadCatalogEntryFromRuntime: (state: {
+				threadId: string;
+				catalog: {
+					threadId: string;
+					title: string;
+					createdAt: number;
+					updatedAt: number;
+					status: 'active' | 'completed' | 'failed' | 'archived';
+					archived: boolean;
+					turnCount: number;
+					lastTurnPreview: string;
+				};
+				streamState: { kind: 'idle' };
+				messages: Array<{ role: 'user' | 'assistant'; content: string; createdAt: number }>;
+				checkpoints: [];
+				isRunning: boolean;
+				lastUpdatedAt: number;
+			}) => void;
+		};
+		const runtimeState = {
+			threadId: 'thread-1',
+			catalog: {
+				threadId: 'thread-1',
+				title: 'Runtime title',
+				createdAt: 1,
+				updatedAt: 5,
+				status: 'completed' as const,
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Runtime preview',
+			},
+			streamState: { kind: 'idle' as const },
+			messages: [
+				{ role: 'user' as const, content: 'Prompt', createdAt: 1 },
+				{ role: 'assistant' as const, content: 'Reply', createdAt: 2 },
+			],
+			checkpoints: [],
+			isRunning: false,
+			lastUpdatedAt: 5,
+		};
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://api/thread-1',
+				title: 'History title',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'History preview',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.threadRuntimeService = {
+			getState: () => runtimeState,
+		};
+
+		pane.syncThreadCatalogEntryFromRuntime(runtimeState);
+
+		assert.strictEqual(pane.threadsById.get('thread-1')?.sessionResource, 'vsclone://api/thread-1');
+		assert.strictEqual(pane.threadsById.get('thread-1')?.runtimeOwnedCatalog, true);
+	});
+
+	test('refreshRailRows clears the active thread when it is absent from both runtime and cached history rows', () => {
+		const pane = createPaneHarness() as unknown as {
+			historyReady: boolean;
+			activeThreadId?: string;
+			railVisible: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			threadRuntimeService: {
+				getThreads?: () => unknown[];
+			};
+			rail: {
+				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
+				setRows: (rows: Array<unknown>) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			refreshRailRows: () => void;
+			showComposerForNewChat: () => void;
+		};
+		let selectedThread: string | undefined = 'thread-gone';
+		let showComposerCalls = 0;
+		pane.historyReady = true;
+		pane.activeThreadId = 'thread-gone';
+		pane.threadsById = new Map();
+		pane.threadRuntimeService = {
+			getThreads: () => [],
+		};
+		pane.rail = {
+			getFilterState: () => ({ query: '', tab: 'all' }),
+			setRows: () => undefined,
+			setSelectedThread: (threadId: string | undefined) => {
+				selectedThread = threadId;
+			},
+		};
+		pane.showComposerForNewChat = () => {
+			showComposerCalls += 1;
+			pane.activeThreadId = undefined;
+			pane.railVisible = false;
+			pane.rail.setSelectedThread(undefined);
+		};
+
+		pane.refreshRailRows();
+
+		assert.strictEqual(pane.activeThreadId, undefined);
+		assert.strictEqual(selectedThread, undefined);
+		assert.strictEqual(showComposerCalls, 1);
 	});
 
 	test('composer surface includes model and reasoning controls when enabled', () => {
@@ -2374,6 +3558,17 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			historyReady: boolean;
 			historyService: {
 				initialize: () => Promise<void>;
+				getThreads: (query?: { includeArchived?: boolean }) => Array<{
+					threadId: string;
+					sessionResource: string;
+					title: string;
+					createdAt: number;
+					updatedAt: number;
+					status: 'active' | 'completed' | 'failed' | 'archived';
+					archived: boolean;
+					turnCount: number;
+					lastTurnPreview: string;
+				}>;
 				getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
 			};
 			planModeService: { initialize: () => Promise<void> };
@@ -2417,6 +3612,17 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		};
 		pane.historyService = {
 			initialize: async () => undefined,
+			getThreads: () => [{
+				threadId: 'thread-reload',
+				sessionResource: 'vsclone://api/thread-reload',
+				title: 'Reloaded thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Legacy response',
+			}],
 			getTurns: () => [{
 				turnId: 'thread-reload:turn-1',
 				threadId: 'thread-reload',
