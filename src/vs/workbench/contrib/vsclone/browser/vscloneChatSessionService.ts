@@ -16,8 +16,9 @@ import { IVSClonePromptAssemblyService } from '../common/vsclonePromptAssemblySe
 import type { IVSCloneApiConversationMessage } from '../common/vscloneChatApiAdapters.js';
 import type { IVSCloneImageAttachment } from '../common/vscloneImageAttachmentTypes.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
-import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopService } from './vscloneAgentLoopService.js';
+import type { IVSCloneThreadRuntimeState } from '../common/vscloneThreadRuntimeTypes.js';
 import { IVSCloneContextGatheringService } from './vscloneContextGatheringService.js';
+import { IVSCloneThreadRuntimeHandle, IVSCloneThreadRuntimeService } from './vscloneThreadRuntimeService.js';
 
 export const IVSCloneChatSessionService = createDecorator<IVSCloneChatSessionService>('vscloneChatSessionService');
 
@@ -46,14 +47,14 @@ function createApiSessionResource(sessionId: string): string {
 export class VSCloneChatSessionService extends Disposable implements IVSCloneChatSessionService {
 	declare readonly _serviceBrand: undefined;
 
-	private readonly apiRequestHandles = new Map<string, IVSCloneAgentLoopHandle>();
+	private readonly apiRequestHandles = new Map<string, IVSCloneThreadRuntimeHandle>();
 
 	constructor(
 		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
 		@IVSCloneThreadModelSelectionService private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
 		@IVSClonePlanModeService private readonly planModeService: IVSClonePlanModeService,
 		@ILogService private readonly logService: ILogService,
-		@IVSCloneAgentLoopService private readonly agentLoopService: IVSCloneAgentLoopService,
+		@IVSCloneThreadRuntimeService private readonly threadRuntimeService: IVSCloneThreadRuntimeService,
 		@IVSCloneContextGatheringService private readonly contextGatheringService: IVSCloneContextGatheringService,
 		@IVSClonePromptAssemblyService private readonly promptAssemblyService: IVSClonePromptAssemblyService,
 	) {
@@ -114,27 +115,12 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		await this.planModeService.setModeForThread(threadId, mode);
 		const resolvedSelection = await this.ensureThreadSelectionBinding(threadId, modelSelection);
 		const turnId = `${threadId}:api:${Date.now()}`;
-		const sequence = this.historyService.getTurns(threadId).length + 1;
+		this.importRuntimeStateForThread(threadId);
+		// Sequence is derived from the runtime thread when possible so reloads and rewinds continue
+		// from the active branch instead of from whichever legacy turns still happen to be persisted.
+		const sequence = this.getNextSequenceForThread(threadId);
 
-		// Gather previous turns for multi-turn conversation context
-		const existingTurns = this.historyService.getTurns(threadId);
-		const previousTurns: IVSCloneApiConversationMessage[] = [];
-		for (const turn of existingTurns) {
-			if (turn.status === 'completed' || turn.status === 'streaming') {
-				previousTurns.push({
-					role: 'user',
-					content: turn.promptText,
-					imageAttachments: turn.promptImages,
-				});
-				if (turn.responsePlainText) {
-					previousTurns.push({ role: 'assistant', content: turn.responsePlainText });
-				} else if (turn.responseMarkdown) {
-					// Restored history can legitimately retain only markdown output, so treat that as
-					// the assistant transcript for follow-up turns instead of dropping the response.
-					previousTurns.push({ role: 'assistant', content: turn.responseMarkdown });
-				}
-			}
-		}
+		const previousTurns = this.getPreviousTurnsForThread(threadId);
 
 		const modelId = resolvedSelection?.modelId ?? '';
 		const modelIdentifier = resolvedSelection?.modelIdentifier ?? '';
@@ -148,7 +134,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			this.logService.warn('[VSCloneChatSession] Failed to gather prompt context; continuing without enriched system prompt', error);
 		}
 
-		const handle = this.agentLoopService.runAgentLoop({
+		const handle = this.threadRuntimeService.runThread({
 			threadId,
 			turnId,
 			sequence,
@@ -205,40 +191,16 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		};
 	}
 
-	private injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string; mode: VSCloneChatMode; modelSelection?: IVSCloneModelSelection; imageAttachments?: readonly IVSCloneImageAttachment[] }): void {
-		const turns = this.historyService.getTurns(options.threadId);
-		const sequence = turns.length + 1;
+	private async injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string; mode: VSCloneChatMode; modelSelection?: IVSCloneModelSelection; imageAttachments?: readonly IVSCloneImageAttachment[] }): Promise<void> {
 		const turnId = `${options.threadId}:rejected:${Date.now()}`;
-		const occurredAt = Date.now();
-
-		this.historyService.applyTurnUpdate({
+		await this.ensureThreadSelectionBinding(options.threadId, options.modelSelection);
+		this.threadRuntimeService.recordRejectedTurn({
 			threadId: options.threadId,
 			turnId,
-			sequence,
-			sessionResource: options.sessionResource,
-			phase: 'prompt',
-			occurredAt,
 			promptText: options.promptText,
-			promptImages: options.imageAttachments,
-			executionMode: options.mode,
-			modelIdentifier: options.modelSelection?.modelIdentifier,
-			providerId: options.modelSelection?.vendor,
-		});
-
-		this.historyService.applyTurnUpdate({
-			threadId: options.threadId,
-			turnId,
-			sequence,
-			sessionResource: options.sessionResource,
-			phase: 'error',
-			occurredAt: Date.now(),
-			promptText: options.promptText,
-			executionMode: options.mode,
-			errorCode: 'request_rejected',
-			modelIdentifier: options.modelSelection?.modelIdentifier,
-			providerId: options.modelSelection?.vendor,
-			responsePlainTextReplace: options.reason,
-			responseMarkdownReplace: options.reason,
+			mode: options.mode,
+			reason: options.reason,
+			imageAttachments: options.imageAttachments,
 		});
 	}
 
@@ -267,7 +229,7 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
 		const threadId = canReuseThreadId ? options.threadId! : deriveThreadId(sessionResource);
 		await this.planModeService.setModeForThread(threadId, mode);
-		this.injectRejectedTurn({
+		await this.injectRejectedTurn({
 			threadId,
 			sessionResource,
 			promptText,
@@ -281,5 +243,71 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 			threadId,
 			sessionResource,
 		};
+	}
+
+	/**
+	 * Active prompt replay only reads the runtime branch. Legacy turns are allowed to feed the
+	 * runtime exactly once through the explicit hydration step below, but the replay logic itself
+	 * never reconstructs conversation context directly from history anymore.
+	 */
+	private getPreviousTurnsForThread(threadId: string): IVSCloneApiConversationMessage[] {
+		const runtimeState = this.threadRuntimeService.getState(threadId);
+		if (runtimeState) {
+			return this.toConversationMessagesFromRuntime(runtimeState);
+		}
+
+		return [];
+	}
+
+	private getNextSequenceForThread(threadId: string): number {
+		const runtimeState = this.threadRuntimeService.getState(threadId);
+		if (runtimeState) {
+			// One user message is appended per submitted prompt, so counting them keeps the sequence
+			// anchored to the active runtime branch even after rewind truncates future messages.
+			return runtimeState.messages.filter(message => message.role === 'user').length + 1;
+		}
+
+		return 1;
+	}
+
+	/**
+	 * History can still seed runtime during migration, but that import happens explicitly before
+	 * active send-path reads. Sequence and prompt replay helpers themselves only consult runtime so
+	 * render/send code no longer hides a legacy fallback inside what looks like a pure getter.
+	 */
+	private importRuntimeStateForThread(threadId: string): IVSCloneThreadRuntimeState | undefined {
+		const runtimeState = this.threadRuntimeService.getState(threadId);
+		if (runtimeState) {
+			return runtimeState;
+		}
+
+		return this.threadRuntimeService.ensureHydratedFromHistory(threadId, this.historyService.getTurns(threadId));
+	}
+
+	private toConversationMessagesFromRuntime(state: IVSCloneThreadRuntimeState): IVSCloneApiConversationMessage[] {
+		const messages: IVSCloneApiConversationMessage[] = [];
+		for (const message of state.messages) {
+			switch (message.role) {
+				case 'user':
+					messages.push(message.imageAttachments
+						? {
+							role: 'user',
+							content: message.content,
+							imageAttachments: message.imageAttachments,
+						}
+						: {
+							role: 'user',
+							content: message.content,
+						});
+					break;
+				case 'assistant':
+					messages.push({ role: 'assistant', content: message.content });
+					break;
+				case 'tool':
+				case 'checkpoint':
+					break;
+			}
+		}
+		return messages;
 	}
 }

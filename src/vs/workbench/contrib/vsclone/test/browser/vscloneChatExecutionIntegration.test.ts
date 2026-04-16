@@ -8,9 +8,9 @@ import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopOptions, IVSCloneAgentLoopService } from '../../browser/vscloneAgentLoopService.js';
 import { VSCloneChatSessionService } from '../../browser/vscloneChatSessionService.js';
 import { IVSCloneContextGatheringService } from '../../browser/vscloneContextGatheringService.js';
+import { IVSCloneThreadRuntimeHandle, IVSCloneThreadRuntimeRunOptions, IVSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
 import {
 	IVSCloneChatHistoryService,
 	IVSCloneChatHistoryThread,
@@ -63,19 +63,27 @@ class StaticPlanModeService implements IVSClonePlanModeService {
 	isToolAllowed(): boolean { return true; }
 }
 
-class RecordingAgentLoopHandle implements IVSCloneAgentLoopHandle {
+class RecordingThreadRuntimeHandle implements IVSCloneThreadRuntimeHandle {
 	readonly done = Promise.resolve();
 	cancel(): void { }
 }
 
-class RecordingAgentLoopService implements IVSCloneAgentLoopService {
+class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	declare readonly _serviceBrand: undefined;
-	lastOptions: IVSCloneAgentLoopOptions | undefined;
+	readonly onDidChangeState = Event.None;
+	lastOptions: IVSCloneThreadRuntimeRunOptions | undefined;
 
-	runAgentLoop(options: IVSCloneAgentLoopOptions): IVSCloneAgentLoopHandle {
+	runThread(options: IVSCloneThreadRuntimeRunOptions): IVSCloneThreadRuntimeHandle {
 		this.lastOptions = options;
-		return new RecordingAgentLoopHandle();
+		return new RecordingThreadRuntimeHandle();
 	}
+
+	recordRejectedTurn(): void { }
+	cancelThread(): void { }
+	approveLatestToolRequest(): boolean { return false; }
+	rejectLatestToolRequest(): boolean { return false; }
+	getState(): undefined { return undefined; }
+	async rewindToCheckpoint(): Promise<boolean> { return false; }
 }
 
 class StaticContextGatheringService implements IVSCloneContextGatheringService {
@@ -134,13 +142,13 @@ suite('VSCloneChatExecutionIntegration', () => {
 			createHistoricalTurn({ responsePlainText: '', responseMarkdown: 'Assistant response from markdown' }),
 		]);
 		const selectionService = new StaticSelectionService(createSelection());
-		const agentLoopService = new RecordingAgentLoopService();
+		const threadRuntimeService = new RecordingThreadRuntimeService();
 		const sessionService = testDisposables.add(new VSCloneChatSessionService(
 			historyService,
 			selectionService,
 			new StaticPlanModeService(),
 			new NullLogService(),
-			agentLoopService,
+			threadRuntimeService,
 			new StaticContextGatheringService(),
 			new RecordingPromptAssemblyService(),
 		));
@@ -154,7 +162,7 @@ suite('VSCloneChatExecutionIntegration', () => {
 			threadId: 'thread-1',
 			sessionResource: 'vsclone://api/thread-1',
 		});
-		assert.deepStrictEqual(agentLoopService.lastOptions?.previousTurns, [
+		assert.deepStrictEqual(threadRuntimeService.lastOptions?.previousTurns, [
 			{ role: 'user', content: 'Initial prompt', imageAttachments: undefined },
 			{ role: 'assistant', content: 'Assistant response from markdown' },
 		]);

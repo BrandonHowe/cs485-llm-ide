@@ -6,23 +6,15 @@
 import assert from 'assert';
 import { DeferredPromise } from '../../../../../base/common/async.js';
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
-import { Event } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { VSCloneAgentLoopService } from '../../browser/vscloneAgentLoopService.js';
+import { IVSCloneAgentLoopObserver, VSCloneAgentLoopService } from '../../browser/vscloneAgentLoopService.js';
 import { IVSCloneApiRequestHandle, IVSCloneApiStreamObserver, IVSCloneChatApiService } from '../../browser/vscloneChatApiService.js';
 import { IVSCloneToolExecutionResult, IVSCloneToolExecutionService } from '../../browser/vscloneToolExecutionService.js';
 import { IVSCloneApiSubmitOptions } from '../../common/vscloneChatApiAdapters.js';
-import {
-	IVSCloneChatHistoryService,
-	IVSCloneChatHistoryThread,
-	IVSCloneChatHistoryTurn,
-	IVSCloneChatTurnUpdate,
-	VSCloneChatHistoryScope,
-} from '../../common/backend/vscloneChatHistoryService.js';
-import { reduceThreadTurns } from '../../common/backend/vscloneChatHistoryStateMachine.js';
 import { VSCloneModelVendor } from '../../common/vscloneOAuthTypes.js';
 import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
+import type { VSCloneThreadToolApprovalDecision } from '../../common/vscloneThreadRuntimeTypes.js';
 
 class TestChatApiService implements IVSCloneChatApiService {
 	declare readonly _serviceBrand: undefined;
@@ -55,6 +47,7 @@ class TestChatApiService implements IVSCloneChatApiService {
 
 class TestToolExecutionService implements IVSCloneToolExecutionService {
 	declare readonly _serviceBrand: undefined;
+	editFileCalls = 0;
 
 	async executeTool(toolName: string, params: Record<string, string>, _mode?: VSCloneChatMode, _token: CancellationToken = CancellationToken.None): Promise<IVSCloneToolExecutionResult> {
 		switch (toolName) {
@@ -62,6 +55,12 @@ class TestToolExecutionService implements IVSCloneToolExecutionService {
 				return {
 					success: true,
 					output: 'Directory listing for file:///workspace:\n(empty directory)',
+				};
+			case 'edit_file':
+				this.editFileCalls += 1;
+				return {
+					success: true,
+					output: `Applied edit to ${params.path ?? '(missing path)'}`,
 				};
 			case 'attempt_completion':
 				return {
@@ -75,41 +74,6 @@ class TestToolExecutionService implements IVSCloneToolExecutionService {
 				};
 		}
 	}
-}
-
-class TestHistoryService implements IVSCloneChatHistoryService {
-	declare readonly _serviceBrand: undefined;
-	readonly onDidChange = Event.None;
-	readonly updates: IVSCloneChatTurnUpdate[] = [];
-
-	private readonly threadsById = new Map<string, IVSCloneChatHistoryThread>();
-	private readonly turnsByThreadId = new Map<string, readonly IVSCloneChatHistoryTurn[]>();
-
-	async initialize(): Promise<void> { }
-
-	getThreads(): readonly IVSCloneChatHistoryThread[] {
-		return [...this.threadsById.values()];
-	}
-
-	getTurns(threadId: string): readonly IVSCloneChatHistoryTurn[] {
-		return this.turnsByThreadId.get(threadId) ?? [];
-	}
-
-	applyTurnUpdate(update: IVSCloneChatTurnUpdate): void {
-		this.updates.push(update);
-		const currentThread = this.threadsById.get(update.threadId);
-		const currentTurns = this.turnsByThreadId.get(update.threadId);
-		const reduced = reduceThreadTurns(currentThread, currentTurns, update, {
-			sessionResource: update.sessionResource,
-			maxTurnsPerThread: 100,
-		});
-		this.threadsById.set(update.threadId, reduced.thread);
-		this.turnsByThreadId.set(update.threadId, reduced.turns);
-	}
-
-	async archiveThread(_threadId: string, _archived: boolean): Promise<void> { }
-	async deleteThread(_threadId: string): Promise<void> { }
-	async clearAll(_scope: VSCloneChatHistoryScope): Promise<void> { }
 }
 
 async function withMutedConsole(run: () => Promise<void>): Promise<void> {
@@ -132,6 +96,49 @@ async function withMutedConsole(run: () => Promise<void>): Promise<void> {
 		console.warn = originalConsole.warn;
 		console.error = originalConsole.error;
 	}
+}
+
+function createTranscriptRecorder(): {
+	readonly observer: IVSCloneAgentLoopObserver;
+	readonly state: {
+		responseText: string;
+		replaceCalls: number;
+		completed: number;
+		cancelled: number;
+		errors: string[];
+	};
+} {
+	const state = {
+		responseText: '',
+		replaceCalls: 0,
+		completed: 0,
+		cancelled: 0,
+		errors: [] as string[],
+	};
+	return {
+		observer: {
+			onResponseDelta: delta => {
+				state.responseText += delta;
+			},
+			// The runtime service replaces the streamed assistant transcript when the sanitizer
+			// removes fabricated tool output. Mirror that contract here so the agent-loop tests
+			// validate the same observer shape the runtime now depends on.
+			onResponseReplace: responseText => {
+				state.replaceCalls += 1;
+				state.responseText = responseText;
+			},
+			onComplete: () => {
+				state.completed += 1;
+			},
+			onCancel: () => {
+				state.cancelled += 1;
+			},
+			onError: message => {
+				state.errors.push(message);
+			},
+		},
+		state,
+	};
 }
 
 suite('VSCloneAgentLoopService', () => {
@@ -161,11 +168,10 @@ suite('VSCloneAgentLoopService', () => {
 			summary,
 		].join('\n');
 
-		const historyService = new TestHistoryService();
+		const transcript = createTranscriptRecorder();
 		const service = new VSCloneAgentLoopService(
 			new TestChatApiService(scriptedResponse),
 			new TestToolExecutionService(),
-			historyService,
 			new NullLogService(),
 		);
 
@@ -183,20 +189,17 @@ suite('VSCloneAgentLoopService', () => {
 					modelIdentifier: 'openai/gpt-5.3-codex',
 					previousTurns: [],
 					systemMessage: 'SYSTEM',
+					observer: transcript.observer,
 				});
 
 				await handle.done;
 			});
 
-			const replacementUpdate = historyService.updates.find(update => typeof update.responsePlainTextReplace === 'string');
-			assert.ok(replacementUpdate);
-			assert.ok(!replacementUpdate?.responsePlainTextReplace?.includes('<tool_result>\ntestgame/\n</tool_result>'));
-			assert.ok(!replacementUpdate?.responsePlainTextReplace?.includes(`</tool_call>\n${summary}`));
-
-			const persistedTurn = historyService.getTurns('thread-1')[0];
-			assert.ok(persistedTurn.responsePlainText.includes('<tool_result tool_name="list_directory" success="true">'));
-			assert.ok(persistedTurn.responsePlainText.includes('<tool_result tool_name="attempt_completion" success="true">'));
-			assert.ok(!persistedTurn.responsePlainText.includes('<tool_result>\ntestgame/\n</tool_result>'));
+			assert.ok(!transcript.state.responseText.includes('<tool_result>\ntestgame/\n</tool_result>'));
+			assert.ok(!transcript.state.responseText.includes(`</tool_call>\n${summary}`));
+			assert.ok(transcript.state.responseText.includes('<tool_result tool_name="list_directory" success="true">'));
+			assert.ok(transcript.state.responseText.includes('<tool_result tool_name="attempt_completion" success="true">'));
+			assert.ok(transcript.state.replaceCalls > 0, 'expected the sanitizer path to replace the streamed transcript at least once');
 		} finally {
 			service.dispose();
 		}
@@ -238,12 +241,11 @@ suite('VSCloneAgentLoopService', () => {
 			'<pattern>foo</pattern>',
 			'</tool_call>',
 		].join('\n');
-		const historyService = new TestHistoryService();
 		const toolService = new HangingToolExecutionService();
+		const transcript = createTranscriptRecorder();
 		const service = new VSCloneAgentLoopService(
 			new TestChatApiService(scriptedResponse),
 			toolService,
-			historyService,
 			new NullLogService(),
 		);
 
@@ -261,6 +263,7 @@ suite('VSCloneAgentLoopService', () => {
 					modelIdentifier: 'openai/gpt-5.3-codex',
 					previousTurns: [],
 					systemMessage: 'SYSTEM',
+					observer: transcript.observer,
 				});
 
 				await toolService.toolStarted.p;
@@ -269,8 +272,7 @@ suite('VSCloneAgentLoopService', () => {
 			});
 
 			assert.strictEqual(toolService.cancellationObserved, true);
-			const cancelUpdate = historyService.updates.find(update => update.phase === 'cancel');
-			assert.ok(cancelUpdate, 'expected the agent loop to emit a cancel turn update after Stop is pressed');
+			assert.strictEqual(transcript.state.cancelled, 1);
 		} finally {
 			service.dispose();
 		}
@@ -297,7 +299,6 @@ suite('VSCloneAgentLoopService', () => {
 		const service = new VSCloneAgentLoopService(
 			apiService,
 			new TestToolExecutionService(),
-			new TestHistoryService(),
 			new NullLogService(),
 		);
 
@@ -330,6 +331,179 @@ suite('VSCloneAgentLoopService', () => {
 					undefined,
 				],
 			);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	test('multi-iteration transcript replacement keeps earlier assistant output in the runtime buffer', async () => {
+		const transcript = createTranscriptRecorder();
+		const service = new VSCloneAgentLoopService(
+			new TestChatApiService([
+				[
+					'Thinking: I will inspect the workspace first.',
+					'<tool_call>',
+					'<tool_name>list_directory</tool_name>',
+					'<path>.</path>',
+					'</tool_call>',
+				].join('\n'),
+				[
+					'Thinking: I can finish now.',
+					'<tool_call>',
+					'<tool_name>attempt_completion</tool_name>',
+					'<result>Done.</result>',
+					'</tool_call>',
+				].join('\n'),
+			]),
+			new TestToolExecutionService(),
+			new NullLogService(),
+		);
+
+		try {
+			await withMutedConsole(async () => {
+				const handle = service.runAgentLoop({
+					threadId: 'thread-multi-iteration',
+					turnId: 'turn-multi-iteration',
+					sequence: 1,
+					sessionResource: 'vsclone://api/thread-multi-iteration',
+					promptText: 'Inspect and finish',
+					mode: 'act',
+					vendor: 'openai' as VSCloneModelVendor,
+					modelId: 'gpt-5.3-codex',
+					modelIdentifier: 'openai/gpt-5.3-codex',
+					previousTurns: [],
+					systemMessage: 'SYSTEM',
+					observer: transcript.observer,
+				});
+
+				await handle.done;
+			});
+
+			assert.ok(transcript.state.responseText.includes('tool_name="list_directory" success="true"'));
+			assert.ok(transcript.state.responseText.includes('tool_name="attempt_completion" success="true"'));
+			assert.ok(transcript.state.responseText.includes('[Agent iteration 2]'));
+		} finally {
+			service.dispose();
+		}
+	});
+
+	test('tool execution pauses until approval resolves', async () => {
+		const approvalGate = new DeferredPromise<VSCloneThreadToolApprovalDecision>();
+		const toolService = new TestToolExecutionService();
+		const service = new VSCloneAgentLoopService(
+			new TestChatApiService([
+				[
+					'Thinking: I will edit the file.',
+					'<tool_call>',
+					'<tool_name>edit_file</tool_name>',
+					'<path>src/app.ts</path>',
+					'<changes><![CDATA[before]]></changes>',
+					'</tool_call>',
+				].join('\n'),
+				[
+					'Thinking: The edit is complete.',
+					'<tool_call>',
+					'<tool_name>attempt_completion</tool_name>',
+					'<result>Done.</result>',
+					'</tool_call>',
+				].join('\n'),
+			]),
+			toolService,
+			new NullLogService(),
+		);
+
+		try {
+			await withMutedConsole(async () => {
+				const handle = service.runAgentLoop({
+					threadId: 'thread-approval',
+					turnId: 'turn-approval',
+					sequence: 1,
+					sessionResource: 'vsclone://api/thread-approval',
+					promptText: 'edit src/app.ts',
+					mode: 'act',
+					vendor: 'openai' as VSCloneModelVendor,
+					modelId: 'gpt-5.3-codex',
+					modelIdentifier: 'openai/gpt-5.3-codex',
+					previousTurns: [],
+					systemMessage: 'SYSTEM',
+					observer: {
+						onToolRequested: () => approvalGate.p,
+					},
+				});
+
+				await Promise.resolve();
+				assert.strictEqual(toolService.editFileCalls, 0);
+
+				approvalGate.complete({ kind: 'approved' });
+				await handle.done;
+			});
+
+			assert.strictEqual(toolService.editFileCalls, 1);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	test('rejected approvals surface as failed tool results without executing the tool', async () => {
+		const transcript = createTranscriptRecorder();
+		const toolService = new TestToolExecutionService();
+		const observedToolResults: IVSCloneToolExecutionResult[] = [];
+		const service = new VSCloneAgentLoopService(
+			new TestChatApiService([
+				[
+					'Thinking: I will edit the file.',
+					'<tool_call>',
+					'<tool_name>edit_file</tool_name>',
+					'<path>src/app.ts</path>',
+					'<changes><![CDATA[before]]></changes>',
+					'</tool_call>',
+				].join('\n'),
+				[
+					'Thinking: I will explain the rejection.',
+					'<tool_call>',
+					'<tool_name>attempt_completion</tool_name>',
+					'<result>Could not continue because the edit was rejected.</result>',
+					'</tool_call>',
+				].join('\n'),
+			]),
+			toolService,
+			new NullLogService(),
+		);
+
+		try {
+			await withMutedConsole(async () => {
+				const handle = service.runAgentLoop({
+					threadId: 'thread-rejected-approval',
+					turnId: 'turn-rejected-approval',
+					sequence: 1,
+					sessionResource: 'vsclone://api/thread-rejected-approval',
+					promptText: 'edit src/app.ts',
+					mode: 'act',
+					vendor: 'openai' as VSCloneModelVendor,
+					modelId: 'gpt-5.3-codex',
+					modelIdentifier: 'openai/gpt-5.3-codex',
+					previousTurns: [],
+					systemMessage: 'SYSTEM',
+					observer: {
+						...transcript.observer,
+						onToolRequested: () => ({ kind: 'rejected', reason: 'Denied by reviewer.' }),
+						onToolResult: (_toolName, _params, result) => {
+							observedToolResults.push(result);
+						},
+					},
+				});
+
+				await handle.done;
+			});
+
+			assert.strictEqual(toolService.editFileCalls, 0);
+			assert.strictEqual(observedToolResults.length >= 1, true);
+			assert.deepStrictEqual(observedToolResults[0], {
+				success: false,
+				output: 'Denied by reviewer.',
+			});
+			assert.ok(transcript.state.responseText.includes('tool_name="edit_file" success="false"'));
+			assert.ok(transcript.state.responseText.includes('Denied by reviewer.'));
 		} finally {
 			service.dispose();
 		}

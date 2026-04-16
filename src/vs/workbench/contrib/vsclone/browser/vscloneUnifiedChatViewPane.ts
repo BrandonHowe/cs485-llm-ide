@@ -38,7 +38,6 @@ import { INotificationService } from "../../../../platform/notification/common/n
 import { IOpenerService } from "../../../../platform/opener/common/opener.js";
 import { IFileService } from "../../../../platform/files/common/files.js";
 import { IMarkdownRendererService } from "../../../../platform/markdown/browser/markdownRenderer.js";
-import { IStorageService, StorageScope, StorageTarget } from "../../../../platform/storage/common/storage.js";
 import { IThemeService } from "../../../../platform/theme/common/themeService.js";
 import {
 	IViewPaneOptions,
@@ -73,13 +72,23 @@ import {
 import { IVSCloneChatSessionService } from "./vscloneChatSessionService.js";
 import { VSCloneModelSwitcherWidget } from "./vscloneModelSwitcherWidget.js";
 import { IVSCloneProviderConfigurationBridge } from "./vscloneProviderConfigurationBridge.js";
+import { IVSCloneThreadRuntimeService } from "./vscloneThreadRuntimeService.js";
 import { toVSCloneRailRows } from "./vscloneChatHistoryRailTree.js";
-import { IVSCloneEditApplicationService, type IVSCloneEditApplyResult, type IVSCloneEditFileChange } from "./vscloneEditApplicationService.js";
+import {
+	IVSCloneEditApplicationService,
+	type IVSCloneEditApplyResult,
+	type IVSCloneEditFileChange,
+} from "./vscloneEditApplicationService.js";
 import { parseToolResultDiff } from "../common/vscloneToolResultDiff.js";
 import {
 	toVSCloneImageDataUrl,
 	type IVSCloneImageAttachment,
 } from "../common/vscloneImageAttachmentTypes.js";
+import {
+	type IVSCloneThreadRuntimeCheckpoint,
+	type IVSCloneThreadRuntimeMessage,
+	type IVSCloneThreadRuntimeState,
+} from "../common/vscloneThreadRuntimeTypes.js";
 
 const railWidthSetting = "vsclone.chatHistory.railWidth";
 const modelSwitcherEnabledSetting = "vsclone.modelSwitcher.enabled";
@@ -196,110 +205,21 @@ function decodeXmlText(value: string): string {
 /**
  * Per-turn lifecycle for an assistant turn that contains SEARCH/REPLACE blocks. Auto-apply
  * starts in `pending`, lands in `applied` (success) or `failed` (no matching SEARCH block),
- * and can flip between `applied` and `undone` as the user toggles Undo/Redo. The full apply
- * result is carried on `applied` and `undone` so the diff card stays visible across an undo.
+ * and can flip between `applied` and `undone` as the user toggles Undo/Redo. Partial apply and
+ * partial undo keep the summary visible with an explicit retry action so the UI does not pretend
+ * the workflow is terminal when only some files actually succeeded.
  */
 type EditApplyState =
 	| { readonly phase: "pending" }
 	| { readonly phase: "failed" }
 	| { readonly phase: "applied"; readonly result: IVSCloneEditApplyResult }
-	| { readonly phase: "undone"; readonly result: IVSCloneEditApplyResult };
+	| { readonly phase: "undone"; readonly result: IVSCloneEditApplyResult }
+	| { readonly phase: "partial"; readonly result: IVSCloneEditApplyResult; readonly retryAction: "apply" | "undo" };
 
-const editApplyStateStorageKey = "vsclone.chat.editApplyState";
-
-/**
- * On-disk shape for the edit apply state map. URIs are flattened to strings since `JSON.stringify`
- * does not natively round-trip a `URI` instance, and the runtime side reconstructs them via
- * `URI.parse`. Only the persisted phases are represented here. `pending` is intentionally
- * dropped at serialization time because the in-flight apply belongs to a process that is gone.
- */
-interface IPersistedEditApplyState {
-	readonly phase: "failed" | "applied" | "undone";
-	readonly fileChanges?: readonly IPersistedEditFileChange[];
-}
-
-interface IPersistedEditFileChange {
-	readonly uri: string;
-	readonly displayPath: string;
-	readonly addedLines: number;
-	readonly removedLines: number;
-	readonly action: "create" | "modify";
-	readonly originalContent?: string;
-}
-
-function serializePersistedEditApplyState(state: EditApplyState): IPersistedEditApplyState | undefined {
-	if (state.phase === "pending") {
-		return undefined;
-	}
-	if (state.phase === "failed") {
-		return { phase: "failed" };
-	}
-	return {
-		phase: state.phase,
-		fileChanges: state.result.fileChanges.map((change): IPersistedEditFileChange => ({
-			uri: change.uri.toString(),
-			displayPath: change.displayPath,
-			addedLines: change.addedLines,
-			removedLines: change.removedLines,
-			action: change.action,
-			originalContent: change.originalContent,
-		})),
-	};
-}
-
-function deserializePersistedEditApplyState(value: unknown): EditApplyState | undefined {
-	if (!value || typeof value !== "object") {
-		return undefined;
-	}
-	const candidate = value as IPersistedEditApplyState;
-	if (candidate.phase === "failed") {
-		return { phase: "failed" };
-	}
-	if (candidate.phase !== "applied" && candidate.phase !== "undone") {
-		return undefined;
-	}
-	if (!Array.isArray(candidate.fileChanges)) {
-		return undefined;
-	}
-	const fileChanges: IVSCloneEditFileChange[] = [];
-	for (const raw of candidate.fileChanges) {
-		if (!raw || typeof raw !== "object") {
-			continue;
-		}
-		const change = raw as IPersistedEditFileChange;
-		if (typeof change.uri !== "string" || typeof change.displayPath !== "string") {
-			continue;
-		}
-		let parsedUri: URI;
-		try {
-			parsedUri = URI.parse(change.uri);
-		} catch {
-			continue;
-		}
-		fileChanges.push({
-			uri: parsedUri,
-			displayPath: change.displayPath,
-			addedLines: typeof change.addedLines === "number" ? change.addedLines : 0,
-			removedLines: typeof change.removedLines === "number" ? change.removedLines : 0,
-			action: change.action === "create" ? "create" : "modify",
-			originalContent: typeof change.originalContent === "string" ? change.originalContent : undefined,
-		});
-	}
-	if (fileChanges.length === 0) {
-		return undefined;
-	}
-	// Reconstruct a minimal IVSCloneEditApplyResult sufficient for the renderer + undo path.
-	// Fields the renderer doesn't read (attemptedEdits, failures, modifiedFiles) are filled with
-	// best-effort defaults rather than persisted, since they would balloon the storage payload
-	// without affecting any UI behaviour.
-	const result: IVSCloneEditApplyResult = {
-		attemptedEdits: fileChanges.length,
-		appliedEdits: fileChanges.length,
-		modifiedFiles: fileChanges.map(change => change.uri),
-		failures: [],
-		fileChanges,
-	};
-	return { phase: candidate.phase, result };
+interface IAssistantApplyTarget {
+	readonly threadId: string;
+	readonly id: string;
+	readonly responseText: string;
 }
 
 export class VSCloneUnifiedChatViewPane extends ViewPane {
@@ -331,12 +251,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.instantiationService.createInstance(VSCloneChatHistoryRail),
 	);
 	private readonly threadsById = new Map<string, IVSCloneChatHistoryThread>();
-	// Per-turn state machine for the auto-apply / undo / redo flow. Each completed assistant
-	// turn that emits SEARCH/REPLACE blocks transitions through pending → applied → undone →
-	// applied as the user (or the auto-apply scheduler) acts on it. Storing the full apply
-	// result on the 'applied' and 'undone' phases lets the renderer keep the diff card visible
-	// across an undo+redo cycle and lets the undo handler restore exact pre-apply contents.
-	private readonly editApplyStateByTurnId = new Map<string, EditApplyState>();
+	// Durable apply summaries now live on the runtime branch via the assistant-edit application API.
+	// The pane only keeps a transient pending set so repeated refreshes do not launch duplicate
+	// browser-local apply work while the engine bridge is still running.
+	private readonly pendingAssistantApplyMessageIds = new Set<string>();
+	// Some runtime services may emit state changes while hydration is still unwinding, so imports
+	// mark the thread as transiently guarded until the imported runtime snapshot has settled.
+	private readonly importingRuntimeThreadIds = new Set<string>();
 	private readonly refreshRailScheduler = this._register(
 		new RunOnceScheduler(() => {
 			this.refreshRailRows();
@@ -382,6 +303,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IClipboardService private readonly clipboardService: IClipboardService,
 		@IVSCloneEditApplicationService
 		private readonly editApplicationService: IVSCloneEditApplicationService,
+		@IVSCloneThreadRuntimeService
+		private readonly threadRuntimeService: IVSCloneThreadRuntimeService,
 		@INotificationService
 		private readonly notificationService: INotificationService,
 		@IEditorService private readonly editorService: IEditorService,
@@ -389,7 +312,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IFileService private readonly fileService: IFileService,
 		@IMarkdownRendererService
 		private readonly markdownRendererService: IMarkdownRendererService,
-		@IStorageService private readonly storageService: IStorageService,
 	) {
 		super(
 			options,
@@ -411,8 +333,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				this.configurationService.getValue<number>(railWidthSetting) ?? 320,
 			),
 		);
-
-		this.hydrateEditApplyStateFromStorage();
 
 		this._register(
 			this.rail.onDidSelectThread((threadId) => {
@@ -479,6 +399,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					!this.activeThreadId || event.threadIds.includes(this.activeThreadId);
 				if (event.reason === "turnUpdate") {
 					if (affectsActiveThread) {
+						this.importActiveThreadRuntimeState();
 						this.refreshConversationScheduler.schedule(24);
 						// Trigger auto-apply on the same event the streaming completes so the user
 						// never has to click the apply button on the happy path.
@@ -489,9 +410,25 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				}
 
 				if (affectsActiveThread || event.reason === "clear") {
+					this.importActiveThreadRuntimeState();
 					this.refreshConversationScheduler.schedule(0);
 				}
 				this.refreshRailScheduler.schedule(0);
+			}),
+		);
+		this._register(
+			this.threadRuntimeService.onDidChangeState((state) => {
+				if (state.threadId !== this.activeThreadId) {
+					return;
+				}
+				// Runtime-only workflow state currently exists outside persisted turn history, so the
+				// pane has to listen to both channels until the thread runtime becomes the sole source
+				// of truth. Refreshing through the same scheduler keeps tool/checkpoint cards aligned
+				// with the existing transcript rebuild cadence.
+				this.refreshConversationScheduler.schedule(0);
+				this.maybeAutoApplyRuntimeAssistantMessages(state);
+				this.updateComposerState();
+				this.refreshPlanModeControl();
 			}),
 		);
 
@@ -597,6 +534,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
+		const importedRuntimeState = this.importRuntimeThreadState(targetThreadId);
 		this.activeThreadId = targetThreadId;
 		this.rail.setSelectedThread(targetThreadId);
 		this.railVisible = false;
@@ -615,32 +553,39 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	async copyPrompt(threadId?: string): Promise<void> {
-		const latestTurn = this.getLatestTurn(threadId);
-		if (!latestTurn) {
+		this.importRuntimeThreadState(
+			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread(),
+		);
+		const latestPrompt = this.getLatestConversationPrompt(threadId);
+		if (!latestPrompt) {
 			return;
 		}
-		await this.clipboardService.writeText(latestTurn.promptText);
+		await this.clipboardService.writeText(latestPrompt.content);
 	}
 
 	async copyResponse(threadId?: string): Promise<void> {
-		const latestTurn = this.getLatestTurn(threadId);
-		if (!latestTurn) {
+		this.importRuntimeThreadState(
+			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread(),
+		);
+		const latestResponse = this.getLatestConversationResponse(threadId);
+		if (!latestResponse) {
 			return;
 		}
-		await this.clipboardService.writeText(
-			latestTurn.responsePlainText || latestTurn.responseMarkdown,
-		);
+		await this.clipboardService.writeText(latestResponse.content);
 	}
 
 	reusePrompt(threadId?: string): void {
-		const latestTurn = this.getLatestTurn(threadId);
-		if (!latestTurn || !this.composerInput) {
+		this.importRuntimeThreadState(
+			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread(),
+		);
+		const latestPrompt = this.getLatestConversationPrompt(threadId);
+		if (!latestPrompt || !this.composerInput) {
 			return;
 		}
-		this.composerInput.value = latestTurn.promptText;
+		this.composerInput.value = latestPrompt.content;
 		// Rehydrating stored images here makes "reuse prompt" faithful for multimodal turns instead
 		// of silently dropping the visual context that the original request depended on.
-		this.pendingImages = this.toPendingImages(latestTurn.promptImages);
+		this.pendingImages = this.toPendingImages(latestPrompt.imageAttachments);
 		this.renderImageStrip();
 		this.updateComposerMetrics();
 		this.focusInput();
@@ -1128,6 +1073,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (activeThreadId && this.isThreadBusy(activeThreadId)) {
 			return;
 		}
+		if (activeThreadId && this.hasPendingAssistantApply(activeThreadId)) {
+			return;
+		}
 
 		// Wait for restore-backed state before reading the visible composer controls so an eager send
 		// cannot capture fallback defaults while thread selections and plan mode are still hydrating.
@@ -1363,6 +1311,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				this.railVisible = false;
 				this.applyRailLayout();
 			}
+			this.importActiveThreadRuntimeState();
 			this.refreshConversation();
 		} catch {
 			this.historyReady = false;
@@ -1416,28 +1365,672 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
-		const turns = this.activeThreadId
-			? this.historyService.getTurns(this.activeThreadId)
+		const runtimeState = this.getThreadRuntimeState(this.activeThreadId);
+		const runtimeNodes = runtimeState
+			? this.renderRuntimeConversationNodes(runtimeState)
 			: [];
-		const hasTurns = turns.length > 0;
+		const hasRuntimeNodes = runtimeNodes.length > 0;
 		// Refresh rebuilds the transcript DOM from scratch, so dispose markdown renderers from
 		// the previous pass before replacing nodes to avoid leaking listeners.
 		this.renderedMarkdownDisposables.clear();
 		this.conversationList.replaceChildren();
-		this.conversationEmptyState.classList.toggle("hidden", hasTurns);
-
-		if (hasTurns) {
-			const fragment = document.createDocumentFragment();
-			for (const turn of turns) {
-				fragment.appendChild(this.renderUserMessage(turn));
-				fragment.appendChild(this.renderAssistantMessage(turn));
-			}
-			this.conversationList.appendChild(fragment);
+		this.conversationEmptyState.classList.toggle(
+			"hidden",
+			hasRuntimeNodes,
+		);
+		if (hasRuntimeNodes) {
+			this.conversationList.append(...runtimeNodes);
 		}
 
 		this.updateComposerState();
 		this.refreshModelControls();
 		this.scheduleScrollToBottom();
+	}
+
+	private renderRuntimeConversationNodes(
+		state: IVSCloneThreadRuntimeState,
+	): HTMLElement[] {
+		const nodes: HTMLElement[] = [];
+		for (const message of state.messages) {
+			switch (message.role) {
+				case 'user':
+					nodes.push(this.renderRuntimeUserMessage(message));
+					break;
+				case 'assistant':
+					nodes.push(this.renderRuntimeAssistantMessage(message, state.threadId));
+					break;
+				case 'tool':
+					nodes.push(this.renderRuntimeToolMessage(state.threadId, state, message));
+					break;
+				case 'checkpoint':
+					nodes.push(
+						this.renderRuntimeCheckpointMessage(
+							state.threadId,
+							message.checkpoint,
+							this.isThreadBusy(state.threadId),
+						),
+					);
+					break;
+			}
+		}
+
+		const statusMessage = this.renderRuntimeStatusMessage(state);
+		if (statusMessage) {
+			nodes.push(statusMessage);
+		}
+		return nodes;
+	}
+
+	private renderRuntimeUserMessage(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'user' }>,
+	): HTMLElement {
+		const item = document.createElement('div');
+		item.className = 'vsclone-thread-message user runtime';
+
+		const meta = document.createElement('div');
+		meta.className = 'vsclone-thread-message-meta';
+		meta.textContent = localize('vsclone.thread.userLabel', 'You');
+		item.appendChild(meta);
+
+		const body = document.createElement('div');
+		body.className = 'vsclone-thread-message-body';
+		if (message.content.trim().length > 0) {
+			const promptText = document.createElement('div');
+			promptText.className = 'vsclone-thread-message-user-text';
+			promptText.textContent = message.content;
+			body.appendChild(promptText);
+		}
+		if (message.imageAttachments && message.imageAttachments.length > 0) {
+			body.appendChild(this.renderPromptImageStrip(message.imageAttachments));
+		}
+		item.appendChild(body);
+		return item;
+	}
+
+	private renderRuntimeAssistantMessage(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
+		threadId: string = this.activeThreadId ?? "",
+	): HTMLElement {
+		const item = document.createElement('div');
+		item.className = 'vsclone-thread-message assistant runtime';
+
+		const meta = document.createElement('div');
+		meta.className = 'vsclone-thread-message-meta';
+		meta.textContent = localize('vsclone.thread.assistantLabel', 'Assistant');
+		item.appendChild(meta);
+
+		const body = document.createElement('div');
+		body.className = 'vsclone-thread-message-body';
+		const visibleText = this.stripRuntimeAssistantWorkflowMarkup(message.content);
+		if (visibleText.trim().length > 0) {
+			if (visibleText.includes("<<<<<<< SEARCH") || this.looksLikePartialSearchReplaceBlock(visibleText)) {
+				// Runtime assistant text still carries edit suggestions inline, but workflow XML is
+				// rendered from the dedicated runtime tool/checkpoint messages instead of duplicated
+				// inside the prose bubble.
+				this.renderSearchReplaceAwareText(body, visibleText, false);
+			} else {
+				this.appendMarkdownSegment(body, visibleText, 'vsclone-thread-message-assistant-text');
+			}
+		}
+		item.appendChild(body);
+		if (
+			visibleText.trim().length > 0 &&
+			this.shouldOfferRuntimeAssistantApply(threadId, message, visibleText)
+		) {
+			this.appendAssistantApplyControls(item, {
+				threadId,
+				id: message.id,
+				responseText: visibleText,
+			});
+		}
+		return item;
+	}
+
+	private stripRuntimeAssistantWorkflowMarkup(text: string): string {
+		return text
+			.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+			.replace(/<tool_result\b[\s\S]*?<\/tool_result>/g, '')
+			.replace(/<agent_trace\b[\s\S]*?<\/agent_trace>/g, '')
+			.trim();
+	}
+
+	private getThreadRuntimeState(
+		threadId: string | undefined,
+	): IVSCloneThreadRuntimeState | undefined {
+		if (!threadId) {
+			return undefined;
+		}
+		return this.threadRuntimeService?.getState(threadId);
+	}
+
+	private getImportingRuntimeThreadIds(): Set<string> {
+		const target = this as unknown as {
+			importingRuntimeThreadIds?: Set<string>;
+		};
+		target.importingRuntimeThreadIds ??= new Set();
+		return target.importingRuntimeThreadIds;
+	}
+
+	private importRuntimeThreadState(
+		threadId: string | undefined,
+	): IVSCloneThreadRuntimeState | undefined {
+		if (!threadId) {
+			return undefined;
+		}
+		const runtimeState = this.threadRuntimeService?.getState(threadId);
+		if (runtimeState) {
+			return runtimeState;
+		}
+
+		// Active transcript rendering only reads runtime state. If a thread still exists solely in
+		// legacy history we import that transcript into runtime first through explicit UI/session
+		// entrypoints, then later reads/rendering consume runtime state directly.
+		const importingRuntimeThreadIds = this.getImportingRuntimeThreadIds();
+		importingRuntimeThreadIds.add(threadId);
+		try {
+			const importedState = this.threadRuntimeService?.ensureHydratedFromHistory(
+				threadId,
+				this.historyService.getTurns(threadId),
+			);
+			return importedState;
+		} finally {
+			importingRuntimeThreadIds.delete(threadId);
+		}
+	}
+
+	private importActiveThreadRuntimeState(): IVSCloneThreadRuntimeState | undefined {
+		return this.importRuntimeThreadState(this.activeThreadId);
+	}
+
+	private getRuntimeAssistantMessageMode(
+		state: IVSCloneThreadRuntimeState,
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
+	): VSCloneChatMode | undefined {
+		return (message as { readonly mode?: VSCloneChatMode }).mode ?? state.mode;
+	}
+
+	private shouldOfferRuntimeAssistantApply(
+		threadId: string,
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
+		visibleText: string,
+	): boolean {
+		if (!(this.editApplicationService?.hasSearchReplaceBlocks(visibleText) ?? false)) {
+			return false;
+		}
+
+		const runtimeState = this.getThreadRuntimeState(threadId);
+		const messageMode = runtimeState
+			? this.getRuntimeAssistantMessageMode(runtimeState, message)
+			: (message as { readonly mode?: VSCloneChatMode }).mode;
+		return messageMode !== 'plan';
+	}
+
+	private isManualOnlyRuntimeAssistantApplyMessage(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
+	): boolean {
+		// The durable import marker is persisted inside runtime message metadata. Reading that field
+		// directly keeps imported SEARCH/REPLACE suggestions manual-only even after a full reload.
+		return message.metadata?.importedFromHistory === true;
+	}
+
+	private getVisibleRuntimeWorkflowMessages(
+		messages: readonly IVSCloneThreadRuntimeMessage[],
+	): ReadonlyArray<
+		Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" | "checkpoint" }>
+	> {
+		const visible: Array<
+			Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" | "checkpoint" }>
+		> = [];
+		for (let index = 0; index < messages.length; index++) {
+			const message = messages[index];
+			if (message.role === "checkpoint") {
+				visible.push(message);
+				continue;
+			}
+			if (message.role !== "tool") {
+				continue;
+			}
+
+			const nextMessage = messages[index + 1];
+			// Tool request -> running -> terminal result all arrive as separate runtime messages.
+			// The pane collapses those adjacent lifecycle steps so users see the latest material
+			// state for one invocation rather than three nearly identical cards in a row.
+			if (
+				message.type === "tool_request" &&
+				this.isSuccessorForSameRuntimeTool(
+					message,
+					nextMessage,
+					"running_now",
+				)
+			) {
+				continue;
+			}
+			if (
+				message.type === "running_now" &&
+				this.isSuccessorForSameRuntimeTool(
+					message,
+					nextMessage,
+					"success",
+					"tool_error",
+					"rejected",
+				)
+			) {
+				continue;
+			}
+			visible.push(message);
+		}
+		return visible;
+	}
+
+	private isSuccessorForSameRuntimeTool(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
+		nextMessage: IVSCloneThreadRuntimeMessage | undefined,
+		...types: Array<
+			Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>["type"]
+		>
+	): boolean {
+		return (
+			nextMessage?.role === "tool" &&
+			nextMessage.toolName === message.toolName &&
+			nextMessage.type !== undefined &&
+			types.includes(nextMessage.type) &&
+			this.serializeRuntimeToolParams(nextMessage.params) ===
+				this.serializeRuntimeToolParams(message.params)
+		);
+	}
+
+	private renderRuntimeStatusMessage(
+		state: IVSCloneThreadRuntimeState,
+	): HTMLElement | undefined {
+		let label: string | undefined;
+		let statusClass = "running";
+		switch (state.streamState.kind) {
+			case "llm":
+				label = localize(
+					"vsclone.thread.runtime.status.llm",
+					"Assistant is thinking...",
+				);
+				break;
+			case "awaiting_user":
+				statusClass = "awaiting";
+				label = state.streamState.approvalType
+					? localize(
+						"vsclone.thread.runtime.status.awaitingApproval",
+						"Approval required for {0} ({1}).",
+						state.streamState.toolName,
+						state.streamState.approvalType,
+					)
+					: localize(
+						"vsclone.thread.runtime.status.awaitingUser",
+						"Approval required for {0}.",
+						state.streamState.toolName,
+					);
+				break;
+			case "tool":
+				if (this.hasVisibleRunningRuntimeTool(state.messages)) {
+					return undefined;
+				}
+				label = localize(
+					"vsclone.thread.runtime.status.tool",
+					"Running tool: {0}",
+					state.streamState.toolName,
+				);
+				break;
+			default:
+				return undefined;
+		}
+
+		const status = document.createElement("div");
+		status.className = "vsclone-thread-message assistant runtime runtime-status";
+		status.classList.add(`status-${statusClass}`);
+
+		const body = document.createElement("div");
+		body.className = "vsclone-thread-message-body";
+		const badge = document.createElement("div");
+		badge.className = "vsclone-runtime-status-badge";
+		const icon = document.createElement("span");
+		icon.className = "codicon";
+		if (statusClass === "awaiting") {
+			icon.classList.add("codicon-pass");
+		} else {
+			icon.classList.add("codicon-loading", "codicon-modifier-spin");
+		}
+		icon.setAttribute("aria-hidden", "true");
+		badge.appendChild(icon);
+		const text = document.createElement("span");
+		text.textContent = label;
+		badge.appendChild(text);
+		body.appendChild(badge);
+		status.appendChild(body);
+		return status;
+	}
+
+	private hasVisibleRunningRuntimeTool(
+		messages: readonly IVSCloneThreadRuntimeMessage[],
+	): boolean {
+		return this.getVisibleRuntimeWorkflowMessages(messages).some(
+			(message) => message.role === "tool" && message.type === "running_now",
+		);
+	}
+
+	private renderRuntimeToolMessage(
+		threadId: string,
+		state: IVSCloneThreadRuntimeState,
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
+	): HTMLElement {
+		const item = document.createElement("div");
+		item.className = "vsclone-thread-message assistant runtime runtime-tool";
+
+		const body = document.createElement("div");
+		body.className = "vsclone-thread-message-body";
+		body.appendChild(
+			this.renderToolCard(
+				message.toolName,
+				this.getRuntimeToolDisplayLabel(message),
+				this.toRuntimeToolCardStatus(message),
+				message.output,
+				message.type === "success" && message.output
+					? this.renderToolResultDiffCard(message.toolName, message.output)
+					: undefined,
+				this.renderRuntimeToolActions(threadId, state, message),
+			),
+		);
+		item.appendChild(body);
+		return item;
+	}
+
+	private renderRuntimeToolActions(
+		threadId: string,
+		state: IVSCloneThreadRuntimeState,
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
+	): HTMLElement | undefined {
+		const latestRuntimeTool = state.messages.at(-1);
+		const latestRuntimeToolParams = latestRuntimeTool?.role === "tool"
+			? latestRuntimeTool.params
+			: {};
+		// Approval controls are only rendered for the live pending request. Older tool_request cards
+		// remain historical records and should not be able to mutate the current runtime.
+		if (
+			message.type !== "tool_request" ||
+			state.streamState.kind !== "awaiting_user" ||
+			state.streamState.toolName !== message.toolName ||
+			this.serializeRuntimeToolParams(latestRuntimeToolParams) !==
+				this.serializeRuntimeToolParams(message.params)
+		) {
+			return undefined;
+		}
+
+		const actions = document.createElement("div");
+		actions.className = "vsclone-runtime-tool-actions";
+
+		const approveButton = document.createElement("button");
+		approveButton.type = "button";
+		approveButton.className = "vsclone-runtime-checkpoint-button";
+		approveButton.textContent = localize(
+			"vsclone.thread.runtime.tool.approve",
+			"Approve",
+		);
+		approveButton.addEventListener(EventType.CLICK, () => {
+			if (!this.threadRuntimeService.approveLatestToolRequest(threadId)) {
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.runtime.tool.approveMissing",
+						"The pending tool request is no longer available.",
+					),
+				);
+			}
+		});
+		actions.appendChild(approveButton);
+
+		const rejectButton = document.createElement("button");
+		rejectButton.type = "button";
+		rejectButton.className = "vsclone-runtime-checkpoint-button";
+		rejectButton.textContent = localize(
+			"vsclone.thread.runtime.tool.reject",
+			"Reject",
+		);
+		rejectButton.addEventListener(EventType.CLICK, () => {
+			if (!this.threadRuntimeService.rejectLatestToolRequest(threadId, "Tool request was rejected by the user.")) {
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.runtime.tool.rejectMissing",
+						"The pending tool request is no longer available.",
+					),
+				);
+			}
+		});
+		actions.appendChild(rejectButton);
+
+		return actions;
+	}
+
+	private getRuntimeToolDisplayLabel(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
+	): string {
+		const detail = this.describeRuntimeToolParams(message.params);
+		switch (message.type) {
+			case "tool_request":
+				return message.approvalType
+					? localize(
+						"vsclone.thread.runtime.tool.requestWithApproval",
+						"Approval requested for {0} ({1}){2}",
+						message.toolName,
+						message.approvalType,
+						detail,
+					)
+					: localize(
+						"vsclone.thread.runtime.tool.request",
+						"Preparing {0}{1}",
+						message.toolName,
+						detail,
+					);
+			case "running_now":
+				return localize(
+					"vsclone.thread.runtime.tool.running",
+					"Running {0}{1}",
+					message.toolName,
+					detail,
+				);
+			case "success":
+				return localize(
+					"vsclone.thread.runtime.tool.success",
+					"Completed {0}{1}",
+					message.toolName,
+					detail,
+				);
+			case "rejected":
+				return localize(
+					"vsclone.thread.runtime.tool.rejected",
+					"Rejected {0}{1}",
+					message.toolName,
+					detail,
+				);
+			default:
+				return localize(
+					"vsclone.thread.runtime.tool.error",
+					"Failed {0}{1}",
+					message.toolName,
+					detail,
+				);
+		}
+	}
+
+	private describeRuntimeToolParams(params: Record<string, string>): string {
+		const detailKeys = ["path", "command", "query", "dir", "directory"];
+		for (const key of detailKeys) {
+			const value = params[key];
+			if (value) {
+				return ` (${value})`;
+			}
+		}
+		return "";
+	}
+
+	private serializeRuntimeToolParams(params: Record<string, string>): string {
+		return JSON.stringify(
+			Object.keys(params)
+				.sort((left, right) => left.localeCompare(right))
+				.map((key) => [key, params[key]]),
+		);
+	}
+
+	private toRuntimeToolCardStatus(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
+	): "running" | "complete" | "success" | "error" {
+		switch (message.type) {
+			case "tool_request":
+				return "complete";
+			case "running_now":
+				return "running";
+			case "success":
+				return "success";
+			case "rejected":
+			case "tool_error":
+				return "error";
+		}
+	}
+
+	private renderRuntimeCheckpointMessage(
+		threadId: string,
+		checkpoint: IVSCloneThreadRuntimeCheckpoint,
+		threadIsRunning: boolean,
+	): HTMLElement {
+		const item = document.createElement("div");
+		item.className = "vsclone-thread-message assistant runtime runtime-checkpoint";
+
+		const body = document.createElement("div");
+		body.className = "vsclone-thread-message-body";
+
+		const card = document.createElement("div");
+		card.className = "vsclone-runtime-checkpoint-card";
+
+		const summary = document.createElement("div");
+		summary.className = "vsclone-runtime-checkpoint-summary";
+		summary.textContent =
+			checkpoint.snapshots.length === 1
+				? localize(
+					"vsclone.thread.runtime.checkpoint.summary.one",
+					"Checkpoint saved after {0} with 1 file snapshot.",
+					checkpoint.toolName,
+				)
+				: localize(
+					"vsclone.thread.runtime.checkpoint.summary.many",
+					"Checkpoint saved after {0} with {1} file snapshots.",
+					checkpoint.toolName,
+					checkpoint.snapshots.length.toString(),
+				);
+		card.appendChild(summary);
+
+		const meta = document.createElement("div");
+		meta.className = "vsclone-runtime-checkpoint-meta";
+		meta.textContent = localize(
+			"vsclone.thread.runtime.checkpoint.meta",
+			"Created {0}",
+			fromNow(checkpoint.createdAt, true),
+		);
+		card.appendChild(meta);
+
+		const actions = document.createElement("div");
+		actions.className = "vsclone-runtime-checkpoint-actions";
+		const rewindButton = document.createElement("button");
+		rewindButton.type = "button";
+		rewindButton.className = "vsclone-runtime-checkpoint-button";
+		rewindButton.textContent = localize(
+			"vsclone.thread.runtime.checkpoint.rewind",
+			"Rewind to checkpoint",
+		);
+		const assistantApplyPending = this.hasPendingAssistantApply(threadId);
+		// Rewind is intentionally blocked during active execution because applying an older
+		// snapshot mid-run or mid-apply would race active mutations and leave the transcript
+		// describing a workspace state that no longer exists.
+		rewindButton.disabled = threadIsRunning || assistantApplyPending;
+		rewindButton.title = threadIsRunning
+			? localize(
+				"vsclone.thread.runtime.checkpoint.rewindDisabled",
+				"Wait for the active run to finish before rewinding.",
+			)
+			: assistantApplyPending
+				? localize(
+					"vsclone.thread.runtime.checkpoint.rewindApplyPending",
+					"Wait for edit application to finish before rewinding.",
+				)
+			: localize(
+				"vsclone.thread.runtime.checkpoint.rewindTooltip",
+				"Restore the files captured in this checkpoint.",
+			);
+		rewindButton.addEventListener(EventType.CLICK, () => {
+			void this.handleCheckpointRewind(threadId, checkpoint, rewindButton);
+		});
+		actions.appendChild(rewindButton);
+		card.appendChild(actions);
+
+		body.appendChild(card);
+		item.appendChild(body);
+		return item;
+	}
+
+	private async handleCheckpointRewind(
+		threadId: string,
+		checkpoint: IVSCloneThreadRuntimeCheckpoint,
+		button: HTMLButtonElement,
+	): Promise<void> {
+		if (this.isThreadBusy(threadId)) {
+			this.notificationService.warn(
+				localize(
+					"vsclone.thread.runtime.checkpoint.rewindBusy",
+					"Wait for the active run to finish before rewinding.",
+				),
+			);
+			return;
+		}
+		if (this.hasPendingAssistantApply(threadId)) {
+			this.notificationService.warn(
+				localize(
+					"vsclone.thread.runtime.checkpoint.rewindPendingApply",
+					"Wait for edit application to finish before rewinding.",
+				),
+			);
+			return;
+		}
+		button.disabled = true;
+		try {
+			const restored = await this.threadRuntimeService.rewindToCheckpoint(
+				threadId,
+				checkpoint.id,
+			);
+			if (!restored) {
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.runtime.checkpoint.rewindMissing",
+						"That checkpoint is no longer available.",
+					),
+				);
+				return;
+			}
+			this.notificationService.info(
+				localize(
+					"vsclone.thread.runtime.checkpoint.rewindSuccess",
+					"Restored {0} file snapshot(s) from {1}.",
+					checkpoint.snapshots.length,
+					checkpoint.toolName,
+				),
+			);
+			this.refreshConversation();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.notificationService.error(
+				localize(
+					"vsclone.thread.runtime.checkpoint.rewindError",
+					"Failed to restore the checkpoint: {0}",
+					message,
+				),
+			);
+		} finally {
+			const latestState = this.getThreadRuntimeState(threadId);
+			if (button.isConnected && !(latestState?.isRunning)) {
+				button.disabled = false;
+			}
+		}
 	}
 
 	private renderUserMessage(turn: IVSCloneChatHistoryTurn): HTMLElement {
@@ -1556,34 +2149,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			text.trim().length > 0 &&
 			this.editApplicationService.hasSearchReplaceBlocks(text)
 		) {
-			const state = this.editApplyStateByTurnId.get(turn.turnId);
-			if (state?.phase === "applied" || state?.phase === "undone") {
-				item.appendChild(this.renderEditApplySummary(turn, state));
-			} else if (state?.phase === "pending") {
-				const pendingIndicator = document.createElement("div");
-				pendingIndicator.className = "vsclone-thread-message-apply pending";
-				pendingIndicator.textContent = localize(
-					"vsclone.thread.assistant.apply.applyingAuto",
-					"Applying changes...",
-				);
-				item.appendChild(pendingIndicator);
-			} else if (state?.phase === "failed") {
-				// Auto-apply failed (typically because the SEARCH text no longer matches the file
-				// contents). Surface a manual retry button so the user is not stranded.
-				const applyButton = document.createElement("button");
-				applyButton.type = "button";
-				applyButton.className = "vsclone-thread-message-apply";
-				applyButton.textContent = localize(
-					"vsclone.thread.assistant.apply",
-					"Apply Changes",
-				);
-				applyButton.addEventListener(EventType.CLICK, () => {
-					void this.applyAssistantEdits(turn, applyButton);
-				});
-				item.appendChild(applyButton);
-			}
-			// If state is undefined, the auto-apply scheduler hasn't run yet for this turn.
-			// The next history change tick will set it to 'pending' and re-render.
+			this.appendAssistantApplyControls(item, {
+				threadId: turn.threadId,
+				id: turn.turnId,
+				responseText: text,
+			});
 		}
 
 		return item;
@@ -1598,8 +2168,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	 * see exactly which lines were touched.
 	 */
 	private renderEditApplySummary(
-		turn: IVSCloneChatHistoryTurn,
-		state: { readonly phase: "applied" | "undone"; readonly result: IVSCloneEditApplyResult },
+		target: IAssistantApplyTarget,
+		state:
+			| {
+				readonly phase: "applied" | "undone";
+				readonly result: IVSCloneEditApplyResult;
+			}
+			| {
+				readonly phase: "partial";
+				readonly result: IVSCloneEditApplyResult;
+				readonly retryAction: "apply" | "undo";
+			},
 	): HTMLElement {
 		const applyResult = state.result;
 		const card = document.createElement("div");
@@ -1612,12 +2191,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		fileCountLabel.className = "vsclone-edit-apply-summary-count";
 		fileCountLabel.textContent = applyResult.fileChanges.length === 1
 			? localize("vsclone.thread.assistant.apply.fileCount.one", "1 file changed")
-			: localize("vsclone.thread.assistant.apply.fileCount.many", "{0} files changed", applyResult.fileChanges.length.toString());
+			: localize(
+				"vsclone.thread.assistant.apply.fileCount.many",
+				"{0} files changed",
+				applyResult.fileChanges.length.toString(),
+			);
 		header.appendChild(fileCountLabel);
 
 		const actionButton = document.createElement("button");
 		actionButton.type = "button";
 		actionButton.className = "vsclone-edit-apply-summary-undo";
+		const threadBusy = this.isThreadBusy(target.threadId);
 		const actionLabel = document.createElement("span");
 		const actionIcon = document.createElement("span");
 		actionIcon.className = "codicon vsclone-edit-apply-summary-undo-icon";
@@ -1626,14 +2210,45 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			actionLabel.textContent = localize("vsclone.thread.assistant.apply.undo", "Undo");
 			actionIcon.classList.add("codicon-discard");
 			actionButton.addEventListener(EventType.CLICK, () => {
-				void this.undoAssistantEdits(turn, applyResult, actionButton);
+				void this.undoAssistantEdits(target, applyResult, actionButton);
 			});
-		} else {
+		} else if (state.phase === "undone") {
 			actionLabel.textContent = localize("vsclone.thread.assistant.apply.redo", "Redo");
 			actionIcon.classList.add("codicon-redo");
 			actionButton.addEventListener(EventType.CLICK, () => {
-				void this.redoAssistantEdits(turn, actionButton);
+				void this.redoAssistantEdits(target, actionButton);
 			});
+		} else if (state.retryAction === "undo") {
+			actionLabel.textContent = localize("vsclone.thread.assistant.apply.retryUndo", "Retry Undo");
+			actionIcon.classList.add("codicon-discard");
+			actionButton.addEventListener(EventType.CLICK, () => {
+				void this.undoAssistantEdits(target, applyResult, actionButton);
+			});
+			actionButton.classList.add("partial");
+			actionButton.title = localize(
+				"vsclone.thread.assistant.apply.partialUndoTooltip",
+				"Some changes remain applied. Retry undo for the remaining files.",
+			);
+		} else {
+			actionLabel.textContent = localize("vsclone.thread.assistant.apply.retryApply", "Retry Apply");
+			actionIcon.classList.add("codicon-redo");
+			actionButton.addEventListener(EventType.CLICK, () => {
+				void this.redoAssistantEdits(target, actionButton);
+			});
+			actionButton.classList.add("partial");
+			actionButton.title = localize(
+				"vsclone.thread.assistant.apply.partialApplyTooltip",
+				"Some edits applied and some failed. Retry apply for the remaining files.",
+			);
+		}
+		if (threadBusy) {
+			// Edit actions are intentionally serialized behind the runtime state machine so the pane
+			// never mutates workspace files while the assistant is still producing more thread output.
+			actionButton.disabled = true;
+			actionButton.title = localize(
+				"vsclone.thread.assistant.apply.busyActionTooltip",
+				"Wait for the assistant to finish before changing applied edits.",
+			);
 		}
 		actionButton.appendChild(actionLabel);
 		actionButton.appendChild(actionIcon);
@@ -1646,6 +2261,66 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		return card;
+	}
+
+	private appendAssistantApplyControls(
+		item: HTMLElement,
+		target: IAssistantApplyTarget,
+	): void {
+		const state = this.getAssistantApplyState(target);
+		if (state?.phase === "applied" || state?.phase === "undone" || state?.phase === "partial") {
+			item.appendChild(this.renderEditApplySummary(target, state));
+			return;
+		}
+		if (state?.phase === "pending") {
+			const pendingIndicator = document.createElement("div");
+			pendingIndicator.className = "vsclone-thread-message-apply pending";
+			pendingIndicator.textContent = localize(
+				"vsclone.thread.assistant.apply.applyingAuto",
+				"Applying changes...",
+			);
+			item.appendChild(pendingIndicator);
+			return;
+		}
+		if (state?.phase === "failed") {
+			item.appendChild(this.createAssistantApplyButton(target));
+			return;
+		}
+		const runtimeState = this.getThreadRuntimeState(target.threadId);
+		const assistantMessage = runtimeState?.messages.find(
+			(
+				message,
+			): message is Extract<
+				IVSCloneThreadRuntimeMessage,
+				{ readonly role: 'assistant' }
+			> => message.role === 'assistant' && message.id === target.id,
+		);
+		if (assistantMessage && this.isManualOnlyRuntimeAssistantApplyMessage(assistantMessage)) {
+			item.appendChild(this.createAssistantApplyButton(target));
+		}
+	}
+
+	private createAssistantApplyButton(target: IAssistantApplyTarget): HTMLButtonElement {
+		const applyButton = document.createElement("button");
+		applyButton.type = "button";
+		applyButton.className = "vsclone-thread-message-apply";
+		applyButton.textContent = localize(
+			"vsclone.thread.assistant.apply",
+			"Apply Changes",
+		);
+		if (this.isThreadBusy(target.threadId)) {
+			// Imported/manual apply must still render immediately, but the button stays disabled until
+			// the runtime goes idle so the assistant cannot race the edit engine mid-run.
+			applyButton.disabled = true;
+			applyButton.title = localize(
+				"vsclone.thread.assistant.apply.busyTooltip",
+				"Wait for the assistant to finish before applying changes.",
+			);
+		}
+		applyButton.addEventListener(EventType.CLICK, () => {
+			void this.applyAssistantEdits(target, applyButton);
+		});
+		return applyButton;
 	}
 
 	private renderEditApplySummaryFileRow(change: IVSCloneEditFileChange): HTMLElement {
@@ -1689,10 +2364,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private async undoAssistantEdits(
-		turn: IVSCloneChatHistoryTurn,
+		target: IAssistantApplyTarget,
 		applyResult: IVSCloneEditApplyResult,
 		button: HTMLButtonElement,
 	): Promise<void> {
+		if (this.refuseBusyAssistantApplyAction(target.threadId, "undo")) {
+			return;
+		}
 		button.disabled = true;
 		try {
 			const undoResult = await this.editApplicationService.undoEditApply(applyResult.fileChanges);
@@ -1706,10 +2384,24 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				);
 				return;
 			}
+			if (undoResult.failures.length > 0) {
+				// Some files reverted and some did not. Keep the original apply summary visible with a
+				// retry-undo action so the pane reflects that the workspace is only partially restored.
+				this.setAssistantApplyState(target, { phase: "partial", result: applyResult, retryAction: "undo" });
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.assistant.apply.undo.partial",
+						"Reverted {0} file(s), but some changes could not be undone.",
+						undoResult.revertedFiles.length,
+					),
+				);
+				this.refreshConversation();
+				return;
+			}
 
 			// Keep the same apply result on the state so the diff card stays in place; only the
 			// phase flips, which causes the renderer to swap Undo for Redo.
-			this.setEditApplyState(turn.turnId, { phase: "undone", result: applyResult });
+			this.setAssistantApplyState(target, { phase: "undone", result: applyResult });
 			this.notificationService.info(
 				localize(
 					"vsclone.thread.assistant.apply.undo.success",
@@ -1735,16 +2427,31 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private async redoAssistantEdits(
-		turn: IVSCloneChatHistoryTurn,
+		target: IAssistantApplyTarget,
 		button: HTMLButtonElement,
 	): Promise<void> {
-		const responseText = turn.responsePlainText || turn.responseMarkdown;
+		const responseText = target.responseText;
 		if (!responseText) {
+			return;
+		}
+		if (this.refuseBusyAssistantApplyAction(target.threadId, "redo")) {
 			return;
 		}
 		button.disabled = true;
 		try {
-			const applyResult = await this.editApplicationService.applySearchReplaceBlocks(responseText);
+			const applyResult = await this.editApplicationService.startApplyingSearchReplaceBlocks(responseText);
+			if (applyResult.appliedEdits > 0 && applyResult.failures.length > 0) {
+				this.setAssistantApplyState(target, { phase: "partial", result: applyResult, retryAction: "apply" });
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.assistant.apply.redo.partial",
+						"Re-applied {0} edit(s), but some changes still need attention.",
+						applyResult.appliedEdits,
+					),
+				);
+				this.refreshConversation();
+				return;
+			}
 			if (applyResult.appliedEdits === 0) {
 				const failureDetails = applyResult.failures[0] ?? localize(
 					"vsclone.thread.assistant.apply.noChanges.reason",
@@ -1760,7 +2467,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				return;
 			}
 
-			this.setEditApplyState(turn.turnId, { phase: "applied", result: applyResult });
+			this.setAssistantApplyState(target, { phase: "applied", result: applyResult });
 			this.notificationService.info(
 				localize(
 					"vsclone.thread.assistant.apply.redo.success",
@@ -2495,6 +3202,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		status: "running" | "complete" | "success" | "error",
 		output: string | undefined,
 		diffCard: HTMLElement | undefined,
+		actions?: HTMLElement,
 	): HTMLElement {
 		const card = document.createElement("div");
 		card.className = "vsclone-tool-card";
@@ -2543,6 +3251,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			// Tool output is frequently the only evidence that a read/list/search step behaved
 			// correctly, so render it inline instead of collapsing it to a status-only card.
 			this.appendMarkdownSegment(card, output, "vsclone-tool-card-output");
+		}
+		if (actions) {
+			card.appendChild(actions);
 		}
 
 		return card;
@@ -3667,98 +4378,112 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	/**
-	 * Restores the per-turn apply state map from workspace storage on view-pane construction.
-	 * `pending` states are intentionally not persisted: a process restart means whatever apply
-	 * was in flight is gone, and the auto-apply scheduler will simply re-trigger on the same
-	 * turn. We persist `failed`, `applied`, and `undone`, with `applied`/`undone` carrying the
-	 * full per-file changes (including `originalContent`) so the diff card and undo button
-	 * survive a restart.
+	 * Durable assistant-apply summaries are runtime-owned and keyed by assistant message id. The
+	 * pane reads that branch-aware state through the public runtime API. `pending` is mirrored both
+	 * locally and durably so a reload can distinguish "interrupted while applying" from "never
+	 * started", while the local set still prevents duplicate work in the current browser session.
 	 */
-	private hydrateEditApplyStateFromStorage(): void {
-		const raw = this.storageService.get(editApplyStateStorageKey, StorageScope.WORKSPACE);
-		if (!raw) {
-			return;
+	private getAssistantApplyState(
+		target: IAssistantApplyTarget,
+	): EditApplyState | undefined {
+		if (this.pendingAssistantApplyMessageIds.has(target.id)) {
+			return { phase: "pending" };
 		}
-		try {
-			const parsed = JSON.parse(raw) as unknown;
-			if (!parsed || typeof parsed !== "object") {
-				return;
-			}
-			for (const [turnId, persisted] of Object.entries(parsed as Record<string, unknown>)) {
-				const state = deserializePersistedEditApplyState(persisted);
-				if (state) {
-					this.editApplyStateByTurnId.set(turnId, state);
-				}
-			}
-		} catch {
-			// A malformed value just falls back to "no state restored"; the user will see the
-			// auto-apply scheduler kick in fresh on their next turn.
+		const runtimeState = this.getThreadRuntimeState(target.threadId);
+		const directState = this.threadRuntimeService.getAssistantEditApplicationState?.(target.threadId, target.id);
+		if (directState) {
+			return directState as EditApplyState;
 		}
+		const listedState = runtimeState?.assistantEditApplications?.find(entry => entry.messageId === target.id)?.state;
+		return listedState as EditApplyState | undefined;
 	}
 
-	private persistEditApplyStateToStorage(): void {
-		const payload: Record<string, ReturnType<typeof serializePersistedEditApplyState>> = {};
-		for (const [turnId, state] of this.editApplyStateByTurnId) {
-			const serialized = serializePersistedEditApplyState(state);
-			if (serialized) {
-				payload[turnId] = serialized;
-			}
+	private setAssistantApplyState(
+		target: IAssistantApplyTarget,
+		state: EditApplyState,
+	): void {
+		if (state.phase === "pending") {
+			this.pendingAssistantApplyMessageIds.add(target.id);
+		} else {
+			this.pendingAssistantApplyMessageIds.delete(target.id);
 		}
-		if (Object.keys(payload).length === 0) {
-			this.storageService.remove(editApplyStateStorageKey, StorageScope.WORKSPACE);
-			return;
-		}
-		this.storageService.store(
-			editApplyStateStorageKey,
-			JSON.stringify(payload),
-			StorageScope.WORKSPACE,
-			StorageTarget.MACHINE,
+		this.threadRuntimeService.setAssistantEditApplicationState?.(
+			target.threadId,
+			target.id,
+			state as never,
 		);
 	}
 
 	/**
-	 * Centralizes edit-apply state mutations so every transition runs through the same persist
-	 * path. Hydration still writes the in-memory map directly to avoid an unnecessary round-trip
-	 * back to storage, but every subsequent transition (pending → applied/failed, applied →
-	 * undone, undone → applied, failed → pending → applied, etc.) goes through here.
-	 */
-	private setEditApplyState(turnId: string, state: EditApplyState): void {
-		this.editApplyStateByTurnId.set(turnId, state);
-		this.persistEditApplyStateToStorage();
-	}
-
-	/**
-	 * Walks the active thread and starts auto-apply for any completed assistant turn that has
-	 * SEARCH/REPLACE blocks but no entry in the apply state map yet. This is invoked from the
-	 * history change listener so the apply happens the moment the model finishes streaming.
+	 * Active edit application is runtime-owned now. Once a thread has runtime state we stop
+	 * scanning legacy history turns and only auto-apply runtime assistant messages from the
+	 * active branch. History-imported assistant edits remain manual-only so opening an old thread
+	 * never mutates the workspace just because the pane hydrated runtime from archived turns.
+	 * Auto-apply is additionally gated on the runtime being idle so file edits cannot race an
+	 * in-flight assistant/tool run.
 	 */
 	private maybeAutoApplyCompletedTurns(): void {
 		if (!this.activeThreadId) {
 			return;
 		}
-		const turns = this.historyService.getTurns(this.activeThreadId);
-		for (const turn of turns) {
-			if (turn.status !== "completed" || turn.executionMode === "plan") {
+		const runtimeState = this.getThreadRuntimeState(this.activeThreadId);
+		if (!runtimeState) {
+			return;
+		}
+		this.maybeAutoApplyRuntimeAssistantMessages(runtimeState);
+	}
+
+	private maybeAutoApplyRuntimeAssistantMessages(state: IVSCloneThreadRuntimeState): void {
+		if (this.getImportingRuntimeThreadIds().has(state.threadId)) {
+			return;
+		}
+		if (this.isThreadBusy(state.threadId)) {
+			return;
+		}
+		for (const message of state.messages) {
+			if (message.role !== "assistant") {
 				continue;
 			}
-			if (this.editApplyStateByTurnId.has(turn.turnId)) {
+			if (this.getRuntimeAssistantMessageMode(state, message) === "plan") {
 				continue;
 			}
-			const text = turn.responsePlainText || turn.responseMarkdown;
-			if (!text || !this.editApplicationService.hasSearchReplaceBlocks(text)) {
+			const visibleText = this.stripRuntimeAssistantWorkflowMarkup(message.content);
+			if (!visibleText || !(this.editApplicationService?.hasSearchReplaceBlocks(visibleText) ?? false)) {
+				continue;
+			}
+			const target = {
+				threadId: state.threadId,
+				id: message.id,
+				responseText: visibleText,
+			};
+			if (this.isManualOnlyRuntimeAssistantApplyMessage(message)) {
+				continue;
+			}
+			if (this.pendingAssistantApplyMessageIds.has(message.id) || this.getAssistantApplyState(target)) {
 				continue;
 			}
 
-			this.setEditApplyState(turn.turnId, { phase: "pending" });
-			void this.runAutoApply(turn, text);
+			this.setAssistantApplyState(target, { phase: "pending" });
+			void this.runAutoApply(target, visibleText);
 		}
 	}
 
-	private async runAutoApply(turn: IVSCloneChatHistoryTurn, responseText: string): Promise<void> {
+	private async runAutoApply(target: IAssistantApplyTarget, responseText: string): Promise<void> {
 		try {
-			const applyResult = await this.editApplicationService.applySearchReplaceBlocks(responseText);
-			if (applyResult.appliedEdits > 0) {
-				this.setEditApplyState(turn.turnId, { phase: "applied", result: applyResult });
+			const applyResult = await this.editApplicationService.startApplyingSearchReplaceBlocks(responseText);
+			if (applyResult.appliedEdits > 0 && applyResult.failures.length > 0) {
+				// Auto-apply can leave the workspace in a mixed state if some SEARCH/REPLACE blocks land
+				// and later ones fail. Persist that partial phase so the retry summary stays visible.
+				this.setAssistantApplyState(target, { phase: "partial", result: applyResult, retryAction: "apply" });
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.assistant.apply.autoPartial",
+						"Applied {0} edit(s), but some changes still need attention.",
+						applyResult.appliedEdits,
+					),
+				);
+			} else if (applyResult.appliedEdits > 0) {
+				this.setAssistantApplyState(target, { phase: "applied", result: applyResult });
 				this.notificationService.info(
 					localize(
 						"vsclone.thread.assistant.apply.autoSuccess",
@@ -3768,7 +4493,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					),
 				);
 			} else {
-				this.setEditApplyState(turn.turnId, { phase: "failed" });
+				this.setAssistantApplyState(target, { phase: "failed" });
 				const failureDetails = applyResult.failures[0] ?? localize(
 					"vsclone.thread.assistant.apply.noChanges.reason",
 					"No matching SEARCH block was found.",
@@ -3782,7 +4507,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				);
 			}
 		} catch (error) {
-			this.setEditApplyState(turn.turnId, { phase: "failed" });
+			this.setAssistantApplyState(target, { phase: "failed" });
 			const message = error instanceof Error ? error.message : String(error);
 			this.notificationService.error(
 				localize(
@@ -3802,11 +4527,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	 * gets immediate visual feedback.
 	 */
 	private async applyAssistantEdits(
-		turn: IVSCloneChatHistoryTurn,
+		target: IAssistantApplyTarget,
 		button: HTMLButtonElement,
 	): Promise<void> {
-		const responseText = turn.responsePlainText || turn.responseMarkdown;
+		const responseText = target.responseText;
 		if (!responseText) {
+			return;
+		}
+		if (this.refuseBusyAssistantApplyAction(target.threadId, "apply")) {
 			return;
 		}
 
@@ -3819,16 +4547,37 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			"vsclone.thread.assistant.apply.pending",
 			"Applying...",
 		);
-		this.setEditApplyState(turn.turnId, { phase: "pending" });
+		this.setAssistantApplyState(target, { phase: "pending" });
 
 		try {
-			await this.runAutoApply(turn, responseText);
+			await this.runAutoApply(target, responseText);
 		} finally {
 			if (button.isConnected) {
 				button.disabled = false;
 				button.textContent = defaultButtonLabel;
 			}
 		}
+	}
+
+	private refuseBusyAssistantApplyAction(
+		threadId: string,
+		action: "apply" | "undo" | "redo",
+	): boolean {
+		if (!this.isThreadBusy(threadId)) {
+			return false;
+		}
+
+		const message = action === "apply"
+			? localize(
+				"vsclone.thread.assistant.apply.busyApplyWarning",
+				"Wait for the assistant to finish before applying changes.",
+			)
+			: localize(
+				"vsclone.thread.assistant.apply.busyActionWarning",
+				"Wait for the assistant to finish before changing applied edits.",
+			);
+		this.notificationService.warn(message);
+		return true;
 	}
 
 	private updateComposerMetrics(): void {
@@ -3852,17 +4601,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const hasText = this.composerInput.value.trim().length > 0;
 		const busyThreadId = this.getBusyThreadId();
-		const threadBusy = !!busyThreadId;
-		const composerBusy = threadBusy || this.submittingPrompt;
+		const modelRunBusy = !!busyThreadId;
+		const pendingAssistantApply = this.activeThreadId
+			? this.hasPendingAssistantApply(this.activeThreadId)
+			: false;
+		const composerBusy = modelRunBusy || pendingAssistantApply || this.submittingPrompt;
 		const hasSelectedModel = !!this.getCurrentComposerModelSelection(
 			this.activeThreadId,
 		);
 		// Once a response is in flight, the primary action must stay enabled so the user can abort
 		// the active generation without waiting for transport or history updates to settle first.
-		const disabled = threadBusy
+		const disabled = modelRunBusy
 			? false
 			: !hasText || composerBusy || !hasSelectedModel;
-		if (threadBusy) {
+		if (modelRunBusy) {
 			this.composerSendButton.textContent = localize(
 				"vsclone.composer.stop",
 				"Stop",
@@ -3903,10 +4655,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				composerBusy || reasoningControlHidden;
 		}
 		this.refreshPlanModeControl(composerBusy);
-		if (this.composerInput.disabled) {
+		if (modelRunBusy || this.submittingPrompt) {
 			this.composerInput.placeholder = localize(
 				"vsclone.composer.waiting",
 				"Waiting for response...",
+			);
+		} else if (pendingAssistantApply) {
+			this.composerInput.placeholder = localize(
+				"vsclone.composer.applyPending",
+				"Wait for edit application to finish...",
 			);
 		} else if (!hasSelectedModel) {
 			// VSClone always needs a concrete provider/model pair before it can send a prompt.
@@ -3940,10 +4697,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private isThreadBusy(threadId: string): boolean {
-		const latestTurn = this.historyService.getTurns(threadId).at(-1);
-		return (
-			latestTurn?.status === "pending" || latestTurn?.status === "streaming"
-		);
+		const runtimeState = this.getThreadRuntimeState(threadId);
+		if (runtimeState) {
+			return runtimeState.isRunning || runtimeState.streamState.kind !== "idle";
+		}
+		return false;
 	}
 
 	private applyRailLayout(): void {
@@ -4222,16 +4980,77 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 	}
 
-	private getLatestTurn(
-		threadId?: string,
-	): IVSCloneChatHistoryTurn | undefined {
+	private getLatestConversationPrompt(threadId?: string): {
+		content: string;
+		imageAttachments?: readonly IVSCloneImageAttachment[];
+	} | undefined {
 		const candidateThreadId =
 			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread();
 		if (!candidateThreadId) {
 			return undefined;
 		}
-		const turns = this.historyService.getTurns(candidateThreadId);
-		return turns.at(-1);
+
+		const runtimeState = this.getThreadRuntimeState(candidateThreadId);
+		if (runtimeState) {
+			for (let index = runtimeState.messages.length - 1; index >= 0; index--) {
+				const message = runtimeState.messages[index];
+				if (message.role === "user") {
+					return {
+						content: message.content,
+						imageAttachments: message.imageAttachments,
+					};
+				}
+			}
+			return undefined;
+		}
+		return undefined;
+	}
+
+	private getLatestConversationResponse(threadId?: string): {
+		content: string;
+	} | undefined {
+		const candidateThreadId =
+			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread();
+		if (!candidateThreadId) {
+			return undefined;
+		}
+
+		const runtimeState = this.getThreadRuntimeState(candidateThreadId);
+		if (runtimeState) {
+			for (let index = runtimeState.messages.length - 1; index >= 0; index--) {
+				const message = runtimeState.messages[index];
+				if (message.role === "assistant") {
+					return {
+						content: this.stripRuntimeAssistantWorkflowMarkup(message.content),
+					};
+				}
+			}
+			return undefined;
+		}
+		return undefined;
+	}
+
+	private hasPendingAssistantApply(
+		threadId: string,
+		runtimeState: IVSCloneThreadRuntimeState | undefined = this.getThreadRuntimeState(threadId),
+	): boolean {
+		if (!runtimeState) {
+			return false;
+		}
+		if (runtimeState.assistantEditApplications?.some(entry => entry.state.phase === 'pending')) {
+			return true;
+		}
+		const assistantMessageIds = new Set(
+			(runtimeState.messages ?? [])
+				.filter((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }> => message.role === 'assistant')
+				.map(message => message.id),
+		);
+		for (const messageId of this.pendingAssistantApplyMessageIds ?? []) {
+			if (assistantMessageIds.has(messageId)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private resolveThreadById(

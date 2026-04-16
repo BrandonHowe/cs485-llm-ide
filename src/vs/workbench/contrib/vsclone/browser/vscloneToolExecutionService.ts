@@ -3,27 +3,29 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError } from '../../../../base/common/errors.js';
-import { dirname, joinPath } from '../../../../base/common/resources.js';
+import { joinPath } from '../../../../base/common/resources.js';
+import { generateUuid } from '../../../../base/common/uuid.js';
 import { URI } from '../../../../base/common/uri.js';
-import { IBulkEditService, ResourceTextEdit } from '../../../../editor/browser/services/bulkEditService.js';
-import { Range } from '../../../../editor/common/core/range.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
 import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IMarkerService } from '../../../../platform/markers/common/markers.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { localize } from '../../../../nls.js';
-import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { QueryBuilder } from '../../../services/search/common/queryBuilder.js';
 import { isFileMatch, ISearchService, resultIsMatch } from '../../../services/search/common/search.js';
 import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
 import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
+import { type IVSCloneToolDefinition, VSCLONE_TOOL_DEFINITIONS } from '../common/vscloneToolDefinitions.js';
+import { type VSCloneToolApprovalType } from '../common/vscloneToolRuntimeTypes.js';
 import { formatToolResultWithDiff } from '../common/vscloneToolResultDiff.js';
+import { IVSCloneEditCodeService } from './vscloneEditCodeService.js';
+import type { IVSCloneEditCodeService as IVSCloneEditCodeServiceContract } from './vscloneEditCodeServiceInterface.js';
 import { resolveContentEdits, type IVSCloneParsedEdit, type IVSCloneResolvedContentEdit } from './vscloneEditApplicationService.js';
+import { IVSCloneTerminalToolService } from './vscloneTerminalToolService.js';
 
 const maxReadChars = 100000;
 const maxDirectoryEntries = 200;
@@ -43,6 +45,15 @@ export interface IVSCloneToolExecutionService {
 	executeTool(toolName: string, params: Record<string, string>, mode?: VSCloneChatMode, token?: CancellationToken): Promise<IVSCloneToolExecutionResult>;
 }
 
+export const IVSCloneToolRuntimeService = createDecorator<IVSCloneToolRuntimeService>('vscloneToolRuntimeService');
+
+export interface IVSCloneToolRuntimeService {
+	readonly _serviceBrand: undefined;
+	listToolDefinitions(mode?: VSCloneChatMode): readonly IVSCloneToolDefinition[];
+	getToolDefinition(toolName: string): IVSCloneToolDefinition | undefined;
+	getApprovalType(toolName: string): VSCloneToolApprovalType | undefined;
+}
+
 interface IParsedSearchReplaceBlock {
 	readonly searchText: string;
 	readonly replaceText: string;
@@ -53,6 +64,24 @@ interface IWorkspacePathResolution {
 	readonly rawPath: string;
 }
 
+export class VSCloneToolRuntimeService implements IVSCloneToolRuntimeService {
+	declare readonly _serviceBrand: undefined;
+
+	listToolDefinitions(mode: VSCloneChatMode = 'act'): readonly IVSCloneToolDefinition[] {
+		return mode === 'plan'
+			? VSCLONE_TOOL_DEFINITIONS.filter(tool => tool.planModeAllowed)
+			: VSCLONE_TOOL_DEFINITIONS;
+	}
+
+	getToolDefinition(toolName: string): IVSCloneToolDefinition | undefined {
+		return VSCLONE_TOOL_DEFINITIONS.find(tool => tool.name === toolName);
+	}
+
+	getApprovalType(toolName: string): VSCloneToolApprovalType | undefined {
+		return this.getToolDefinition(toolName)?.approvalType;
+	}
+}
+
 export class VSCloneToolExecutionService implements IVSCloneToolExecutionService {
 	declare readonly _serviceBrand: undefined;
 
@@ -60,13 +89,13 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		@IFileService private readonly fileService: IFileService,
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IModelService private readonly modelService: IModelService,
-		@IEditorService private readonly editorService: IEditorService,
-		@IBulkEditService private readonly bulkEditService: IBulkEditService,
 		@ISearchService private readonly searchService: ISearchService,
 		@IMarkerService private readonly markerService: IMarkerService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IVSClonePlanModeService private readonly planModeService: IVSClonePlanModeService,
 		@ILogService private readonly logService: ILogService,
+		@IVSCloneEditCodeService private readonly editCodeService: IVSCloneEditCodeServiceContract,
+		@IVSCloneTerminalToolService private readonly terminalToolService?: IVSCloneTerminalToolService,
 	) {
 	}
 
@@ -105,6 +134,14 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 					return this.executeEditFile(params);
 				case 'create_file':
 					return this.executeCreateFile(params);
+				case 'run_command':
+					return this.executeRunCommand(params, token);
+				case 'open_persistent_terminal':
+					return this.executeOpenPersistentTerminal(params, token);
+				case 'run_persistent_command':
+					return this.executeRunPersistentCommand(params, token);
+				case 'kill_persistent_terminal':
+					return this.executeKillPersistentTerminal(params, token);
 				case 'attempt_completion':
 					return {
 						success: true,
@@ -367,30 +404,24 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 			};
 		}
 
-		const resourceEdits = [...resolved.resolved]
-			.sort((left, right) => right.startOffset - left.startOffset)
-			.map(edit => {
-				const range = this.rangeFromOffsets(content, edit.startOffset, edit.endOffset);
-				return new ResourceTextEdit(target.uri, {
-					range,
-					text: edit.replaceText,
-				});
-			});
-
-		const applyResult = await this.bulkEditService.apply(resourceEdits, {
-			label: 'VSClone tool: edit file',
+		const diffPreview = this.buildEditFileDiffPreview(target.rawPath, content, resolved.resolved);
+		// Assistant-triggered edits must flow through the shared edit engine so any new diff-zone,
+		// checkpoint, or undo semantics remain authoritative. The tool keeps a local preview copy of
+		// the resolved edits only for transcript rendering; it no longer applies the mutation itself.
+		await this.editCodeService.callBeforeApplyOrEdit(target.uri);
+		const applyResult = await this.editCodeService.instantlyApplySearchReplaceBlocks({
+			uri: target.uri,
+			searchReplaceBlocks: changes,
 		});
-		if (!applyResult.isApplied) {
-			return { success: false, output: 'Workspace edit was not applied.' };
+		if (applyResult.appliedEdits === 0) {
+			return this.toToolApplyFailure(target.uri, applyResult.failures, 'searchReplace');
 		}
 
-		await this.editorService.openEditor({ resource: target.uri });
 		const markerCount = this.markerService.read({ resource: target.uri }).length;
-		const diffPreview = this.buildEditFileDiffPreview(target.rawPath, content, resolved.resolved);
 		return {
 			success: true,
 			output: formatToolResultWithDiff(
-				`Applied ${resourceEdits.length} edit(s) to ${target.uri.toString()}. Current diagnostics on file: ${markerCount}.`,
+				`Applied ${applyResult.appliedEdits} edit(s) to ${target.uri.toString()}. Current diagnostics on file: ${markerCount}.`,
 				diffPreview,
 			),
 		};
@@ -415,16 +446,140 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 			return { success: false, output: `File already exists: ${target.rawPath}` };
 		}
 
-		await this.fileService.createFolder(dirname(target.uri));
-		await this.fileService.writeFile(target.uri, VSBuffer.fromString(content));
-		await this.editorService.openEditor({ resource: target.uri });
 		const diffPreview = this.buildCreateFileDiffPreview(target.rawPath, content);
+		// Route create_file through the same engine as click-apply so create operations start
+		// participating in diff tracking immediately instead of appearing as opaque direct writes.
+		const applyResult = await this.editCodeService.instantlyRewriteFile({
+			uri: target.uri,
+			newContent: content,
+		});
+		if (applyResult.appliedEdits === 0) {
+			return this.toToolApplyFailure(target.uri, applyResult.failures, 'rewrite');
+		}
+
 		return {
 			success: true,
 			output: formatToolResultWithDiff(
 				`Created file ${target.uri.toString()}.`,
 				diffPreview,
 			),
+		};
+	}
+
+	private async executeRunCommand(params: Record<string, string>, token: CancellationToken): Promise<IVSCloneToolExecutionResult> {
+		if (!this.terminalToolService) {
+			return { success: false, output: 'Terminal tooling is not available in this build.' };
+		}
+		if (token.isCancellationRequested) {
+			return { success: false, output: 'Tool run_command was cancelled before it could finish.' };
+		}
+
+		const command = readToolParam(params, 'command');
+		if (!command) {
+			return { success: false, output: 'Missing required parameter: command' };
+		}
+
+		const cwd = readToolParam(params, 'cwd') ?? null;
+		const terminalId = generateUuid();
+		const { interrupt, resPromise } = await this.terminalToolService.runCommand(command, { type: 'temporary', cwd, terminalId });
+		let cancellationListener: { dispose(): void } | undefined;
+		const cancellationPromise = new Promise<never>((_, reject) => {
+			cancellationListener = token.onCancellationRequested(() => {
+				interrupt();
+				reject(new CancellationError());
+			});
+		});
+		try {
+			const { result, resolveReason } = await Promise.race([resPromise, cancellationPromise]);
+
+			return {
+				success: true,
+				output: [
+					`Command: ${command}`,
+					`Resolve reason: ${describeTerminalResolveReason(resolveReason)}`,
+					result || '(empty output)',
+				].join('\n'),
+			};
+		} finally {
+			cancellationListener?.dispose();
+		}
+	}
+
+	private async executeOpenPersistentTerminal(params: Record<string, string>, token: CancellationToken): Promise<IVSCloneToolExecutionResult> {
+		if (!this.terminalToolService) {
+			return { success: false, output: 'Terminal tooling is not available in this build.' };
+		}
+		if (token.isCancellationRequested) {
+			return { success: false, output: 'Tool open_persistent_terminal was cancelled before it could finish.' };
+		}
+
+		const cwd = readToolParam(params, 'cwd') ?? null;
+		const persistentTerminalId = await this.terminalToolService.createPersistentTerminal({ cwd });
+		return {
+			success: true,
+			output: `Created persistent terminal ${persistentTerminalId} (${persistentTerminalId === '1' ? 'VSClone Tool Terminal' : `VSClone Tool Terminal (${persistentTerminalId})`}).`,
+		};
+	}
+
+	private async executeRunPersistentCommand(params: Record<string, string>, token: CancellationToken): Promise<IVSCloneToolExecutionResult> {
+		if (!this.terminalToolService) {
+			return { success: false, output: 'Terminal tooling is not available in this build.' };
+		}
+		if (token.isCancellationRequested) {
+			return { success: false, output: 'Tool run_persistent_command was cancelled before it could finish.' };
+		}
+
+		const persistentTerminalId = readToolParam(params, 'persistent_terminal_id', 'persistentTerminalId');
+		const command = readToolParam(params, 'command');
+		if (!persistentTerminalId) {
+			return { success: false, output: 'Missing required parameter: persistent_terminal_id' };
+		}
+		if (!command) {
+			return { success: false, output: 'Missing required parameter: command' };
+		}
+
+		const { interrupt, resPromise } = await this.terminalToolService.runCommand(command, { type: 'persistent', persistentTerminalId });
+		let cancellationListener: { dispose(): void } | undefined;
+		const cancellationPromise = new Promise<never>((_, reject) => {
+			cancellationListener = token.onCancellationRequested(() => {
+				interrupt();
+				reject(new CancellationError());
+			});
+		});
+		try {
+			const { result, resolveReason } = await Promise.race([resPromise, cancellationPromise]);
+
+			return {
+				success: true,
+				output: [
+					`Persistent terminal: ${persistentTerminalId}`,
+					`Command: ${command}`,
+					`Resolve reason: ${describeTerminalResolveReason(resolveReason)}`,
+					result || '(empty output)',
+				].join('\n'),
+			};
+		} finally {
+			cancellationListener?.dispose();
+		}
+	}
+
+	private async executeKillPersistentTerminal(params: Record<string, string>, token: CancellationToken): Promise<IVSCloneToolExecutionResult> {
+		if (!this.terminalToolService) {
+			return { success: false, output: 'Terminal tooling is not available in this build.' };
+		}
+		if (token.isCancellationRequested) {
+			return { success: false, output: 'Tool kill_persistent_terminal was cancelled before it could finish.' };
+		}
+
+		const persistentTerminalId = readToolParam(params, 'persistent_terminal_id', 'persistentTerminalId');
+		if (!persistentTerminalId) {
+			return { success: false, output: 'Missing required parameter: persistent_terminal_id' };
+		}
+
+		await this.terminalToolService.killPersistentTerminal(persistentTerminalId);
+		return {
+			success: true,
+			output: `Closed persistent terminal ${persistentTerminalId}.`,
 		};
 	}
 
@@ -524,12 +679,6 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		}
 	}
 
-	private rangeFromOffsets(content: string, startOffset: number, endOffset: number): Range {
-		const start = positionAtOffset(content, startOffset);
-		const end = positionAtOffset(content, endOffset);
-		return new Range(start.lineNumber, start.column, end.lineNumber, end.column);
-	}
-
 	/**
 	 * The preview only includes mutated hunks so transcript diffs stay compact enough to read
 	 * while still exposing exactly what was replaced. We emit unified hunk headers with the
@@ -583,6 +732,28 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 
 	private invalidPathMessage(path: string): string {
 		return `Invalid path '${path}'. Paths must resolve inside the current workspace.`;
+	}
+
+	private toToolApplyFailure(resource: URI, failures: readonly string[], operation: 'searchReplace' | 'rewrite'): IVSCloneToolExecutionResult {
+		if (failures.includes('Workspace edit was not applied.')) {
+			return { success: false, output: 'Workspace edit was not applied.' };
+		}
+
+		if (failures.length > 0) {
+			if (operation === 'rewrite') {
+				return { success: false, output: failures[0] };
+			}
+
+			return {
+				success: false,
+				output: `One or more SEARCH blocks did not match ${resource.toString()}.`,
+			};
+		}
+
+		return {
+			success: false,
+			output: `No edits were applied to ${resource.toString()}.`,
+		};
 	}
 }
 
@@ -703,4 +874,23 @@ function positionAtOffset(content: string, offset: number): { lineNumber: number
 		lineNumber,
 		column: boundedOffset - lineStartOffset + 1,
 	};
+}
+
+function readToolParam(params: Record<string, string>, ...names: readonly string[]): string | undefined {
+	for (const name of names) {
+		const value = params[name];
+		if (typeof value === 'string') {
+			const normalized = value.trim();
+			if (normalized.length > 0) {
+				return normalized;
+			}
+		}
+	}
+	return undefined;
+}
+
+function describeTerminalResolveReason(resolveReason: { type: 'timeout' } | { type: 'done'; exitCode: number }): string {
+	return resolveReason.type === 'timeout'
+		? 'timeout'
+		: `done (exit code ${resolveReason.exitCode})`;
 }

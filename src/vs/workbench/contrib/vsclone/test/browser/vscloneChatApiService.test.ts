@@ -11,7 +11,6 @@ import { IChannel } from '../../../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IMainProcessService } from '../../../../../platform/ipc/common/mainProcessService.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { IVSCloneEditApplicationService, IVSCloneEditApplyResult } from '../../browser/vscloneEditApplicationService.js';
 import { IVSCloneApiSubmitOptions } from '../../common/vscloneChatApiAdapters.js';
 import {
 	IVSCloneChatApiAbortedEvent,
@@ -25,17 +24,14 @@ import {
 	VSCLONE_CHAT_API_EVENT_DELTA,
 	VSCLONE_CHAT_API_EVENT_ERROR,
 } from '../../common/vscloneChatApiIpc.js';
-import {
-	IVSCloneChatHistoryService,
-	IVSCloneChatHistoryThread,
-	IVSCloneChatHistoryTurn,
-	IVSCloneChatTurnUpdate,
-	VSCloneChatHistoryScope,
-} from '../../common/backend/vscloneChatHistoryService.js';
 import { IVSCloneModelEligibilityService, IVSCloneModelIneligibilityRecord } from '../../common/vscloneModelEligibilityService.js';
 import { IVSCloneOAuthService } from '../../common/vscloneOAuthService.js';
 import { IVSCloneOAuthState, IVSCloneOAuthTokenSet, VSCloneModelVendor } from '../../common/vscloneOAuthTypes.js';
-import { detectEligibilityFailureReason, VSCloneChatApiService } from '../../browser/vscloneChatApiService.js';
+import {
+	detectEligibilityFailureReason,
+	IVSCloneApiStreamObserver,
+	VSCloneChatApiService,
+} from '../../browser/vscloneChatApiService.js';
 
 interface IRecordedCall {
 	readonly command: string;
@@ -87,21 +83,6 @@ class TestChannel implements IChannel {
 	}
 }
 
-class TestHistoryService implements IVSCloneChatHistoryService {
-	declare readonly _serviceBrand: undefined;
-	readonly onDidChange = Event.None;
-	readonly updates: IVSCloneChatTurnUpdate[] = [];
-	readonly turnsByThread = new Map<string, readonly IVSCloneChatHistoryTurn[]>();
-
-	async initialize(): Promise<void> { }
-	getThreads(_query?: unknown): readonly IVSCloneChatHistoryThread[] { return []; }
-	getTurns(threadId: string): readonly IVSCloneChatHistoryTurn[] { return this.turnsByThread.get(threadId) ?? []; }
-	applyTurnUpdate(update: IVSCloneChatTurnUpdate): void { this.updates.push(update); }
-	async archiveThread(_threadId: string, _archived: boolean): Promise<void> { }
-	async deleteThread(_threadId: string): Promise<void> { }
-	async clearAll(_scope: VSCloneChatHistoryScope): Promise<void> { }
-}
-
 class TestEligibilityService implements IVSCloneModelEligibilityService {
 	declare readonly _serviceBrand: undefined;
 	readonly onDidChangeEligibility = Event.None;
@@ -141,19 +122,30 @@ class TestOAuthService implements IVSCloneOAuthService {
 	isSignedIn(): boolean { return false; }
 }
 
-function createEditApplicationService(): IVSCloneEditApplicationService {
+function createObserverRecorder(): { observer: IVSCloneApiStreamObserver; deltas: string[]; errors: string[]; aborted: number; completed: number } {
+	const deltas: string[] = [];
+	const errors: string[] = [];
+	let aborted = 0;
+	let completed = 0;
 	return {
-		_serviceBrand: undefined,
-		hasSearchReplaceBlocks: (_responseText: string) => false,
-		parseSearchReplaceBlocks: (_responseText: string) => [],
-		applySearchReplaceBlocks: async (_responseText: string): Promise<IVSCloneEditApplyResult> => ({
-			attemptedEdits: 0,
-			appliedEdits: 0,
-			modifiedFiles: [],
-			failures: [],
-			fileChanges: [],
-		}),
-		undoEditApply: async () => ({ revertedFiles: [], failures: [] }),
+		observer: {
+			onDelta: text => deltas.push(text),
+			onError: message => errors.push(message),
+			onAborted: () => {
+				aborted += 1;
+			},
+			onComplete: () => {
+				completed += 1;
+			},
+		},
+		deltas,
+		errors,
+		get aborted() {
+			return aborted;
+		},
+		get completed() {
+			return completed;
+		},
 	};
 }
 
@@ -186,18 +178,15 @@ function getRecordedCall(channel: TestChannel, command: string): IRecordedCall |
 suite('VSCloneChatApiService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('submits through main-process transport and applies streamed history updates', async () => {
+	test('submits through main-process transport without touching legacy history state', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		const channel = new TestChannel();
 		const eligibilityService = new TestEligibilityService();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
-			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
-			createEditApplicationService(),
 			eligibilityService,
 		));
 
@@ -212,47 +201,38 @@ suite('VSCloneChatApiService', () => {
 		channel.fireDelta({ requestId: request.requestId, text: 'delta-1' });
 		channel.fireComplete({ requestId: request.requestId });
 		await handle.done;
-
-		assert.deepStrictEqual(historyService.updates.map(update => update.phase), ['prompt', 'stream', 'complete']);
 	});
 
 	test('reports sign-in errors when no API headers are available', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		oauthService.headersByVendor.set('openai', undefined);
 		const channel = new TestChannel();
 		const eligibilityService = new TestEligibilityService();
+		const recorder = createObserverRecorder();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
-			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
-			createEditApplicationService(),
 			eligibilityService,
 		));
 
-		const handle = service.submitApiPrompt(createSubmitOptions());
+		const handle = service.submitApiPromptForAgentLoop(createSubmitOptions(), recorder.observer);
 		await handle.done;
 
 		assert.strictEqual(getRecordedCall(channel, VSCLONE_CHAT_API_COMMAND_SUBMIT), undefined);
-		assert.deepStrictEqual(historyService.updates.map(update => update.phase), ['prompt', 'error']);
-		const errorUpdate = historyService.updates.find(update => update.phase === 'error');
-		assert.strictEqual(errorUpdate?.responsePlainTextReplace, 'Not signed in to openai');
+		assert.deepStrictEqual(recorder.errors, ['Not signed in to openai']);
 	});
 
-	test('cancel always issues a main-process abort command in history mode', async () => {
+	test('cancel always issues a main-process abort command', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		const channel = new TestChannel();
 		const eligibilityService = new TestEligibilityService();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
-			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
-			createEditApplicationService(),
 			eligibilityService,
 		));
 
@@ -261,21 +241,17 @@ suite('VSCloneChatApiService', () => {
 		await handle.done;
 
 		assert.ok(getRecordedCall(channel, VSCLONE_CHAT_API_COMMAND_ABORT));
-		assert.deepStrictEqual(historyService.updates.map(update => update.phase), ['prompt', 'cancel']);
 	});
 
 	test('raw observer mode emits aborted callback without writing history turns', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		const channel = new TestChannel();
 		const eligibilityService = new TestEligibilityService();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
-			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
-			createEditApplicationService(),
 			eligibilityService,
 		));
 
@@ -290,26 +266,23 @@ suite('VSCloneChatApiService', () => {
 		await handle.done;
 
 		assert.strictEqual(abortedCalls, 1);
-		assert.strictEqual(historyService.updates.length, 0);
 		assert.ok(getRecordedCall(channel, VSCLONE_CHAT_API_COMMAND_ABORT));
 	});
 
-	test('applies cancellation state when main-process reports an abort event', async () => {
+	test('raw observer mode receives main-process abort events', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		const channel = new TestChannel();
 		const eligibilityService = new TestEligibilityService();
+		const recorder = createObserverRecorder();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
-			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
-			createEditApplicationService(),
 			eligibilityService,
 		));
 
-		const handle = service.submitApiPrompt(createSubmitOptions());
+		const handle = service.submitApiPromptForAgentLoop(createSubmitOptions(), recorder.observer);
 		await timeout(0);
 		const submitCall = getRecordedCall(channel, VSCLONE_CHAT_API_COMMAND_SUBMIT);
 		assert.ok(submitCall);
@@ -318,28 +291,26 @@ suite('VSCloneChatApiService', () => {
 		channel.fireAborted({ requestId: request.requestId });
 		await handle.done;
 
-		assert.deepStrictEqual(historyService.updates.map(update => update.phase), ['prompt', 'cancel']);
+		assert.strictEqual(recorder.aborted, 1);
 	});
 
 	test('records model ineligibility when Codex reports a ChatGPT account entitlement failure', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const historyService = new TestHistoryService();
 		const oauthService = new TestOAuthService();
 		const channel = new TestChannel();
 		const eligibilityService = new TestEligibilityService();
+		const recorder = createObserverRecorder();
 		const service = testDisposables.add(new VSCloneChatApiService(
 			oauthService,
-			historyService,
 			createMainProcessService(channel),
 			new NullLogService(),
-			createEditApplicationService(),
 			eligibilityService,
 		));
 
-		const handle = service.submitApiPrompt(createSubmitOptions({
+		const handle = service.submitApiPromptForAgentLoop(createSubmitOptions({
 			modelId: 'gpt-5.3-codex-spark',
 			modelIdentifier: 'openai/gpt-5.3-codex-spark',
-		}));
+		}), recorder.observer);
 		await timeout(0);
 		const submitCall = getRecordedCall(channel, VSCLONE_CHAT_API_COMMAND_SUBMIT);
 		assert.ok(submitCall);
@@ -355,6 +326,7 @@ suite('VSCloneChatApiService', () => {
 			modelIdentifier: 'openai/gpt-5.3-codex-spark',
 			reason: 'Your ChatGPT account is not entitled to use this model with Codex.',
 		}]);
+		assert.strictEqual(recorder.errors.length, 1);
 	});
 
 	test('detectEligibilityFailureReason ignores unrelated OpenAI errors', () => {

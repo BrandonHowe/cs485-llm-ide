@@ -18,6 +18,8 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { QueryBuilder } from '../../../../services/search/common/queryBuilder.js';
 import { ISearchService } from '../../../../services/search/common/search.js';
 import { VSCloneToolExecutionService } from '../../browser/vscloneToolExecutionService.js';
+import { IVSCloneEditCodeService, type VSCloneEditApplyResult } from '../../browser/vscloneEditCodeServiceInterface.js';
+import { IVSCloneTerminalToolService } from '../../browser/vscloneTerminalToolService.js';
 import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
 import { IVSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
 
@@ -59,6 +61,25 @@ class ToolExecutionHarness {
 	readonly bulkEditCalls: Array<{ edits: ResourceTextEdit[]; options: { label?: string } | undefined }> = [];
 	readonly searchCalls: Array<{ query: unknown; token: { isCancellationRequested: boolean } }> = [];
 	readonly queryBuilderCalls: Array<{ contentPattern: { pattern: string; isRegExp: boolean }; folderResources: readonly URI[]; options: { includePattern?: string; previewOptions?: { matchLines: number; charsPerLine: number }; maxResults?: number } }> = [];
+	readonly terminalRunCalls: Array<{ command: string; opts: { type: 'persistent'; persistentTerminalId: string } | { type: 'temporary'; cwd: string | null; terminalId: string } }> = [];
+	readonly createdPersistentTerminals: Array<{ cwd: string | null }> = [];
+	readonly killedPersistentTerminalIds: string[] = [];
+	readonly callBeforeApplyOrEditCalls: string[] = [];
+	readonly applySearchReplaceCalls: Array<{ uri: string; searchReplaceBlocks: string }> = [];
+	readonly rewriteFileCalls: Array<{ uri: string; newContent: string }> = [];
+
+	nextTerminalRunResult = {
+		result: '$ echo hi\nhi',
+		resolveReason: { type: 'done', exitCode: 0 } as const,
+	};
+	nextCreatedPersistentTerminalId = '1';
+	nextEditApplyResult: VSCloneEditApplyResult = {
+		attemptedEdits: 1,
+		appliedEdits: 1,
+		modifiedFiles: [],
+		failures: [],
+		fileChanges: [],
+	};
 
 	resolveHandler: (resource: URI) => Promise<IResolveStat> = async (resource) => ({
 		resource,
@@ -146,6 +167,67 @@ class ToolExecutionHarness {
 		isToolAllowed: (_mode: VSCloneChatMode, _toolName: string) => this.isToolAllowedResult,
 	} as unknown as IVSClonePlanModeService;
 
+	readonly editCodeService = {
+		processRawKeybindingText: (keybindingStr: string) => keybindingStr,
+		callBeforeApplyOrEdit: async (uri: URI | 'current') => {
+			this.callBeforeApplyOrEditCalls.push(uri === 'current' ? uri : uri.toString());
+		},
+		startApplying: () => null,
+		instantlyApplySearchReplaceBlocks: async ({ uri, searchReplaceBlocks }: { uri: URI; searchReplaceBlocks: string }) => {
+			this.applySearchReplaceCalls.push({ uri: uri.toString(), searchReplaceBlocks });
+			return this.nextEditApplyResult;
+		},
+		instantlyRewriteFile: async ({ uri, newContent }: { uri: URI; newContent: string }) => {
+			this.rewriteFileCalls.push({ uri: uri.toString(), newContent });
+			return this.nextEditApplyResult;
+		},
+		addCtrlKZone: () => undefined,
+		removeCtrlKZone: () => undefined,
+		diffAreaOfId: {},
+		diffAreasOfURI: {},
+		diffOfId: {},
+		acceptOrRejectAllDiffAreas: async () => undefined,
+		acceptDiff: async () => undefined,
+		rejectDiff: async () => undefined,
+		onDidAddOrDeleteDiffZones: () => ({ dispose() { /* no-op */ } }),
+		onDidChangeDiffsInDiffZoneNotStreaming: () => ({ dispose() { /* no-op */ } }),
+		onDidChangeStreamingInDiffZone: () => ({ dispose() { /* no-op */ } }),
+		onDidChangeStreamingInCtrlKZone: () => ({ dispose() { /* no-op */ } }),
+		isCtrlKZoneStreaming: () => false,
+		interruptCtrlKStreaming: () => undefined,
+		interruptURIStreaming: () => undefined,
+		getVSCloneFileSnapshot: () => ({ diffAreaInfo: [], entireFileCode: '' }),
+		restoreVSCloneFileSnapshot: () => undefined,
+		hasSearchReplaceBlocks: () => false,
+		parseSearchReplaceBlocks: () => [],
+		startApplyingSearchReplaceBlocks: async () => this.nextEditApplyResult,
+		applySearchReplaceBlocks: async () => this.nextEditApplyResult,
+		undoEditApply: async () => ({ revertedFiles: [], failures: [] }),
+	} as unknown as IVSCloneEditCodeService;
+
+	readonly terminalToolService = {
+		runCommand: async (command: string, opts: { type: 'persistent'; persistentTerminalId: string } | { type: 'temporary'; cwd: string | null; terminalId: string }) => {
+			this.terminalRunCalls.push({ command, opts });
+			return {
+				interrupt: () => undefined,
+				resPromise: Promise.resolve(this.nextTerminalRunResult),
+			};
+		},
+		createPersistentTerminal: async ({ cwd }: { cwd: string | null }) => {
+			this.createdPersistentTerminals.push({ cwd });
+			return this.nextCreatedPersistentTerminalId;
+		},
+		killPersistentTerminal: async (terminalId: string) => {
+			this.killedPersistentTerminalIds.push(terminalId);
+		},
+		persistentTerminalExists: () => true,
+		listPersistentTerminalIds: () => [],
+		focusPersistentTerminal: async () => { },
+		readTerminal: async () => '',
+		getPersistentTerminal: () => undefined,
+		getTemporaryTerminal: () => undefined,
+	} as unknown as IVSCloneTerminalToolService;
+
 	readonly instantiationService = {
 		createInstance: <T>(ctor: new (...args: never[]) => T) => {
 			if (ctor === QueryBuilder) {
@@ -175,13 +257,13 @@ class ToolExecutionHarness {
 			this.fileService,
 			this.workspaceContextService,
 			this.modelService,
-			this.editorService,
-			this.bulkEditService,
 			this.searchService,
 			this.markerService,
 			this.instantiationService,
 			this.planModeService,
 			this.logService as unknown as ILogService,
+			this.editCodeService,
+			this.terminalToolService,
 		);
 	}
 }
@@ -215,7 +297,6 @@ function asInternals(service: VSCloneToolExecutionService): {
 	executeCreateFile(params: Record<string, string>): Promise<{ success: boolean; output: string }>;
 	readFileContents(resource: URI): Promise<string>;
 	safeResolve(resource: URI): Promise<IResolveStat | undefined>;
-	rangeFromOffsets(content: string, startOffset: number, endOffset: number): { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
 	buildEditFileDiffPreview(rawPath: string, originalContent: string, edits: ReadonlyArray<{ startOffset: number; endOffset: number; replaceText: string }>): string;
 	buildCreateFileDiffPreview(rawPath: string, content: string): string;
 	appendDirectoryListing(root: URI, prefix: string, recursive: boolean, lines: string[], state: { count: number; truncated: boolean }): Promise<void>;
@@ -230,7 +311,6 @@ function asInternals(service: VSCloneToolExecutionService): {
 		executeCreateFile(params: Record<string, string>): Promise<{ success: boolean; output: string }>;
 		readFileContents(resource: URI): Promise<string>;
 		safeResolve(resource: URI): Promise<IResolveStat | undefined>;
-		rangeFromOffsets(content: string, startOffset: number, endOffset: number): { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
 		buildEditFileDiffPreview(rawPath: string, originalContent: string, edits: ReadonlyArray<{ startOffset: number; endOffset: number; replaceText: string }>): string;
 		buildCreateFileDiffPreview(rawPath: string, content: string): string;
 		appendDirectoryListing(root: URI, prefix: string, recursive: boolean, lines: string[], state: { count: number; truncated: boolean }): Promise<void>;
@@ -298,6 +378,42 @@ suite('VSCloneToolExecutionService', () => {
 		assert.deepStrictEqual(testHarness.bulkEditCalls, []);
 		assert.deepStrictEqual(testHarness.openEditorCalls, []);
 		assert.deepStrictEqual(testHarness.readFileCalls, []);
+	});
+
+	test('TE-03 runs one-off terminal commands through the terminal tool service', async () => {
+		const testHarness = new ToolExecutionHarness();
+		const service = testHarness.createService();
+
+		const result = await service.executeTool('run_command', { command: 'echo hi', cwd: 'scripts' }, 'act');
+
+		assert.strictEqual(result.success, true);
+		assert.deepStrictEqual(testHarness.terminalRunCalls, [{
+			command: 'echo hi',
+			opts: {
+				type: 'temporary',
+				cwd: 'scripts',
+				terminalId: testHarness.terminalRunCalls[0]!.opts.type === 'temporary' ? testHarness.terminalRunCalls[0]!.opts.terminalId : '',
+			},
+		}]);
+		assert.ok(result.output.includes('Command: echo hi'));
+		assert.ok(result.output.includes('Resolve reason: done (exit code 0)'));
+		assert.ok(result.output.includes('$ echo hi'));
+	});
+
+	test('TE-04 opens and closes persistent terminals through the terminal runtime', async () => {
+		const testHarness = new ToolExecutionHarness();
+		testHarness.nextCreatedPersistentTerminalId = '3';
+		const service = testHarness.createService();
+
+		const openResult = await service.executeTool('open_persistent_terminal', { cwd: '/workspace' }, 'act');
+		const killResult = await service.executeTool('kill_persistent_terminal', { persistent_terminal_id: '3' }, 'act');
+
+		assert.strictEqual(openResult.success, true);
+		assert.strictEqual(openResult.output, 'Created persistent terminal 3 (VSClone Tool Terminal (3)).');
+		assert.deepStrictEqual(testHarness.createdPersistentTerminals, [{ cwd: '/workspace' }]);
+		assert.strictEqual(killResult.success, true);
+		assert.strictEqual(killResult.output, 'Closed persistent terminal 3.');
+		assert.deepStrictEqual(testHarness.killedPersistentTerminalIds, ['3']);
 	});
 
 	test('TE-03 dispatches terminal success and unknown-tool failure', async () => {
@@ -575,15 +691,23 @@ suite('VSCloneToolExecutionService', () => {
 
 		assert.deepStrictEqual(result, { success: false, output: 'One or more SEARCH blocks did not match file:///workspace/src/app.ts.' });
 		assert.deepStrictEqual(testHarness.bulkEditCalls, []);
+		assert.deepStrictEqual(testHarness.callBeforeApplyOrEditCalls, []);
+		assert.deepStrictEqual(testHarness.applySearchReplaceCalls, []);
 		assert.deepStrictEqual(testHarness.openEditorCalls, []);
 	});
 
-	test('TE-18 returns a not-applied result when the bulk edit service declines the change', async () => {
+	test('TE-18 returns a not-applied result when the edit engine declines the change', async () => {
 		const testHarness = new ToolExecutionHarness();
 		const service = testHarness.createService();
 		testHarness.resolveHandler = async (resource) => createFileStat(resource.path);
 		testHarness.readFileHandler = async () => 'alpha\nbeta\n';
-		testHarness.bulkEditResult = { ariaSummary: '', isApplied: false };
+		testHarness.nextEditApplyResult = {
+			attemptedEdits: 1,
+			appliedEdits: 0,
+			modifiedFiles: [],
+			failures: ['Workspace edit was not applied.'],
+			fileChanges: [],
+		};
 
 		const result = await service.executeTool('edit_file', {
 			path: '/workspace/src/app.ts',
@@ -597,44 +721,60 @@ suite('VSCloneToolExecutionService', () => {
 		});
 
 		assert.deepStrictEqual(result, { success: false, output: 'Workspace edit was not applied.' });
+		assert.deepStrictEqual(testHarness.callBeforeApplyOrEditCalls, ['file:///workspace/src/app.ts']);
+		assert.deepStrictEqual(testHarness.applySearchReplaceCalls, [{
+			uri: 'file:///workspace/src/app.ts',
+			searchReplaceBlocks: [
+				'<<<<<<< SEARCH',
+				'alpha',
+				'=======',
+				'ALPHA',
+				'>>>>>>> REPLACE',
+			].join('\n'),
+		}]);
 		assert.deepStrictEqual(testHarness.openEditorCalls, []);
 	});
 
-	test('TE-19 computes edit ranges in reverse order and produces a stable diff preview', async () => {
+	test('TE-19 routes edit_file through the edit engine and produces a stable diff preview', async () => {
 		const testHarness = new ToolExecutionHarness();
 		const service = testHarness.createService();
 		const helpers = asInternals(service);
 		testHarness.resolveHandler = async (resource) => createFileStat(resource.path);
 		testHarness.readFileHandler = async () => 'alpha\nbeta\n';
 		testHarness.markers.set('file:///workspace/src/app.ts', [{ message: 'diagnostic' }, { message: 'diagnostic' }]);
+		testHarness.nextEditApplyResult = {
+			attemptedEdits: 2,
+			appliedEdits: 2,
+			modifiedFiles: [URI.file('/workspace/src/app.ts')],
+			failures: [],
+			fileChanges: [],
+		};
+		const changes = [
+			'<<<<<<< SEARCH',
+			'alpha',
+			'=======',
+			'ALPHA',
+			'>>>>>>> REPLACE',
+			'<<<<<<< SEARCH',
+			'beta',
+			'=======',
+			'BETA',
+			'>>>>>>> REPLACE',
+		].join('\n');
 
 		const result = await service.executeTool('edit_file', {
 			path: '/workspace/src/app.ts',
-			changes: [
-				'<<<<<<< SEARCH',
-				'alpha',
-				'=======',
-				'ALPHA',
-				'>>>>>>> REPLACE',
-				'<<<<<<< SEARCH',
-				'beta',
-				'=======',
-				'BETA',
-				'>>>>>>> REPLACE',
-			].join('\n'),
+			changes,
 		});
 
 		assert.strictEqual(result.success, true);
 		assert.ok(result.output.includes('Applied 2 edit(s) to file:///workspace/src/app.ts. Current diagnostics on file: 2.'));
-		assert.strictEqual(testHarness.bulkEditCalls.length, 1);
-		assert.strictEqual(testHarness.bulkEditCalls[0].options?.label, 'VSClone tool: edit file');
-		assert.strictEqual(testHarness.bulkEditCalls[0].edits[0].textEdit.range.startLineNumber, 2);
-		assert.strictEqual(testHarness.bulkEditCalls[0].edits[1].textEdit.range.startLineNumber, 1);
-		const range = helpers.rangeFromOffsets('alpha\nbeta\n', 6, 10);
-		assert.strictEqual(range.startLineNumber, 2);
-		assert.strictEqual(range.startColumn, 1);
-		assert.strictEqual(range.endLineNumber, 2);
-		assert.strictEqual(range.endColumn, 5);
+		assert.deepStrictEqual(testHarness.callBeforeApplyOrEditCalls, ['file:///workspace/src/app.ts']);
+		assert.deepStrictEqual(testHarness.applySearchReplaceCalls, [{
+			uri: 'file:///workspace/src/app.ts',
+			searchReplaceBlocks: changes,
+		}]);
+		assert.deepStrictEqual(testHarness.bulkEditCalls, []);
 
 		const preview = helpers.buildEditFileDiffPreview('/workspace/src/app.ts', 'alpha\nbeta\n', [
 			{ startOffset: 0, endOffset: 5, replaceText: 'ALPHA' },
@@ -646,7 +786,7 @@ suite('VSCloneToolExecutionService', () => {
 		assert.ok(preview.includes('@@ -1,1 +1,1 @@'));
 		assert.ok(preview.includes('@@ -2,1 +2,0 @@'));
 		assert.ok(preview.indexOf('@@ -1,1 +1,1 @@') < preview.indexOf('@@ -2,1 +2,0 @@'));
-		assert.strictEqual(testHarness.openEditorCalls[0], 'file:///workspace/src/app.ts');
+		assert.deepStrictEqual(testHarness.openEditorCalls, []);
 	});
 
 	test('TE-20 rejects create-file calls without required parameters and when the target already exists', async () => {
@@ -663,10 +803,17 @@ suite('VSCloneToolExecutionService', () => {
 		assert.deepStrictEqual(alreadyExists, { success: false, output: 'File already exists: /workspace/src/new-file.ts' });
 	});
 
-	test('TE-21 creates parent folders, writes the new file, opens it, and emits a /dev/null diff preview', async () => {
+	test('TE-21 routes create_file through the edit engine and emits a /dev/null diff preview', async () => {
 		const testHarness = new ToolExecutionHarness();
 		const service = testHarness.createService();
 		testHarness.existsHandler = async () => false;
+		testHarness.nextEditApplyResult = {
+			attemptedEdits: 1,
+			appliedEdits: 1,
+			modifiedFiles: [URI.file('/workspace/src/new-file.ts')],
+			failures: [],
+			fileChanges: [],
+		};
 
 		const result = await service.executeTool('create_file', {
 			path: '/workspace/src/new-file.ts',
@@ -678,15 +825,63 @@ suite('VSCloneToolExecutionService', () => {
 		assert.ok(result.output.includes('--- /dev/null'));
 		assert.ok(result.output.includes('+++ b/workspace/src/new-file.ts'));
 		assert.ok(result.output.includes('@@ -0,0 +1,2 @@'));
-		assert.deepStrictEqual(testHarness.createFolderCalls, ['file:///workspace/src']);
-		assert.deepStrictEqual(testHarness.writeFileCalls, [{
-			resource: 'file:///workspace/src/new-file.ts',
-			content: 'hello\nworld\n',
+		assert.deepStrictEqual(testHarness.rewriteFileCalls, [{
+			uri: 'file:///workspace/src/new-file.ts',
+			newContent: 'hello\nworld\n',
 		}]);
-		assert.deepStrictEqual(testHarness.openEditorCalls, ['file:///workspace/src/new-file.ts']);
+		assert.deepStrictEqual(testHarness.createFolderCalls, []);
+		assert.deepStrictEqual(testHarness.writeFileCalls, []);
+		assert.deepStrictEqual(testHarness.openEditorCalls, []);
 	});
 
-	test('TE-22 reads open-model content before disk and returns undefined on safeResolve failure', async () => {
+	test('TE-22 surfaces rewrite failures without falling back to SEARCH/REPLACE wording', async () => {
+		const testHarness = new ToolExecutionHarness();
+		const service = testHarness.createService();
+		testHarness.existsHandler = async () => false;
+		testHarness.nextEditApplyResult = {
+			attemptedEdits: 1,
+			appliedEdits: 0,
+			modifiedFiles: [],
+			failures: ['Could not create parent folder.'],
+			fileChanges: [],
+		};
+
+		const result = await service.executeTool('create_file', {
+			path: '/workspace/src/new-file.ts',
+			content: 'hello\n',
+		});
+
+		assert.deepStrictEqual(result, { success: false, output: 'Could not create parent folder.' });
+	});
+
+	test('TE-23 keeps tool-side mutation paths idle when assistant edits delegate to the edit engine', async () => {
+		const testHarness = new ToolExecutionHarness();
+		const service = testHarness.createService();
+		testHarness.resolveHandler = async (resource) => createFileStat(resource.path);
+		testHarness.readFileHandler = async () => 'alpha\n';
+		testHarness.existsHandler = async () => false;
+
+		await service.executeTool('edit_file', {
+			path: '/workspace/src/app.ts',
+			changes: [
+				'<<<<<<< SEARCH',
+				'alpha',
+				'=======',
+				'ALPHA',
+				'>>>>>>> REPLACE',
+			].join('\n'),
+		});
+		await service.executeTool('create_file', {
+			path: '/workspace/src/new-file.ts',
+			content: 'hello\n',
+		});
+
+		assert.deepStrictEqual(testHarness.bulkEditCalls, []);
+		assert.deepStrictEqual(testHarness.createFolderCalls, []);
+		assert.deepStrictEqual(testHarness.writeFileCalls, []);
+	});
+
+	test('TE-24 reads open-model content before disk and returns undefined on safeResolve failure', async () => {
 		const testHarness = new ToolExecutionHarness();
 		const service = testHarness.createService();
 		const helpers = asInternals(service);
@@ -708,7 +903,7 @@ suite('VSCloneToolExecutionService', () => {
 		assert.strictEqual(testHarness.readFileCalls.length, 0);
 	});
 
-	test('TE-23 normalizes whitespace, truncates long parameters, and handles empty input in tool logs', async () => {
+	test('TE-25 normalizes whitespace, truncates long parameters, and handles empty input in tool logs', async () => {
 		const testHarness = new ToolExecutionHarness();
 		const service = testHarness.createService();
 
@@ -723,7 +918,7 @@ suite('VSCloneToolExecutionService', () => {
 		assert.ok(testHarness.logService.infos[1].length < 200);
 	});
 
-	test('TE-24 renders create-file previews for empty content, trailing newlines, blank paths, and long diffs', () => {
+	test('TE-26 renders create-file previews for empty content, trailing newlines, blank paths, and long diffs', () => {
 		const testHarness = new ToolExecutionHarness();
 		const helpers = asInternals(testHarness.createService());
 

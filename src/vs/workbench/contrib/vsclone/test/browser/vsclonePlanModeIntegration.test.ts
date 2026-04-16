@@ -13,7 +13,7 @@ import { IVSCloneChatHistoryService, IVSCloneChatHistoryThread, IVSCloneChatHist
 import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
 import { VSCloneChatSessionService } from '../../browser/vscloneChatSessionService.js';
 import { IVSCloneContextGatheringService } from '../../browser/vscloneContextGatheringService.js';
-import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopService, IVSCloneAgentLoopOptions } from '../../browser/vscloneAgentLoopService.js';
+import { IVSCloneThreadRuntimeHandle, IVSCloneThreadRuntimeRunOptions, IVSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
 import { VSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
 import { IVSClonePromptAssemblyService, IVSClonePromptContext, VSClonePromptAssemblyService } from '../../common/vsclonePromptAssemblyService.js';
 import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
@@ -65,19 +65,27 @@ class SlowSelectionService implements IVSCloneThreadModelSelectionService {
 	}
 }
 
-class RecordingAgentLoopHandle implements IVSCloneAgentLoopHandle {
+class RecordingThreadRuntimeHandle implements IVSCloneThreadRuntimeHandle {
 	readonly done = Promise.resolve();
 	cancel(): void { }
 }
 
-class RecordingAgentLoopService implements IVSCloneAgentLoopService {
+class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	declare readonly _serviceBrand: undefined;
-	lastOptions: IVSCloneAgentLoopOptions | undefined;
+	readonly onDidChangeState = Event.None;
+	lastOptions: IVSCloneThreadRuntimeRunOptions | undefined;
 
-	runAgentLoop(options: IVSCloneAgentLoopOptions): IVSCloneAgentLoopHandle {
+	runThread(options: IVSCloneThreadRuntimeRunOptions): IVSCloneThreadRuntimeHandle {
 		this.lastOptions = options;
-		return new RecordingAgentLoopHandle();
+		return new RecordingThreadRuntimeHandle();
 	}
+
+	recordRejectedTurn(): void { }
+	cancelThread(): void { }
+	approveLatestToolRequest(): boolean { return false; }
+	rejectLatestToolRequest(): boolean { return false; }
+	getState(): undefined { return undefined; }
+	async rewindToCheckpoint(): Promise<boolean> { return false; }
 }
 
 class StaticContextGatheringService implements IVSCloneContextGatheringService {
@@ -135,7 +143,7 @@ suite('VSClonePlanModeIntegration', () => {
 		const planModeService = testDisposables.add(new VSClonePlanModeService(backendService));
 		const selectionService = new SlowSelectionService();
 		const historyService = new TestHistoryService();
-		const agentLoopService = new RecordingAgentLoopService();
+		const threadRuntimeService = new RecordingThreadRuntimeService();
 		const contextGatheringService = new StaticContextGatheringService(createContext());
 		const promptAssemblyService = new RecordingPromptAssemblyService();
 		const chatSessionService = testDisposables.add(new VSCloneChatSessionService(
@@ -143,7 +151,7 @@ suite('VSClonePlanModeIntegration', () => {
 			selectionService,
 			planModeService,
 			new NullLogService(),
-			agentLoopService,
+			threadRuntimeService,
 			contextGatheringService,
 			promptAssemblyService,
 		));
@@ -169,7 +177,7 @@ suite('VSClonePlanModeIntegration', () => {
 			sessionResource: 'vsclone://api/thread-1',
 		});
 		assert.strictEqual(promptAssemblyService.lastMode, 'plan');
-		assert.strictEqual(agentLoopService.lastOptions?.mode, 'plan');
+		assert.strictEqual(threadRuntimeService.lastOptions?.mode, 'plan');
 		assert.ok(promptAssemblyService.lastMessage?.includes('PLAN MODE'));
 		assert.ok(!promptAssemblyService.lastMessage?.includes('### edit_file'));
 		assert.deepStrictEqual(backendService.getPlanModeState(), {

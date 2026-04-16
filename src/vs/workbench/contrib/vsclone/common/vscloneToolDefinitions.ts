@@ -4,28 +4,22 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { type VSCloneChatMode } from './vsclonePlanModeTypes.js';
+import {
+	type IVSCloneToolDefinition as IVSCloneToolDefinitionBase,
+	type IVSCloneToolParameterDefinition as IVSCloneToolParameterDefinitionBase,
+	type IVSCloneToolResultPayload as IVSCloneToolResultPayloadBase,
+} from './vscloneToolRuntimeTypes.js';
 
 /**
- * Tool metadata is centralized here so prompt assembly and runtime tool dispatch stay aligned.
- * Keeping one source of truth prevents prompt/tool drift when we add or evolve capabilities.
+ * Tool metadata stays centralized so prompt assembly and runtime dispatch keep the same contract.
+ * That matters even more now that VSClone has both file tools and terminal tools with approval
+ * classes that future thread-runtime code will need to reason about.
  */
-export interface IVSCloneToolParameterDefinition {
-	readonly name: string;
-	readonly required: boolean;
-	readonly description: string;
-}
+export interface IVSCloneToolParameterDefinition extends IVSCloneToolParameterDefinitionBase {}
 
-export interface IVSCloneToolDefinition {
-	readonly name: string;
-	readonly description: string;
-	readonly planModeAllowed: boolean;
-	readonly parameters: readonly IVSCloneToolParameterDefinition[];
-}
+export interface IVSCloneToolDefinition extends IVSCloneToolDefinitionBase {}
 
-export interface IVSCloneToolResultPayload {
-	readonly success: boolean;
-	readonly output: string;
-}
+export interface IVSCloneToolResultPayload extends IVSCloneToolResultPayloadBase {}
 
 export const VSCLONE_TOOL_DEFINITIONS: readonly IVSCloneToolDefinition[] = [
 	{
@@ -58,6 +52,7 @@ export const VSCLONE_TOOL_DEFINITIONS: readonly IVSCloneToolDefinition[] = [
 	{
 		name: 'edit_file',
 		description: 'Apply SEARCH/REPLACE edits to an existing file.',
+		approvalType: 'edits',
 		planModeAllowed: false,
 		parameters: [
 			{ name: 'path', required: true, description: 'Absolute or workspace-relative file path.' },
@@ -67,10 +62,49 @@ export const VSCLONE_TOOL_DEFINITIONS: readonly IVSCloneToolDefinition[] = [
 	{
 		name: 'create_file',
 		description: 'Create a new file with full contents.',
+		approvalType: 'edits',
 		planModeAllowed: false,
 		parameters: [
 			{ name: 'path', required: true, description: 'Absolute or workspace-relative file path.' },
 			{ name: 'content', required: true, description: 'Full contents for the new file.' },
+		],
+	},
+	{
+		name: 'run_command',
+		description: 'Run a one-off shell command in a temporary terminal and return the captured output.',
+		approvalType: 'terminal',
+		planModeAllowed: false,
+		parameters: [
+			{ name: 'command', required: true, description: 'Shell command to execute.' },
+			{ name: 'cwd', required: false, description: 'Optional workspace-relative or absolute working directory.' },
+		],
+	},
+	{
+		name: 'open_persistent_terminal',
+		description: 'Create a persistent terminal that can be reused by later terminal commands.',
+		approvalType: 'terminal',
+		planModeAllowed: false,
+		parameters: [
+			{ name: 'cwd', required: false, description: 'Optional workspace-relative or absolute working directory.' },
+		],
+	},
+	{
+		name: 'run_persistent_command',
+		description: 'Run a shell command inside an existing persistent terminal.',
+		approvalType: 'terminal',
+		planModeAllowed: false,
+		parameters: [
+			{ name: 'persistent_terminal_id', required: true, description: 'Identifier returned by open_persistent_terminal.' },
+			{ name: 'command', required: true, description: 'Shell command to execute.' },
+		],
+	},
+	{
+		name: 'kill_persistent_terminal',
+		description: 'Close a persistent terminal that is no longer needed.',
+		approvalType: 'terminal',
+		planModeAllowed: false,
+		parameters: [
+			{ name: 'persistent_terminal_id', required: true, description: 'Identifier returned by open_persistent_terminal.' },
 		],
 	},
 	{
@@ -110,6 +144,9 @@ export function formatToolDefinitionsForPrompt(mode: VSCloneChatMode = 'act'): s
 	for (const tool of visibleTools) {
 		lines.push(`### ${tool.name}`);
 		lines.push(tool.description);
+		if (tool.approvalType) {
+			lines.push(`Approval class: ${tool.approvalType}`);
+		}
 		if (tool.parameters.length === 0) {
 			lines.push('Parameters: (none)');
 		} else {
@@ -125,11 +162,12 @@ export function formatToolDefinitionsForPrompt(mode: VSCloneChatMode = 'act'): s
 	lines.push('## Tool Guidelines');
 	if (mode === 'plan') {
 		lines.push('- Use read_file, search_files, and list_directory to gather codebase context before answering.');
-		lines.push('- Do not attempt to edit files or propose executable SEARCH/REPLACE patches in plan mode.');
+		lines.push('- Do not attempt to edit files, run terminal commands, or propose executable SEARCH/REPLACE patches in plan mode.');
 		lines.push('- When you have enough context, call attempt_completion with a detailed implementation plan.');
 	} else {
 		lines.push('- Read a file before editing it.');
 		lines.push('- Use search_files and list_directory to explore unfamiliar areas.');
+		lines.push('- Use run_command for one-off shell output and open_persistent_terminal/run_persistent_command when a shell needs to stay open.');
 	}
 	// Keep follow-up reads grounded in observed evidence rather than guessed starter files.
 	lines.push('- Only call read_file for paths you directly observed in list_directory/search_files results, the active file, or the open-files list.');
