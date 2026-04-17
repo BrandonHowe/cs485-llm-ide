@@ -80,7 +80,19 @@ interface IRenderAssistantMessageTarget {
 
 interface IRenderRuntimeAssistantMessageTarget {
 	[key: string]: unknown;
-	renderRuntimeAssistantMessage: (message: { id?: string; role: 'assistant'; createdAt: number; content: string; metadata?: { importedFromHistory?: boolean } }, threadId?: string) => HTMLElement;
+	renderRuntimeAssistantMessage: (message: {
+		id?: string;
+		role: 'assistant';
+		createdAt: number;
+		content: string;
+		metadata?: {
+			importedFromHistory?: boolean;
+			editSuggestion?: {
+				kind: 'search_replace';
+				applyMode: 'manual' | 'auto';
+			};
+		};
+	}, threadId?: string) => HTMLElement;
 	renderSearchReplaceAwareText: (container: HTMLElement, text: string, streaming: boolean) => void;
 	appendMarkdownSegment: (container: HTMLElement, text: string, className: string) => void;
 	looksLikePartialSearchReplaceBlock: (text: string) => boolean;
@@ -1931,7 +1943,15 @@ suite('VSCloneUnifiedChatViewPane', () => {
 						id: 'assistant-1',
 						role: 'assistant',
 						createdAt: 1,
-						content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+						// This render path should trust the runtime-owned apply metadata even if the
+						// assistant bubble no longer exposes the original SEARCH/REPLACE block text.
+						content: 'I applied the prepared changes to src/app.ts.',
+						metadata: {
+							editSuggestion: {
+								kind: 'search_replace',
+								applyMode: 'auto',
+							},
+						},
 					},
 				],
 				assistantEditApplications: [{
@@ -3961,6 +3981,52 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.ok(actRendered.querySelector('.vsclone-thread-message-apply'));
 	});
 
+	test('runtime plan-mode assistant messages do not render apply changes buttons', () => {
+		const pane = createPaneHarness() as unknown as IRenderRuntimeAssistantMessageTarget & {
+			editApplicationService: {
+				hasSearchReplaceBlocks: () => boolean;
+			};
+			renderRuntimeAssistantMessage: (message: { id: string; role: 'assistant'; createdAt: number; content: string; mode?: 'act' | 'plan' }, threadId?: string) => HTMLElement;
+		};
+		pane.editApplicationService = {
+			hasSearchReplaceBlocks: () => true,
+		};
+		pane.threadRuntimeService = {
+			getState: () => ({
+				threadId: 'thread-1',
+				mode: 'act' as const,
+				streamState: { kind: 'idle' as const },
+				messages: [],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 1,
+			}),
+		};
+		pane.renderSearchReplaceAwareText = (container: HTMLElement, text: string) => {
+			container.textContent = text;
+		};
+		pane.appendMarkdownSegment = (container: HTMLElement, text: string) => {
+			container.textContent = text;
+		};
+		pane.looksLikePartialSearchReplaceBlock = () => false;
+
+		const rendered = pane.renderRuntimeAssistantMessage({
+			id: 'assistant-plan',
+			role: 'assistant',
+			mode: 'plan',
+			createdAt: 1,
+			content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			metadata: {
+				editSuggestion: {
+					kind: 'search_replace',
+					applyMode: 'auto',
+				},
+			},
+		}, 'thread-1');
+
+		assert.strictEqual(rendered.querySelector('.vsclone-thread-message-apply'), null);
+	});
+
 	test('user turns render persisted prompt images', () => {
 		const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane;
 		const target = pane as unknown as IRenderUserMessageTarget;
@@ -4476,7 +4542,13 @@ suite('VSCloneUnifiedChatViewPane', () => {
 							createdAt: 2,
 							content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
 							mode: 'act',
-							metadata: { importedFromHistory: true },
+							metadata: {
+								importedFromHistory: true,
+								editSuggestion: {
+									kind: 'search_replace',
+									applyMode: 'manual',
+								},
+							},
 						},
 					],
 					checkpoints: [],
@@ -4700,7 +4772,13 @@ suite('VSCloneUnifiedChatViewPane', () => {
 							role: 'assistant',
 							createdAt: 2,
 							content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
-							metadata: { importedFromHistory: true },
+							metadata: {
+								importedFromHistory: true,
+								editSuggestion: {
+									kind: 'search_replace',
+									applyMode: 'manual',
+								},
+							},
 						},
 					],
 					checkpoints: [],
@@ -5100,7 +5178,13 @@ suite('VSCloneUnifiedChatViewPane', () => {
 					role: 'assistant',
 					createdAt: 1,
 					content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
-					metadata: { importedFromHistory: true },
+					metadata: {
+						importedFromHistory: true,
+						editSuggestion: {
+							kind: 'search_replace',
+							applyMode: 'manual',
+						},
+					},
 				}],
 				assistantEditApplications: [{
 					messageId: 'assistant-pending',
@@ -5125,7 +5209,13 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			role: 'assistant',
 			createdAt: 1,
 			content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
-			metadata: { importedFromHistory: true },
+			metadata: {
+				importedFromHistory: true,
+				editSuggestion: {
+					kind: 'search_replace',
+					applyMode: 'manual',
+				},
+			},
 		}, 'thread-1');
 
 		assert.strictEqual(rendered.querySelector('.vsclone-thread-message-apply')?.textContent, 'Applying changes...');
@@ -5215,6 +5305,12 @@ suite('VSCloneUnifiedChatViewPane', () => {
 				id: 'assistant-busy',
 				role: 'assistant' as const,
 				content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+				metadata: {
+					editSuggestion: {
+						kind: 'search_replace' as const,
+						applyMode: 'auto' as const,
+					},
+				},
 			}],
 			checkpoints: [],
 			isRunning: true,
@@ -5352,6 +5448,12 @@ suite('VSCloneUnifiedChatViewPane', () => {
 				role: 'assistant' as const,
 				createdAt: 1,
 				content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+				metadata: {
+					editSuggestion: {
+						kind: 'search_replace' as const,
+						applyMode: 'auto' as const,
+					},
+				},
 			}],
 			assistantEditApplications: [{
 				messageId: 'assistant-apply',
@@ -5437,6 +5539,12 @@ suite('VSCloneUnifiedChatViewPane', () => {
 				role: 'assistant' as const,
 				createdAt: 1,
 				content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+				metadata: {
+					editSuggestion: {
+						kind: 'search_replace' as const,
+						applyMode: 'auto' as const,
+					},
+				},
 			}],
 			assistantEditApplications: [{
 				messageId: 'assistant-applied',
@@ -5513,6 +5621,12 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			role: 'assistant' as const,
 			createdAt: 1,
 			content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			metadata: {
+				editSuggestion: {
+					kind: 'search_replace' as const,
+					applyMode: 'auto' as const,
+				},
+			},
 		}];
 		const redoRendered = pane.renderRuntimeAssistantMessage(busyAppliedState.messages[0], 'thread-1');
 		const redoButton = Array.from(redoRendered.querySelectorAll('button')).find(button => button.textContent === 'Redo') as HTMLButtonElement | undefined;
@@ -5643,6 +5757,12 @@ suite('VSCloneUnifiedChatViewPane', () => {
 				role: 'assistant' as const,
 				createdAt: 1,
 				content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+				metadata: {
+					editSuggestion: {
+						kind: 'search_replace' as const,
+						applyMode: 'auto' as const,
+					},
+				},
 			}],
 			assistantEditApplications: [{
 				messageId: 'assistant-partial',
@@ -5684,6 +5804,142 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		assert.ok(retryButton);
 		assert.ok(rendered.querySelector('.vsclone-edit-apply-summary.phase-partial'));
+	});
+
+	test('renderRuntimeAssistantMessage keeps failed apply retry visible from runtime state even without SEARCH/REPLACE text', () => {
+		const pane = createPaneHarness() as unknown as IRenderRuntimeAssistantMessageTarget & {
+			editApplicationService: {
+				hasSearchReplaceBlocks: () => boolean;
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => {
+					threadId: string;
+					streamState: { kind: 'idle' };
+					messages: Array<{ id: string; role: 'assistant'; createdAt: number; content: string }>;
+					assistantEditApplications: Array<{ messageId: string; state: unknown }>;
+					checkpoints: Array<unknown>;
+					isRunning: boolean;
+					lastUpdatedAt: number;
+				} | undefined;
+				getAssistantEditApplicationState: (threadId: string, messageId: string) => unknown;
+			};
+		};
+		const runtimeState = {
+			threadId: 'thread-1',
+			streamState: { kind: 'idle' as const },
+			messages: [{
+				id: 'assistant-runtime-retry',
+				role: 'assistant' as const,
+				createdAt: 1,
+				// The retry affordance should come from runtime-owned apply state rather than from
+				// whether the assistant bubble still carries raw SEARCH/REPLACE text verbatim.
+				content: 'I prepared the changes for src/app.ts.',
+				metadata: {
+					editSuggestion: {
+						kind: 'search_replace' as const,
+						applyMode: 'auto' as const,
+					},
+				},
+			}],
+			assistantEditApplications: [{
+				messageId: 'assistant-runtime-retry',
+				state: { phase: 'failed' },
+			}],
+			checkpoints: [],
+			isRunning: false,
+			lastUpdatedAt: 1,
+		};
+		pane.editApplicationService = {
+			hasSearchReplaceBlocks: () => false,
+		};
+		pane.threadRuntimeService = {
+			getState: () => runtimeState,
+			getAssistantEditApplicationState: () => ({ phase: 'failed' }),
+		};
+		pane.renderSearchReplaceAwareText = (container: HTMLElement, text: string) => {
+			container.textContent = text;
+		};
+		pane.appendMarkdownSegment = (container: HTMLElement, text: string) => {
+			container.textContent = text;
+		};
+		pane.looksLikePartialSearchReplaceBlock = () => false;
+
+		const rendered = pane.renderRuntimeAssistantMessage(runtimeState.messages[0], 'thread-1');
+
+		assert.ok(rendered.querySelector('.vsclone-thread-message-apply'));
+	});
+
+	test('renderRuntimeAssistantMessage keeps applied summary visible from runtime state even without SEARCH/REPLACE text', () => {
+		const pane = createPaneHarness() as unknown as IRenderRuntimeAssistantMessageTarget & {
+			editApplicationService: {
+				hasSearchReplaceBlocks: () => boolean;
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => {
+					threadId: string;
+					streamState: { kind: 'idle' };
+					messages: Array<{ id: string; role: 'assistant'; createdAt: number; content: string }>;
+					assistantEditApplications: Array<{ messageId: string; state: unknown }>;
+					checkpoints: Array<unknown>;
+					isRunning: boolean;
+					lastUpdatedAt: number;
+				} | undefined;
+				getAssistantEditApplicationState: (threadId: string, messageId: string) => unknown;
+			};
+		};
+		const runtimeState = {
+			threadId: 'thread-1',
+			streamState: { kind: 'idle' as const },
+			messages: [{
+				id: 'assistant-runtime-applied',
+				role: 'assistant' as const,
+				createdAt: 1,
+				content: 'I applied the prepared changes to src/app.ts.',
+				metadata: {
+					editSuggestion: {
+						kind: 'search_replace' as const,
+						applyMode: 'auto' as const,
+					},
+				},
+			}],
+			assistantEditApplications: [{
+				messageId: 'assistant-runtime-applied',
+				state: {
+					phase: 'applied',
+					result: {
+						attemptedEdits: 1,
+						appliedEdits: 1,
+						modifiedFiles: [{ toString: () => 'file:///workspace/src/app.ts' }],
+						failures: [],
+						fileChanges: [
+							{ uri: { toString: () => 'file:///workspace/src/app.ts' }, displayPath: 'src/app.ts', addedLines: 1, removedLines: 1, action: 'modify' as const },
+						],
+					},
+				},
+			}],
+			checkpoints: [],
+			isRunning: false,
+			lastUpdatedAt: 1,
+		};
+		pane.editApplicationService = {
+			hasSearchReplaceBlocks: () => false,
+		};
+		pane.threadRuntimeService = {
+			getState: () => runtimeState,
+			getAssistantEditApplicationState: () => runtimeState.assistantEditApplications[0].state,
+		};
+		pane.renderSearchReplaceAwareText = (container: HTMLElement, text: string) => {
+			container.textContent = text;
+		};
+		pane.appendMarkdownSegment = (container: HTMLElement, text: string) => {
+			container.textContent = text;
+		};
+		pane.looksLikePartialSearchReplaceBlock = () => false;
+
+		const rendered = pane.renderRuntimeAssistantMessage(runtimeState.messages[0], 'thread-1');
+
+		assert.ok(rendered.querySelector('.vsclone-edit-apply-summary.phase-applied'));
+		assert.ok(Array.from(rendered.querySelectorAll('button')).some(button => button.textContent === 'Undo'));
 	});
 
 	test('manual redo rewires through the engine-native bridge and preserves the apply summary state', async () => {
@@ -5734,6 +5990,12 @@ suite('VSCloneUnifiedChatViewPane', () => {
 						'new',
 						'>>>>>>> REPLACE',
 					].join('\n'),
+					metadata: {
+						editSuggestion: {
+							kind: 'search_replace' as const,
+							applyMode: 'auto' as const,
+						},
+					},
 				},
 			],
 			assistantEditApplications: [{
@@ -5923,6 +6185,12 @@ suite('VSCloneUnifiedChatViewPane', () => {
 				role: 'assistant' as const,
 				createdAt: 1,
 				content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+				metadata: {
+					editSuggestion: {
+						kind: 'search_replace' as const,
+						applyMode: 'auto' as const,
+					},
+				},
 			}],
 			assistantEditApplications: [{
 				messageId: 'assistant-partial-undo',
@@ -6023,6 +6291,12 @@ suite('VSCloneUnifiedChatViewPane', () => {
 						'new',
 						'>>>>>>> REPLACE',
 					].join('\n'),
+					metadata: {
+						editSuggestion: {
+							kind: 'search_replace' as const,
+							applyMode: 'auto' as const,
+						},
+					},
 				},
 			],
 			assistantEditApplications: [{

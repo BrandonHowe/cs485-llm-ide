@@ -22,19 +22,24 @@ import { formatToolResult } from '../common/vscloneToolDefinitions.js';
 import {
 	IVSCloneThreadRuntimeAssistantEditApplication,
 	IVSCloneThreadRuntimeAssistantEditApplicationState,
+	IVSCloneThreadRuntimeAssistantEditStatus,
+	IVSCloneThreadRuntimeAssistantEditSuggestion,
 	IVSCloneThreadRuntimeCatalogEntry,
 	IVSCloneThreadRuntimeCatalogQuery,
 	IVSCloneThreadRuntimeCheckpoint,
+	IVSCloneThreadRuntimeConversationMessageMetadata,
 	IVSCloneThreadRuntimeMessage,
 	IVSCloneThreadRuntimePausedApproval,
 	IVSCloneThreadRuntimeRunContext,
 	IVSCloneThreadRuntimeRunOptions,
 	IVSCloneThreadRuntimeSnapshot,
 	IVSCloneThreadRuntimeState,
+	VSCloneThreadRuntimeAssistantEditSuggestionApplyMode,
 	VSCloneThreadToolApprovalDecision,
 } from '../common/vscloneThreadRuntimeTypes.js';
 import type { VSCloneToolApprovalType } from '../common/vscloneToolRuntimeTypes.js';
 import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopOptions, IVSCloneAgentLoopService } from './vscloneAgentLoopService.js';
+import { parseSearchReplaceBlocks } from './vscloneEditApplicationService.js';
 import {
 	IVSCloneToolExecutionResult,
 	IVSCloneToolExecutionService,
@@ -74,6 +79,8 @@ export interface IVSCloneThreadRuntimeService {
 	deleteThread(threadId: string): boolean;
 	clearAll(): void;
 	getState(threadId: string): IVSCloneThreadRuntimeState | undefined;
+	getAssistantEditStatus?(threadId: string, messageId: string): IVSCloneThreadRuntimeAssistantEditStatus | undefined;
+	getAssistantEditStatuses?(threadId: string): readonly IVSCloneThreadRuntimeAssistantEditStatus[];
 	getAssistantEditApplicationState?(threadId: string, messageId: string): IVSCloneThreadRuntimeAssistantEditApplicationState | undefined;
 	getAssistantEditApplicationStates?(threadId: string): readonly IVSCloneThreadRuntimeAssistantEditApplication[];
 	setAssistantEditApplicationState?(threadId: string, messageId: string, state: IVSCloneThreadRuntimeAssistantEditApplicationState | undefined): void;
@@ -544,8 +551,39 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		return this.states.get(threadId);
 	}
 
+	getAssistantEditStatus(threadId: string, messageId: string): IVSCloneThreadRuntimeAssistantEditStatus | undefined {
+		return this.getAssistantEditStatuses(threadId).find(status => status.messageId === messageId);
+	}
+
+	getAssistantEditStatuses(threadId: string): readonly IVSCloneThreadRuntimeAssistantEditStatus[] {
+		const state = this.states.get(threadId);
+		if (!state) {
+			return [];
+		}
+
+		const applicationsByMessageId = new Map(
+			(state.assistantEditApplications ?? []).map(application => [application.messageId, application.state] as const),
+		);
+		const statuses: IVSCloneThreadRuntimeAssistantEditStatus[] = [];
+		for (const message of state.messages) {
+			if (message.role !== 'assistant') {
+				continue;
+			}
+			const suggestion = message.metadata?.editSuggestion;
+			if (!suggestion) {
+				continue;
+			}
+			statuses.push({
+				messageId: message.id,
+				suggestion,
+				application: applicationsByMessageId.get(message.id),
+			});
+		}
+		return statuses;
+	}
+
 	getAssistantEditApplicationState(threadId: string, messageId: string): IVSCloneThreadRuntimeAssistantEditApplicationState | undefined {
-		return this.states.get(threadId)?.assistantEditApplications?.find(entry => entry.messageId === messageId)?.state;
+		return this.getAssistantEditStatus(threadId, messageId)?.application;
 	}
 
 	getAssistantEditApplicationStates(threadId: string): readonly IVSCloneThreadRuntimeAssistantEditApplication[] {
@@ -566,6 +604,37 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			return;
 		}
 
+		const assistantMessageIndex = current.messages.findIndex(message =>
+			message.role === 'assistant' && message.id === messageId,
+		);
+		const assistantMessage = assistantMessageIndex >= 0
+			? current.messages[assistantMessageIndex] as Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>
+			: undefined;
+		if (!assistantMessage) {
+			return;
+		}
+
+		// Some older imported runtime payloads only persisted `importedFromHistory`, not the derived
+		// manual edit suggestion. Materialize that runtime-owned suggestion before storing apply
+		// state so the compatibility fallback can survive refresh and reload instead of living only
+		// in the pane's transient pending set.
+		const existingSuggestion = this.getAssistantMessageEditSuggestion(assistantMessage);
+		const normalizedAssistantMessage = existingSuggestion
+			? assistantMessage
+			: this.normalizeRuntimeConversationMessage(
+				assistantMessage,
+				current.mode,
+			) as Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>;
+		const suggestion = existingSuggestion ?? this.getAssistantMessageEditSuggestion(normalizedAssistantMessage);
+		if (!suggestion) {
+			// Apply state is only valid for assistant messages that runtime already marked as
+			// applicable. Dropping writes here keeps the durable state aligned with the same runtime
+			// availability signal the pane should render from.
+			return;
+		}
+		const nextMessages = [...current.messages];
+		nextMessages[assistantMessageIndex] = normalizedAssistantMessage;
+
 		const nextApplications = [...(current.assistantEditApplications ?? [])];
 		const existingIndex = nextApplications.findIndex(entry => entry.messageId === messageId);
 		if (state) {
@@ -581,6 +650,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 
 		this.setState(threadId, {
 			...current,
+			messages: nextMessages,
 			assistantEditApplications: nextApplications,
 			lastUpdatedAt: Date.now(),
 		});
@@ -950,10 +1020,10 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		const lastMessage = current.messages.at(-1);
 		if (lastMessage?.role === 'assistant') {
 			const updatedMessages = [...current.messages];
-			updatedMessages[updatedMessages.length - 1] = {
+			updatedMessages[updatedMessages.length - 1] = this.normalizeRuntimeConversationMessage({
 				...lastMessage,
 				content: lastMessage.content + delta,
-			};
+			}, current.mode);
 			this.setState(threadId, {
 				...current,
 				messages: updatedMessages,
@@ -988,10 +1058,10 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		const lastMessage = current.messages.at(-1);
 		if (lastMessage?.role === 'assistant') {
 			const updatedMessages = [...current.messages];
-			updatedMessages[updatedMessages.length - 1] = {
+			updatedMessages[updatedMessages.length - 1] = this.normalizeRuntimeConversationMessage({
 				...lastMessage,
 				content: responseText,
-			};
+			}, current.mode);
 			this.setState(threadId, {
 				...current,
 				messages: updatedMessages,
@@ -1068,16 +1138,26 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 
 	private setState(threadId: string, nextState: IThreadRuntimeStateDraft): void {
 		const previous = this.states.get(threadId);
+		const previousMessagesById = new Map(previous?.messages.map(message => [message.id, message] as const) ?? []);
+		const messages = nextState.messages.map(message => this.normalizeRuntimeConversationMessage(
+			message,
+			nextState.mode,
+			previousMessagesById.get(message.id),
+		));
 		const assistantEditApplications = this.normalizeAssistantEditApplications(
 			nextState.assistantEditApplications ?? [],
-			nextState.messages,
+			messages,
 			'keep',
 		);
 		const normalized: IVSCloneThreadRuntimeState = {
 			...nextState,
-			catalog: this.normalizeCatalogEntry(threadId, nextState, previous),
+			messages,
+			catalog: this.normalizeCatalogEntry(threadId, {
+				...nextState,
+				messages,
+			}, previous),
 			assistantEditApplications,
-			branchHeadMessageId: nextState.branchHeadMessageId ?? nextState.messages.at(-1)?.id,
+			branchHeadMessageId: nextState.branchHeadMessageId ?? messages.at(-1)?.id,
 		};
 		this.states.set(threadId, normalized);
 		this.deletedThreadIds.delete(threadId);
@@ -1090,7 +1170,13 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	private createMessage(message: Omit<Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }>, 'id'>): Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }>;
 	private createMessage(message: Omit<Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'checkpoint' }>, 'id'>): Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'checkpoint' }>;
 	private createMessage(message: Omit<IVSCloneThreadRuntimeMessage, 'id'>): IVSCloneThreadRuntimeMessage {
-		return { id: generateUuid(), ...message };
+		const createdMessage: IVSCloneThreadRuntimeMessage = { id: generateUuid(), ...message };
+		if (createdMessage.role !== 'user' && createdMessage.role !== 'assistant') {
+			return createdMessage;
+		}
+		// Conversation messages pick up their durable apply/import metadata at creation time so the
+		// pane can later trust runtime state directly instead of re-parsing transcript text.
+		return this.normalizeRuntimeConversationMessage(createdMessage, createdMessage.mode);
 	}
 
 	private normalizeRestoredState(state: IVSCloneThreadRuntimeState): IVSCloneThreadRuntimeState {
@@ -1188,6 +1274,9 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			if (message.role !== 'assistant') {
 				continue;
 			}
+			if (!this.getAssistantMessageEditSuggestion(message)) {
+				continue;
+			}
 			const state = applicationsByMessageId.get(message.id);
 			if (!state) {
 				continue;
@@ -1210,6 +1299,12 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		return state;
 	}
 
+	private getAssistantMessageEditSuggestion(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }> | undefined,
+	): IVSCloneThreadRuntimeAssistantEditSuggestion | undefined {
+		return message?.metadata?.editSuggestion;
+	}
+
 	private hasPendingAssistantEditApplication(state: IVSCloneThreadRuntimeState): boolean {
 		return (state.assistantEditApplications ?? []).some(application => application.state.phase === 'pending');
 	}
@@ -1224,11 +1319,15 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		shouldBackfillImportedHistoryMetadata: boolean,
 	): IVSCloneThreadRuntimeMessage {
 		if (message.role === 'user' || message.role === 'assistant') {
-			const metadata = (message.metadata?.importedFromHistory || shouldBackfillImportedHistoryMetadata)
-				? { importedFromHistory: true }
-				: undefined;
+			const metadata = this.getNormalizedConversationMessageMetadata(
+				message,
+				threadMode,
+				shouldBackfillImportedHistoryMetadata,
+				true,
+			);
+			const { metadata: _staleMetadata, ...messageWithoutMetadata } = message;
 			return {
-				...message,
+				...messageWithoutMetadata,
 				mode: message.mode ?? threadMode ?? 'act',
 				// The import marker is durable runtime metadata. Older payloads may not have it, but
 				// once present it should survive restore exactly so active runtime consumers do not
@@ -1259,6 +1358,104 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			}
 		}
 		return sawConversationMessage;
+	}
+
+	private normalizeRuntimeConversationMessage(
+		message: IVSCloneThreadRuntimeMessage,
+		threadMode: IVSCloneThreadRuntimeState['mode'],
+		previousMessage?: IVSCloneThreadRuntimeMessage,
+	): IVSCloneThreadRuntimeMessage {
+		if (message.role !== 'user' && message.role !== 'assistant') {
+			return message;
+		}
+
+		// Generic state updates should not silently erase a restored assistant edit suggestion just
+		// because the assistant bubble now shows summary text. Only recompute when the assistant
+		// message itself changed; otherwise preserve the durable runtime metadata from the prior state.
+		const preserveExplicitEditSuggestion = message.role === 'assistant'
+			&& previousMessage?.role === 'assistant'
+			&& previousMessage.id === message.id
+			&& previousMessage.content === message.content
+			&& (previousMessage.mode ?? threadMode ?? 'act') === (message.mode ?? threadMode ?? 'act')
+			&& previousMessage.metadata?.editSuggestion !== undefined;
+		const metadata = this.getNormalizedConversationMessageMetadata(
+			message,
+			threadMode,
+			false,
+			preserveExplicitEditSuggestion,
+			previousMessage,
+		);
+		const { metadata: _staleMetadata, ...messageWithoutMetadata } = message;
+		return {
+			...messageWithoutMetadata,
+			mode: message.mode ?? threadMode ?? 'act',
+			...(metadata ? { metadata } : {}),
+		};
+	}
+
+	/**
+	 * Runtime owns the assistant-apply affordance now. We still derive SEARCH/REPLACE eligibility
+	 * from assistant content while the model emits inline patches, but that derivation is resolved
+	 * once into durable runtime metadata so the pane can render/apply from the stored signal.
+	 */
+	private getNormalizedConversationMessageMetadata(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'user' | 'assistant' }>,
+		threadMode: IVSCloneThreadRuntimeState['mode'],
+		shouldBackfillImportedHistoryMetadata: boolean,
+		preserveExplicitEditSuggestion: boolean,
+		previousMessage?: IVSCloneThreadRuntimeMessage,
+	): IVSCloneThreadRuntimeConversationMessageMetadata | undefined {
+		const importedFromHistory = message.metadata?.importedFromHistory === true || shouldBackfillImportedHistoryMetadata;
+		if (message.role === 'user') {
+			return importedFromHistory ? { importedFromHistory: true } : undefined;
+		}
+
+		const explicitEditSuggestion = preserveExplicitEditSuggestion
+			? (
+				message.metadata?.editSuggestion
+				?? (previousMessage?.role === 'assistant' ? previousMessage.metadata?.editSuggestion : undefined)
+			)
+			: undefined;
+		const editSuggestion = explicitEditSuggestion ?? this.toAssistantEditSuggestion(
+			this.getAssistantEditSuggestionApplyMode(
+				message.content,
+				message.mode ?? threadMode ?? 'act',
+				importedFromHistory,
+			),
+		);
+		if (!importedFromHistory && !editSuggestion) {
+			return undefined;
+		}
+
+		return {
+			...(importedFromHistory ? { importedFromHistory: true } : {}),
+			...(editSuggestion ? { editSuggestion } : {}),
+		};
+	}
+
+	private toAssistantEditSuggestion(
+		applyMode: VSCloneThreadRuntimeAssistantEditSuggestionApplyMode | undefined,
+	): IVSCloneThreadRuntimeConversationMessageMetadata['editSuggestion'] | undefined {
+		return applyMode
+			? {
+				kind: 'search_replace',
+				applyMode,
+			}
+			: undefined;
+	}
+
+	private getAssistantEditSuggestionApplyMode(
+		content: string,
+		mode: IVSCloneThreadRuntimeRunOptions['mode'],
+		importedFromHistory: boolean,
+	): VSCloneThreadRuntimeAssistantEditSuggestionApplyMode | undefined {
+		if (mode === 'plan') {
+			return undefined;
+		}
+		if (parseSearchReplaceBlocks(content).length === 0) {
+			return undefined;
+		}
+		return importedFromHistory ? 'manual' : 'auto';
 	}
 
 	private normalizeCatalogEntry(

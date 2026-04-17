@@ -11,6 +11,7 @@ import {
 import type {
 	IVSCloneThreadRuntimeAssistantEditApplication,
 	IVSCloneThreadRuntimeAssistantEditApplicationState,
+	IVSCloneThreadRuntimeAssistantEditSuggestion,
 	IVSCloneThreadRuntimeCatalogEntry,
 	IVSCloneThreadRuntimeCheckpoint,
 	IVSCloneThreadRuntimeConversationMessageMetadata,
@@ -109,6 +110,10 @@ interface ISerializedThreadRuntimeAssistantEditApplication {
 
 interface ISerializedThreadRuntimeConversationMessageMetadata {
 	importedFromHistory?: boolean;
+	editSuggestion?: {
+		kind: 'search_replace';
+		applyMode: 'manual' | 'auto';
+	};
 }
 
 type ISerializedThreadRuntimeMessage =
@@ -225,7 +230,14 @@ function isEditFileChange(value: unknown): value is ISerializedThreadRuntimeEdit
 
 function isConversationMessageMetadata(value: unknown): value is ISerializedThreadRuntimeConversationMessageMetadata {
 	return isObject(value)
-		&& (value.importedFromHistory === undefined || typeof value.importedFromHistory === 'boolean');
+		&& (value.importedFromHistory === undefined || typeof value.importedFromHistory === 'boolean')
+		&& (value.editSuggestion === undefined || isAssistantEditSuggestion(value.editSuggestion));
+}
+
+function isAssistantEditSuggestion(value: unknown): value is IVSCloneThreadRuntimeAssistantEditSuggestion {
+	return isObject(value)
+		&& value.kind === 'search_replace'
+		&& (value.applyMode === 'manual' || value.applyMode === 'auto');
 }
 
 function isRecordOfStrings(value: unknown): value is Record<string, string> {
@@ -498,13 +510,27 @@ function deserializeAssistantEditApplication(application: ISerializedThreadRunti
 function serializeConversationMessageMetadata(
 	metadata: IVSCloneThreadRuntimeConversationMessageMetadata | undefined,
 ): ISerializedThreadRuntimeConversationMessageMetadata | undefined {
-	return metadata ? { ...metadata } : undefined;
+	if (!metadata) {
+		return undefined;
+	}
+	const serialized = {
+		...(metadata.importedFromHistory !== undefined ? { importedFromHistory: metadata.importedFromHistory } : {}),
+		...(metadata.editSuggestion ? { editSuggestion: { ...metadata.editSuggestion } } : {}),
+	};
+	return Object.keys(serialized).length > 0 ? serialized : undefined;
 }
 
 function deserializeConversationMessageMetadata(
 	metadata: ISerializedThreadRuntimeConversationMessageMetadata | undefined,
 ): IVSCloneThreadRuntimeConversationMessageMetadata | undefined {
-	return metadata ? { ...metadata } : undefined;
+	if (!metadata) {
+		return undefined;
+	}
+	const deserialized = {
+		...(metadata.importedFromHistory !== undefined ? { importedFromHistory: metadata.importedFromHistory } : {}),
+		...(metadata.editSuggestion ? { editSuggestion: { ...metadata.editSuggestion } } : {}),
+	};
+	return Object.keys(deserialized).length > 0 ? deserialized : undefined;
 }
 
 function serializeMessage(message: IVSCloneThreadRuntimeMessage): ISerializedThreadRuntimeMessage {

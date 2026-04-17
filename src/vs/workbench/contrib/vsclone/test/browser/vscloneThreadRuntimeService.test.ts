@@ -460,7 +460,9 @@ suite('VSCloneThreadRuntimeService', () => {
 
 		const harness = createHarness({ storageService, fileService });
 		const runtimeHandle = harness.service.runThread(createThreadOptions('thread-edit-state', 'turn-edit-state', 'rewrite the file'));
-		harness.agentLoopService.lastOptions?.observer.onResponseDelta?.('Assistant response before checkpoint.');
+		harness.agentLoopService.lastOptions?.observer.onResponseReplace?.(
+			'File: src/app.ts\n<<<<<<< SEARCH\nbefore\n=======\nafter\n>>>>>>> REPLACE',
+		);
 		const initialAssistantMessageId = getLatestAssistantMessageId(harness.service.getState('thread-edit-state'));
 		harness.service.setAssistantEditApplicationState?.('thread-edit-state', initialAssistantMessageId, {
 			phase: 'applied',
@@ -496,7 +498,9 @@ suite('VSCloneThreadRuntimeService', () => {
 			success: true,
 			output: 'Applied edit.',
 		});
-		harness.agentLoopService.lastOptions?.observer.onResponseDelta?.('Assistant response after checkpoint.');
+		harness.agentLoopService.lastOptions?.observer.onResponseReplace?.(
+			'File: src/app.ts\n<<<<<<< SEARCH\nafter\n=======\nafter again\n>>>>>>> REPLACE',
+		);
 		const futureAssistantMessageId = getLatestAssistantMessageId(harness.service.getState('thread-edit-state'));
 		harness.service.setAssistantEditApplicationState?.('thread-edit-state', futureAssistantMessageId, {
 			phase: 'undone',
@@ -549,7 +553,9 @@ suite('VSCloneThreadRuntimeService', () => {
 
 		const harness = createHarness({ storageService, fileService });
 		const runtimeHandle = harness.service.runThread(createThreadOptions('thread-rewind-pending-apply', 'turn-rewind-pending-apply', 'rewrite the file'));
-		harness.agentLoopService.lastOptions?.observer.onResponseDelta?.('Assistant response before checkpoint.');
+		harness.agentLoopService.lastOptions?.observer.onResponseReplace?.(
+			'File: src/app.ts\n<<<<<<< SEARCH\nbefore\n=======\nafter\n>>>>>>> REPLACE',
+		);
 		const assistantMessageId = getLatestAssistantMessageId(harness.service.getState('thread-rewind-pending-apply'));
 
 		const approvalPromise = harness.agentLoopService.lastOptions!.observer.onToolRequested!('edit_file', {
@@ -591,7 +597,9 @@ suite('VSCloneThreadRuntimeService', () => {
 		const storageService = store.add(new TestStorageService());
 		const harness = createHarness({ storageService });
 		const runtimeHandle = harness.service.runThread(createThreadOptions('thread-pending-apply', 'turn-pending-apply', 'apply the edit'));
-		harness.agentLoopService.lastOptions?.observer.onResponseDelta?.('Assistant reply that started applying edits.');
+		harness.agentLoopService.lastOptions?.observer.onResponseReplace?.(
+			'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+		);
 		const assistantMessageId = getLatestAssistantMessageId(harness.service.getState('thread-pending-apply'));
 		harness.service.setAssistantEditApplicationState?.('thread-pending-apply', assistantMessageId, { phase: 'pending' });
 		harness.service.setAssistantEditApplicationState?.('thread-pending-apply', 'missing-assistant-message', { phase: 'failed' });
@@ -612,6 +620,46 @@ suite('VSCloneThreadRuntimeService', () => {
 
 		harness.service.dispose();
 		reopened.service.dispose();
+	});
+
+	test('live assistant edit status is runtime-owned and only persists for applicable assistant messages', async () => {
+		const harness = createHarness({ storageService: store.add(new TestStorageService()) });
+		const runtimeHandle = harness.service.runThread(createThreadOptions('thread-live-edit-status', 'turn-live-edit-status', 'make the change'));
+
+		harness.agentLoopService.lastOptions?.observer.onResponseReplace?.('Plain assistant response without an edit suggestion.');
+		let state = harness.service.getState('thread-live-edit-status');
+		let assistantMessageId = getLatestAssistantMessageId(state);
+		assert.strictEqual(harness.service.getAssistantEditStatus?.('thread-live-edit-status', assistantMessageId), undefined);
+
+		harness.service.setAssistantEditApplicationState?.('thread-live-edit-status', assistantMessageId, { phase: 'pending' });
+		assert.strictEqual(harness.service.getAssistantEditApplicationState?.('thread-live-edit-status', assistantMessageId), undefined);
+		assert.deepStrictEqual(harness.service.getAssistantEditStatuses?.('thread-live-edit-status') ?? [], []);
+
+		harness.agentLoopService.lastOptions?.observer.onResponseReplace?.(
+			'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+		);
+		state = harness.service.getState('thread-live-edit-status');
+		assistantMessageId = getLatestAssistantMessageId(state);
+		assert.deepStrictEqual(
+			harness.service.getAssistantEditStatus?.('thread-live-edit-status', assistantMessageId)?.suggestion,
+			{ kind: 'search_replace', applyMode: 'auto' },
+		);
+
+		harness.service.setAssistantEditApplicationState?.('thread-live-edit-status', assistantMessageId, { phase: 'pending' });
+		assert.strictEqual(
+			harness.service.getAssistantEditStatus?.('thread-live-edit-status', assistantMessageId)?.application?.phase,
+			'pending',
+		);
+		assert.strictEqual(harness.service.getAssistantEditStatuses?.('thread-live-edit-status').length, 1);
+
+		harness.agentLoopService.lastOptions?.observer.onResponseReplace?.('Plain assistant response after rewriting the final answer.');
+		assert.strictEqual(harness.service.getAssistantEditStatus?.('thread-live-edit-status', assistantMessageId), undefined);
+		assert.strictEqual(harness.service.getAssistantEditApplicationState?.('thread-live-edit-status', assistantMessageId), undefined);
+		assert.deepStrictEqual(harness.service.getAssistantEditStatuses?.('thread-live-edit-status') ?? [], []);
+
+		harness.agentLoopService.handles[0]!.complete();
+		await runtimeHandle.done;
+		harness.service.dispose();
 	});
 
 	test('restore backfills imported-from-history metadata for older persisted runtime threads that predate message provenance', () => {
@@ -653,15 +701,303 @@ suite('VSCloneThreadRuntimeService', () => {
 			restoredConversationMessages.map(message => ({
 				role: message.role,
 				importedFromHistory: message.metadata?.importedFromHistory ?? false,
+				editSuggestionApplyMode: message.role === 'assistant' ? message.metadata?.editSuggestion?.applyMode : undefined,
 				content: message.content,
 			})),
 			[
-				{ role: 'user', importedFromHistory: true, content: 'Apply the change.' },
-				{ role: 'assistant', importedFromHistory: true, content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' },
+				{ role: 'user', importedFromHistory: true, editSuggestionApplyMode: undefined, content: 'Apply the change.' },
+				{ role: 'assistant', importedFromHistory: true, editSuggestionApplyMode: 'manual', content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' },
 			],
 		);
 
 		reopened.service.dispose();
+	});
+
+	test('restore preserves explicit assistant edit suggestions for summary-only assistant messages and keeps their persisted apply state', () => {
+		const storageService = store.add(new TestStorageService());
+		storeRawRuntimePayload(storageService, 'thread-explicit-edit-suggestion', JSON.stringify({
+			schemaVersion: 1,
+			state: {
+				threadId: 'thread-explicit-edit-suggestion',
+				turnId: 'thread-explicit-edit-suggestion:turn-1',
+				mode: 'act',
+				streamState: { kind: 'idle' },
+				messages: [{
+					id: 'assistant-explicit-edit-suggestion',
+					role: 'assistant',
+					mode: 'act',
+					createdAt: 1,
+					metadata: {
+						editSuggestion: {
+							kind: 'search_replace',
+							applyMode: 'auto',
+						},
+					},
+					content: 'I prepared the changes for src/app.ts.',
+				}],
+				assistantEditApplications: [{
+					messageId: 'assistant-explicit-edit-suggestion',
+					state: { phase: 'pending' },
+				}],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 2,
+			},
+		}), 2);
+
+		const reopened = createHarness({ storageService });
+		const restoredAssistantMessage = reopened.service.getState('thread-explicit-edit-suggestion')?.messages[0];
+
+		assert.ok(restoredAssistantMessage && restoredAssistantMessage.role === 'assistant');
+		if (!restoredAssistantMessage || restoredAssistantMessage.role !== 'assistant') {
+			throw new Error('Expected restored assistant message with explicit edit suggestion metadata.');
+		}
+		assert.deepStrictEqual(restoredAssistantMessage.metadata?.editSuggestion, {
+			kind: 'search_replace',
+			applyMode: 'auto',
+		});
+		assert.deepStrictEqual(
+			reopened.service.getAssistantEditStatus?.('thread-explicit-edit-suggestion', 'assistant-explicit-edit-suggestion'),
+			{
+				messageId: 'assistant-explicit-edit-suggestion',
+				suggestion: {
+					kind: 'search_replace',
+					applyMode: 'auto',
+				},
+				application: {
+					phase: 'failed',
+				},
+			},
+		);
+
+		reopened.service.dispose();
+	});
+
+	test('setAssistantEditApplicationState preserves explicit summary-only assistant edit suggestions on the first durable write', () => {
+		const storageService = store.add(new TestStorageService());
+		storeRawRuntimePayload(storageService, 'thread-explicit-edit-suggestion-write', JSON.stringify({
+			schemaVersion: 1,
+			state: {
+				threadId: 'thread-explicit-edit-suggestion-write',
+				turnId: 'thread-explicit-edit-suggestion-write:turn-1',
+				mode: 'act',
+				streamState: { kind: 'idle' },
+				messages: [{
+					id: 'assistant-explicit-edit-suggestion-write',
+					role: 'assistant',
+					mode: 'act',
+					createdAt: 1,
+					metadata: {
+						editSuggestion: {
+							kind: 'search_replace',
+							applyMode: 'auto',
+						},
+					},
+					content: 'I prepared the changes for src/app.ts.',
+				}],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 2,
+			},
+		}), 2);
+
+		const reopened = createHarness({ storageService });
+		reopened.service.setAssistantEditApplicationState?.(
+			'thread-explicit-edit-suggestion-write',
+			'assistant-explicit-edit-suggestion-write',
+			{ phase: 'pending' },
+		);
+
+		const restoredAssistantMessage = reopened.service.getState('thread-explicit-edit-suggestion-write')?.messages[0];
+		assert.ok(restoredAssistantMessage && restoredAssistantMessage.role === 'assistant');
+		if (!restoredAssistantMessage || restoredAssistantMessage.role !== 'assistant') {
+			throw new Error('Expected explicit summary-only assistant message after the first apply-state write.');
+		}
+		assert.deepStrictEqual(restoredAssistantMessage.metadata?.editSuggestion, {
+			kind: 'search_replace',
+			applyMode: 'auto',
+		});
+		assert.deepStrictEqual(
+			reopened.service.getAssistantEditStatus?.('thread-explicit-edit-suggestion-write', 'assistant-explicit-edit-suggestion-write'),
+			{
+				messageId: 'assistant-explicit-edit-suggestion-write',
+				suggestion: {
+					kind: 'search_replace',
+					applyMode: 'auto',
+				},
+				application: {
+					phase: 'pending',
+				},
+			},
+		);
+
+		reopened.service.dispose();
+	});
+
+	test('setAssistantEditApplicationState materializes a manual runtime suggestion for imported-history fallback assistant messages', () => {
+		const storageService = store.add(new TestStorageService());
+		const harness = createHarness({ storageService });
+		const turns: IVSCloneChatHistoryTurn[] = [{
+			turnId: 'thread-imported-fallback-materialize:turn-1',
+			threadId: 'thread-imported-fallback-materialize',
+			sequence: 1,
+			executionMode: 'act',
+			promptText: 'Apply the change.',
+			responseMarkdown: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			responsePlainText: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			startedAt: 1,
+			completedAt: 2,
+			status: 'completed',
+			lastEventAt: 2,
+		}];
+
+		const hydrated = harness.service.ensureHydratedFromHistory('thread-imported-fallback-materialize', turns);
+		assert.ok(hydrated);
+		const assistantMessageId = getLatestAssistantMessageId(hydrated);
+		const serviceState = (harness.service as unknown as { states: Map<string, IVSCloneThreadRuntimeState> }).states;
+		const downgraded = harness.service.getState('thread-imported-fallback-materialize');
+		assert.ok(downgraded);
+		if (!downgraded) {
+			throw new Error('Expected a hydrated imported-history thread before downgrading assistant metadata.');
+		}
+		serviceState.set('thread-imported-fallback-materialize', {
+			...downgraded,
+			messages: downgraded.messages.map(message => message.id === assistantMessageId && message.role === 'assistant'
+				? {
+					...message,
+					metadata: {
+						importedFromHistory: true,
+					},
+				}
+				: message,
+			),
+		});
+
+		harness.service.setAssistantEditApplicationState?.(
+			'thread-imported-fallback-materialize',
+			assistantMessageId,
+			{ phase: 'failed' },
+		);
+
+		const materialized = harness.service.getState('thread-imported-fallback-materialize');
+		const assistantMessage = materialized?.messages.find((message): message is Extract<IVSCloneThreadRuntimeState['messages'][number], { role: 'assistant' }> =>
+			message.role === 'assistant' && message.id === assistantMessageId,
+		);
+		assert.deepStrictEqual(assistantMessage?.metadata, {
+			importedFromHistory: true,
+			editSuggestion: {
+				kind: 'search_replace',
+				applyMode: 'manual',
+			},
+		});
+		assert.strictEqual(
+			harness.service.getAssistantEditApplicationState?.('thread-imported-fallback-materialize', assistantMessageId)?.phase,
+			'failed',
+		);
+
+		const reopened = createHarness({
+			storageService: store.add(cloneWorkspaceStorage(storageService)),
+		});
+		const restoredAssistantMessage = reopened.service.getState('thread-imported-fallback-materialize')?.messages.find((message): message is Extract<IVSCloneThreadRuntimeState['messages'][number], { role: 'assistant' }> =>
+			message.role === 'assistant' && message.id === assistantMessageId,
+		);
+		assert.deepStrictEqual(restoredAssistantMessage?.metadata, {
+			importedFromHistory: true,
+			editSuggestion: {
+				kind: 'search_replace',
+				applyMode: 'manual',
+			},
+		});
+		assert.strictEqual(
+			reopened.service.getAssistantEditApplicationState?.('thread-imported-fallback-materialize', assistantMessageId)?.phase,
+			'failed',
+		);
+
+		harness.service.dispose();
+		reopened.service.dispose();
+	});
+
+	test('restored summary-only assistant edit suggestions survive later state updates and keep assistant apply durability', () => {
+		const storageService = store.add(new TestStorageService());
+		storeRawRuntimePayload(storageService, 'thread-summary-edit-suggestion', JSON.stringify({
+			schemaVersion: 1,
+			state: {
+				threadId: 'thread-summary-edit-suggestion',
+				mode: 'act',
+				streamState: { kind: 'idle' },
+				messages: [{
+					id: 'summary-assistant',
+					role: 'assistant',
+					mode: 'act',
+					createdAt: 1,
+					content: 'I prepared the changes for src/app.ts.',
+					metadata: {
+						editSuggestion: {
+							kind: 'search_replace',
+							applyMode: 'auto',
+						},
+					},
+				}],
+				assistantEditApplications: [{
+					messageId: 'summary-assistant',
+					state: { phase: 'failed' },
+				}],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 2,
+			},
+		}), 2);
+
+		const reopened = createHarness({ storageService });
+		const restoredBeforeUpdate = reopened.service.getState('thread-summary-edit-suggestion');
+		const restoredAssistantBeforeUpdate = restoredBeforeUpdate?.messages.find((message): message is Extract<IVSCloneThreadRuntimeState['messages'][number], { role: 'assistant' }> =>
+			message.role === 'assistant' && message.id === 'summary-assistant',
+		);
+		assert.deepStrictEqual(restoredAssistantBeforeUpdate?.metadata?.editSuggestion, {
+			kind: 'search_replace',
+			applyMode: 'auto',
+		});
+		assert.strictEqual(
+			reopened.service.getAssistantEditApplicationState?.('thread-summary-edit-suggestion', 'summary-assistant')?.phase,
+			'failed',
+		);
+
+		reopened.service.setAssistantEditApplicationState?.(
+			'thread-summary-edit-suggestion',
+			'summary-assistant',
+			{ phase: 'failed' },
+		);
+
+		const restoredAfterUpdate = reopened.service.getState('thread-summary-edit-suggestion');
+		const restoredAssistantAfterUpdate = restoredAfterUpdate?.messages.find((message): message is Extract<IVSCloneThreadRuntimeState['messages'][number], { role: 'assistant' }> =>
+			message.role === 'assistant' && message.id === 'summary-assistant',
+		);
+		assert.deepStrictEqual(restoredAssistantAfterUpdate?.metadata?.editSuggestion, {
+			kind: 'search_replace',
+			applyMode: 'auto',
+		});
+		assert.strictEqual(
+			reopened.service.getAssistantEditApplicationState?.('thread-summary-edit-suggestion', 'summary-assistant')?.phase,
+			'failed',
+		);
+
+		const reloaded = createHarness({
+			storageService: store.add(cloneWorkspaceStorage(storageService)),
+		});
+		const reloadedAssistant = reloaded.service.getState('thread-summary-edit-suggestion')?.messages.find((message): message is Extract<IVSCloneThreadRuntimeState['messages'][number], { role: 'assistant' }> =>
+			message.role === 'assistant' && message.id === 'summary-assistant',
+		);
+		assert.deepStrictEqual(reloadedAssistant?.metadata?.editSuggestion, {
+			kind: 'search_replace',
+			applyMode: 'auto',
+		});
+		assert.strictEqual(
+			reloaded.service.getAssistantEditApplicationState?.('thread-summary-edit-suggestion', 'summary-assistant')?.phase,
+			'failed',
+		);
+
+		reopened.service.dispose();
+		reloaded.service.dispose();
 	});
 
 	test('history hydration falls back thread mode to act when older turns omit executionMode', () => {
@@ -761,13 +1097,14 @@ suite('VSCloneThreadRuntimeService', () => {
 				role: message.role,
 				mode: message.mode,
 				importedFromHistory: message.metadata?.importedFromHistory ?? false,
+				editSuggestionApplyMode: message.role === 'assistant' ? message.metadata?.editSuggestion?.applyMode : undefined,
 				content: message.content,
 			})),
 			[
-				{ role: 'user', mode: 'plan', importedFromHistory: true, content: 'Plan the change.' },
-				{ role: 'assistant', mode: 'plan', importedFromHistory: true, content: 'Planning response' },
-				{ role: 'user', mode: 'act', importedFromHistory: true, content: 'Apply the change.' },
-				{ role: 'assistant', mode: 'act', importedFromHistory: true, content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' },
+				{ role: 'user', mode: 'plan', importedFromHistory: true, editSuggestionApplyMode: undefined, content: 'Plan the change.' },
+				{ role: 'assistant', mode: 'plan', importedFromHistory: true, editSuggestionApplyMode: undefined, content: 'Planning response' },
+				{ role: 'user', mode: 'act', importedFromHistory: true, editSuggestionApplyMode: undefined, content: 'Apply the change.' },
+				{ role: 'assistant', mode: 'act', importedFromHistory: true, editSuggestionApplyMode: 'manual', content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' },
 			],
 		);
 
@@ -807,13 +1144,14 @@ suite('VSCloneThreadRuntimeService', () => {
 				role: message.role,
 				mode: message.mode,
 				importedFromHistory: message.metadata?.importedFromHistory ?? false,
+				editSuggestionApplyMode: message.role === 'assistant' ? message.metadata?.editSuggestion?.applyMode : undefined,
 				content: message.content,
 			})),
 			[
-				{ role: 'user', mode: 'plan', importedFromHistory: true, content: 'Plan the change.' },
-				{ role: 'assistant', mode: 'plan', importedFromHistory: true, content: 'Planning response' },
-				{ role: 'user', mode: 'act', importedFromHistory: true, content: 'Apply the change.' },
-				{ role: 'assistant', mode: 'act', importedFromHistory: true, content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' },
+				{ role: 'user', mode: 'plan', importedFromHistory: true, editSuggestionApplyMode: undefined, content: 'Plan the change.' },
+				{ role: 'assistant', mode: 'plan', importedFromHistory: true, editSuggestionApplyMode: undefined, content: 'Planning response' },
+				{ role: 'user', mode: 'act', importedFromHistory: true, editSuggestionApplyMode: undefined, content: 'Apply the change.' },
+				{ role: 'assistant', mode: 'act', importedFromHistory: true, editSuggestionApplyMode: 'manual', content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' },
 			],
 		);
 		assert.deepStrictEqual(
@@ -838,6 +1176,125 @@ suite('VSCloneThreadRuntimeService', () => {
 		);
 
 		harness.service.dispose();
+		reopened.service.dispose();
+	});
+
+	test('live act-mode assistant responses persist auto apply metadata across reload', async () => {
+		const storageService = store.add(new TestStorageService());
+		const harness = createHarness({ storageService });
+		const runtimeHandle = harness.service.runThread(createThreadOptions('thread-live-edit-suggestion', 'turn-live-edit-suggestion', 'Apply the change.'));
+
+		harness.agentLoopService.lastOptions?.observer.onResponseReplace?.('File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE');
+		harness.agentLoopService.handles[0]!.complete();
+		await runtimeHandle.done;
+
+		const liveAssistantMessage = [...(harness.service.getState('thread-live-edit-suggestion')?.messages ?? [])]
+			.reverse()
+			.find((message): message is Extract<IVSCloneThreadRuntimeState['messages'][number], { role: 'assistant' }> => message.role === 'assistant');
+		assert.ok(liveAssistantMessage);
+		assert.deepStrictEqual(liveAssistantMessage?.metadata?.editSuggestion, {
+			kind: 'search_replace',
+			applyMode: 'auto',
+		});
+
+		const reopened = createHarness({
+			storageService: store.add(cloneWorkspaceStorage(storageService)),
+		});
+		const restoredAssistantMessage = [...(reopened.service.getState('thread-live-edit-suggestion')?.messages ?? [])]
+			.reverse()
+			.find((message): message is Extract<IVSCloneThreadRuntimeState['messages'][number], { role: 'assistant' }> => message.role === 'assistant');
+		assert.ok(restoredAssistantMessage);
+		assert.deepStrictEqual(restoredAssistantMessage?.metadata?.editSuggestion, {
+			kind: 'search_replace',
+			applyMode: 'auto',
+		});
+
+		harness.service.dispose();
+		reopened.service.dispose();
+	});
+
+	test('hydrated history exposes manual-only assistant edit status for imported SEARCH/REPLACE replies', () => {
+		const harness = createHarness({ storageService: store.add(new TestStorageService()) });
+		const turns: IVSCloneChatHistoryTurn[] = [{
+			turnId: 'thread-imported-edit-status:turn-1',
+			threadId: 'thread-imported-edit-status',
+			sequence: 1,
+			executionMode: 'act',
+			promptText: 'Apply the change.',
+			responseMarkdown: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			responsePlainText: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+			startedAt: 1,
+			completedAt: 2,
+			status: 'completed',
+			lastEventAt: 2,
+		}];
+
+		const hydrated = harness.service.ensureHydratedFromHistory('thread-imported-edit-status', turns);
+		const assistantMessageId = getLatestAssistantMessageId(hydrated);
+
+		assert.deepStrictEqual(
+			harness.service.getAssistantEditStatus?.('thread-imported-edit-status', assistantMessageId)?.suggestion,
+			{ kind: 'search_replace', applyMode: 'manual' },
+		);
+
+		harness.service.dispose();
+	});
+
+	test('setAssistantEditApplicationState materializes imported manual suggestions for older runtime payloads that only carried importedFromHistory', () => {
+		const storageService = store.add(new TestStorageService());
+		storeRawRuntimePayload(storageService, 'thread-imported-manual-fallback', JSON.stringify({
+			schemaVersion: 1,
+			state: {
+				threadId: 'thread-imported-manual-fallback',
+				turnId: 'thread-imported-manual-fallback:turn-1',
+				mode: 'act',
+				streamState: { kind: 'idle' },
+				messages: [{
+					id: 'assistant-imported-manual-fallback',
+					role: 'assistant',
+					mode: 'act',
+					createdAt: 1,
+					metadata: {
+						importedFromHistory: true,
+					},
+					content: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+				}],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 1,
+			},
+		}), 1);
+
+		const reopened = createHarness({ storageService });
+		reopened.service.setAssistantEditApplicationState?.(
+			'thread-imported-manual-fallback',
+			'assistant-imported-manual-fallback',
+			{ phase: 'pending' },
+		);
+
+		const restoredAssistantMessage = reopened.service.getState('thread-imported-manual-fallback')?.messages[0];
+		assert.ok(restoredAssistantMessage && restoredAssistantMessage.role === 'assistant');
+		if (!restoredAssistantMessage || restoredAssistantMessage.role !== 'assistant') {
+			throw new Error('Expected imported fallback assistant message after setting apply state.');
+		}
+		assert.deepStrictEqual(restoredAssistantMessage.metadata?.editSuggestion, {
+			kind: 'search_replace',
+			applyMode: 'manual',
+		});
+		assert.deepStrictEqual(
+			reopened.service.getAssistantEditStatus?.('thread-imported-manual-fallback', 'assistant-imported-manual-fallback'),
+			{
+				messageId: 'assistant-imported-manual-fallback',
+				suggestion: {
+					kind: 'search_replace',
+					applyMode: 'manual',
+				},
+				application: {
+					phase: 'pending',
+				},
+			},
+		);
+
 		reopened.service.dispose();
 	});
 

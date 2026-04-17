@@ -121,6 +121,30 @@ export interface IVSCloneThreadRuntimeAssistantEditApplication {
 	readonly state: IVSCloneThreadRuntimeAssistantEditApplicationState;
 }
 
+export type VSCloneThreadRuntimeAssistantEditSuggestionApplyMode = 'manual' | 'auto';
+
+/**
+ * Assistant edit suggestions stay inline in assistant prose for now, but the decision that a
+ * message is applicable must live in runtime state so reload, rewind, and pane rendering all see
+ * the same durable answer without re-parsing visible transcript text in the UI layer.
+ */
+export interface IVSCloneThreadRuntimeAssistantEditSuggestion {
+	readonly kind: 'search_replace';
+	readonly applyMode: VSCloneThreadRuntimeAssistantEditSuggestionApplyMode;
+}
+
+/**
+ * The pane ultimately needs both "is this assistant message applicable?" and "what apply state
+ * is it currently in?" keyed by the same runtime-owned message id. Bundling those fields into one
+ * contract lets UI consumers stop inferring applicability from transcript text or hand-joining it
+ * with the separate durable application-state list.
+ */
+export interface IVSCloneThreadRuntimeAssistantEditStatus {
+	readonly messageId: string;
+	readonly suggestion: IVSCloneThreadRuntimeAssistantEditSuggestion;
+	readonly application?: IVSCloneThreadRuntimeAssistantEditApplicationState;
+}
+
 /**
  * Paused approvals must carry enough execution metadata to continue the active branch after a
  * reload. The persisted runtime already owns the message stream, so the run context only stores
@@ -158,10 +182,13 @@ export type VSCloneThreadToolMessageType =
 /**
  * History hydration is now an explicit one-time import into runtime state. Persisting that
  * provenance on each imported conversation message lets restored runtime threads keep the same
- * semantics without consulting legacy history again after reload.
+ * semantics without consulting legacy history again after reload. Assistant edit applicability is
+ * persisted alongside that provenance so the pane can render/apply from runtime-owned metadata
+ * instead of inferring eligibility from rendered transcript text.
  */
 export interface IVSCloneThreadRuntimeConversationMessageMetadata {
 	readonly importedFromHistory?: boolean;
+	readonly editSuggestion?: IVSCloneThreadRuntimeAssistantEditSuggestion;
 }
 
 export type IVSCloneThreadRuntimeMessage =

@@ -89,6 +89,7 @@ import {
 	type IVSCloneImageAttachment,
 } from "../common/vscloneImageAttachmentTypes.js";
 import {
+	type IVSCloneThreadRuntimeAssistantEditSuggestion,
 	type IVSCloneThreadRuntimeCheckpoint,
 	type IVSCloneThreadRuntimeMessage,
 	type IVSCloneThreadRuntimeState,
@@ -1722,24 +1723,34 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const visibleText = this.stripRuntimeAssistantWorkflowMarkup(message.content);
 		if (visibleText.trim().length > 0) {
 			if (visibleText.includes("<<<<<<< SEARCH") || this.looksLikePartialSearchReplaceBlock(visibleText)) {
-				// Runtime assistant text still carries edit suggestions inline, but workflow XML is
-				// rendered from the dedicated runtime tool/checkpoint messages instead of duplicated
-				// inside the prose bubble.
+				// This rendering branch is display-only. Runtime apply eligibility is decided below from
+				// durable metadata or, for imported history rows that have not been upgraded yet, a narrow
+				// compatibility fallback.
 				this.renderSearchReplaceAwareText(body, visibleText, false);
 			} else {
 				this.appendMarkdownSegment(body, visibleText, 'vsclone-thread-message-assistant-text');
 			}
 		}
 		item.appendChild(body);
-		if (
-			visibleText.trim().length > 0 &&
-			this.shouldOfferRuntimeAssistantApply(threadId, message, visibleText)
-		) {
-			this.appendAssistantApplyControls(item, {
+		if (visibleText.trim().length > 0) {
+			const applyTarget = {
 				threadId,
 				id: message.id,
 				responseText: visibleText,
-			});
+			};
+			const assistantApplyState = this.threadRuntimeService
+				? this.getAssistantApplyState(applyTarget)
+				: undefined;
+			const shouldOfferAssistantApply = this.shouldOfferRuntimeAssistantApply(threadId, message);
+			if (
+				shouldOfferAssistantApply
+				|| assistantApplyState
+			) {
+				// Runtime-owned apply state must stay visible even after the assistant prose changes or
+				// runtime later rewrites the assistant prose. Once a message has runtime-owned state,
+				// the pane keeps rendering from that state instead of re-parsing transcript text.
+				this.appendAssistantApplyControls(item, applyTarget);
+			}
 		}
 		return item;
 	}
@@ -1823,9 +1834,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private shouldOfferRuntimeAssistantApply(
 		threadId: string,
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
-		visibleText: string,
 	): boolean {
-		if (!(this.editApplicationService?.hasSearchReplaceBlocks(visibleText) ?? false)) {
+		if (!this.getRuntimeAssistantEditSuggestion(message)) {
 			return false;
 		}
 
@@ -1836,12 +1846,24 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return messageMode !== 'plan';
 	}
 
+	private getRuntimeAssistantEditSuggestion(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
+	): IVSCloneThreadRuntimeAssistantEditSuggestion | undefined {
+		// Apply eligibility is resolved by the runtime when the assistant message is stored or
+		// restored, so the pane reads the durable signal verbatim instead of scanning prose again.
+		return message.metadata?.editSuggestion;
+	}
+
 	private isManualOnlyRuntimeAssistantApplyMessage(
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
 	): boolean {
-		// The durable import marker is persisted inside runtime message metadata. Reading that field
-		// directly keeps imported SEARCH/REPLACE suggestions manual-only even after a full reload.
-		return message.metadata?.importedFromHistory === true;
+		return this.getRuntimeAssistantEditSuggestion(message)?.applyMode === 'manual';
+	}
+
+	private isAutoEligibleRuntimeAssistantApplyMessage(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
+	): boolean {
+		return this.getRuntimeAssistantEditSuggestion(message)?.applyMode === 'auto';
 	}
 
 	private getVisibleRuntimeWorkflowMessages(
@@ -4661,7 +4683,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return { phase: "pending" };
 		}
 		const runtimeState = this.getThreadRuntimeState(target.threadId);
-		const directState = this.threadRuntimeService.getAssistantEditApplicationState?.(target.threadId, target.id);
+		const directState = this.threadRuntimeService?.getAssistantEditApplicationState?.(target.threadId, target.id);
 		if (directState) {
 			return directState as EditApplyState;
 		}
@@ -4686,12 +4708,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	/**
-	 * Active edit application is runtime-owned now. Once a thread has runtime state we stop
-	 * scanning legacy history turns and only auto-apply runtime assistant messages from the
-	 * active branch. History-imported assistant edits remain manual-only so opening an old thread
-	 * never mutates the workspace just because the pane hydrated runtime from archived turns.
-	 * Auto-apply is additionally gated on the runtime being idle so file edits cannot race an
-	 * in-flight assistant/tool run.
+	 * Active edit application is runtime-owned now. The pane only consumes the durable assistant
+	 * edit-suggestion metadata stamped onto runtime messages, so SEARCH/REPLACE eligibility is not
+	 * re-derived from rendered transcript text on every refresh. History-imported suggestions stay
+	 * manual-only and plan-mode messages stay non-applicable because the runtime encoded that mode
+	 * before the pane ever renders them.
 	 */
 	private maybeAutoApplyCompletedTurns(): void {
 		if (!this.activeThreadId) {
@@ -4715,11 +4736,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			if (message.role !== "assistant") {
 				continue;
 			}
-			if (this.getRuntimeAssistantMessageMode(state, message) === "plan") {
+			if (!this.isAutoEligibleRuntimeAssistantApplyMessage(message)) {
 				continue;
 			}
 			const visibleText = this.stripRuntimeAssistantWorkflowMarkup(message.content);
-			if (!visibleText || !(this.editApplicationService?.hasSearchReplaceBlocks(visibleText) ?? false)) {
+			if (!visibleText) {
 				continue;
 			}
 			const target = {
@@ -4727,9 +4748,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				id: message.id,
 				responseText: visibleText,
 			};
-			if (this.isManualOnlyRuntimeAssistantApplyMessage(message)) {
-				continue;
-			}
 			if (this.pendingAssistantApplyMessageIds.has(message.id) || this.getAssistantApplyState(target)) {
 				continue;
 			}

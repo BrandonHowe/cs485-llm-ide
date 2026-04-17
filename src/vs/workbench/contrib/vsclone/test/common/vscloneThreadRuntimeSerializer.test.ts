@@ -127,9 +127,28 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 					success: false,
 				},
 				{
+					id: 'msg-assistant-applied',
+					role: 'assistant',
+					mode: 'act',
+					metadata: {
+						editSuggestion: {
+							kind: 'search_replace',
+							applyMode: 'auto',
+						},
+					},
+					createdAt: 8.25,
+					content: 'File: src/app.ts\n<<<<<<< SEARCH\nbefore\n=======\nafter\n>>>>>>> REPLACE',
+				},
+				{
 					id: 'msg-assistant-pending',
 					role: 'assistant',
 					mode: 'act',
+					metadata: {
+						editSuggestion: {
+							kind: 'search_replace',
+							applyMode: 'auto',
+						},
+					},
 					createdAt: 8.5,
 					content: 'I started applying the follow-up edits.',
 				},
@@ -146,7 +165,7 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 				},
 			],
 			assistantEditApplications: [{
-				messageId: 'msg-assistant',
+				messageId: 'msg-assistant-applied',
 				state: {
 					phase: 'applied',
 					result: {
@@ -218,23 +237,46 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 		};
 	}
 
+	function toComparableConversationMetadata(metadata: IVSCloneThreadRuntimeState['messages'][number] extends infer T
+		? T extends { metadata?: infer M }
+		? M
+		: never
+		: never) {
+		if (!metadata) {
+			return undefined;
+		}
+		return {
+			...(metadata.importedFromHistory !== undefined ? { importedFromHistory: metadata.importedFromHistory } : {}),
+			...(metadata.editSuggestion ? { editSuggestion: { ...metadata.editSuggestion } } : {}),
+		};
+	}
+
 	function toComparableState(state: IVSCloneThreadRuntimeState) {
 		// URI identity changes across serialization boundaries, so the comparison normalizes every
 		// persisted snapshot URI to a string before asserting on the full runtime graph.
 		return {
 			...state,
-			messages: state.messages.map(message => message.role === 'checkpoint'
-				? {
-					...message,
-					checkpoint: {
-						...message.checkpoint,
-						snapshots: message.checkpoint.snapshots.map(snapshot => ({
-							...snapshot,
-							uri: snapshot.uri.toString(),
-						})),
-					},
+			messages: state.messages.map(message => {
+				if (message.role === 'checkpoint') {
+					return {
+						...message,
+						checkpoint: {
+							...message.checkpoint,
+							snapshots: message.checkpoint.snapshots.map(snapshot => ({
+								...snapshot,
+								uri: snapshot.uri.toString(),
+							})),
+						},
+					};
 				}
-				: message),
+				if (message.role === 'user' || message.role === 'assistant') {
+					return {
+						...message,
+						...(message.metadata ? { metadata: toComparableConversationMetadata(message.metadata) } : {}),
+					};
+				}
+				return message;
+			}),
 			assistantEditApplications: state.assistantEditApplications?.map(application => ({
 				...application,
 				state: application.state.phase === 'partial' || application.state.phase === 'applied' || application.state.phase === 'undone'
@@ -335,7 +377,56 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 		}
 		assert.strictEqual(importedUserMessage.metadata?.importedFromHistory, true);
 		assert.strictEqual(importedAssistantMessage.metadata?.importedFromHistory, true);
-		assert.strictEqual(liveAssistantMessage.metadata, undefined);
+		assert.strictEqual(liveAssistantMessage.metadata?.importedFromHistory, undefined);
+		assert.deepStrictEqual(liveAssistantMessage.metadata?.editSuggestion, { kind: 'search_replace', applyMode: 'auto' });
+	});
+
+	test('round-trips assistant edit suggestion metadata for live and imported assistant messages', () => {
+		const serializer = new VSCloneThreadRuntimeSerializer();
+		const original = createState();
+		const raw = serializer.serializeState({
+			...original,
+			messages: original.messages.map(message => {
+				if (message.role !== 'assistant') {
+					return message;
+				}
+				if (message.id === 'msg-assistant') {
+					return {
+						...message,
+						metadata: {
+							...(message.metadata ?? {}),
+							editSuggestion: {
+								kind: 'search_replace' as const,
+								applyMode: 'manual' as const,
+							},
+						},
+					};
+				}
+				if (message.id === 'msg-assistant-pending') {
+					return {
+						...message,
+						metadata: {
+							editSuggestion: {
+								kind: 'search_replace' as const,
+								applyMode: 'auto' as const,
+							},
+						},
+					};
+				}
+				return message;
+			}),
+		});
+		const restored = serializer.deserializeState(raw);
+		const importedAssistantMessage = restored.messages.find(message => message.role === 'assistant' && message.id === 'msg-assistant');
+		const liveAssistantMessage = restored.messages.find(message => message.role === 'assistant' && message.id === 'msg-assistant-pending');
+
+		assert.ok(importedAssistantMessage && importedAssistantMessage.role === 'assistant');
+		assert.ok(liveAssistantMessage && liveAssistantMessage.role === 'assistant');
+		if (!importedAssistantMessage || importedAssistantMessage.role !== 'assistant' || !liveAssistantMessage || liveAssistantMessage.role !== 'assistant') {
+			throw new Error('Expected restored runtime messages to preserve assistant edit suggestion metadata.');
+		}
+		assert.deepStrictEqual(importedAssistantMessage.metadata?.editSuggestion, { kind: 'search_replace', applyMode: 'manual' });
+		assert.deepStrictEqual(liveAssistantMessage.metadata?.editSuggestion, { kind: 'search_replace', applyMode: 'auto' });
 	});
 
 	test('round-trips partial assistant edit-apply results without flattening them to full success', () => {
@@ -358,7 +449,7 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 		const raw = serializer.serializeState({
 			...original,
 			assistantEditApplications: [{
-				messageId: 'msg-assistant',
+				messageId: 'msg-assistant-applied',
 				state: {
 					phase: 'partial',
 					result: partialResult,
@@ -520,6 +611,10 @@ suite('VSCloneThreadRuntimeSerializer', () => {
 		);
 		assert.throws(
 			() => serializer.deserializeState('{"schemaVersion":1,"state":{"threadId":"thread-1","streamState":{"kind":"idle"},"messages":[{"id":"user-1","role":"user","mode":"act","metadata":{"importedFromHistory":"yes"},"createdAt":1,"content":"prompt"}],"checkpoints":[],"isRunning":false,"lastUpdatedAt":5}}'),
+			/Runtime thread state is malformed/,
+		);
+		assert.throws(
+			() => serializer.deserializeState('{"schemaVersion":1,"state":{"threadId":"thread-1","streamState":{"kind":"idle"},"messages":[{"id":"assistant-1","role":"assistant","mode":"act","metadata":{"editSuggestion":{"kind":"search_replace","applyMode":"sometimes"}},"createdAt":1,"content":"prompt"}],"checkpoints":[],"isRunning":false,"lastUpdatedAt":5}}'),
 			/Runtime thread state is malformed/,
 		);
 		assert.throws(
