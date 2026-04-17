@@ -116,6 +116,18 @@ interface IConversationActionTarget {
 			isRunning: boolean;
 			lastUpdatedAt: number;
 		} | undefined;
+		ensureHydratedFromHistory?: (threadId: string, turns: IVSCloneChatHistoryTurn[]) => {
+			threadId: string;
+			streamState: { kind: 'idle' | 'llm' | 'tool' | 'awaiting_user' };
+			messages: Array<{
+				role: 'user' | 'assistant';
+				content: string;
+				imageAttachments?: Array<{ mimeType: string; base64Data: string }>;
+			}>;
+			checkpoints: Array<unknown>;
+			isRunning: boolean;
+			lastUpdatedAt: number;
+		} | undefined;
 	};
 	historyService: {
 		getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
@@ -191,6 +203,21 @@ interface IRefreshConversationTarget {
 	refreshModelControls: () => void;
 	scheduleScrollToBottom: () => void;
 	refreshConversation: () => void;
+}
+
+interface IHandleHistoryChangeTarget {
+	[key: string]: unknown;
+	historyReady: boolean;
+	activeThreadId?: string;
+	historyService: {
+		getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
+	};
+	handleHistoryChange: (event: { reason: 'turnUpdate' | 'clear'; threadIds: readonly string[] }) => void;
+	seedThreadCatalogFromHistory: (event?: { reason?: 'turnUpdate' | 'clear'; threadIds?: readonly string[] }) => void;
+	refreshConversationScheduler: { schedule: (delay?: number) => void };
+	refreshRailScheduler: { schedule: (delay?: number) => void };
+	maybeAutoApplyCompletedTurns: () => void;
+	ensureRuntimeThreadImportedFromHistory: (threadId: string | undefined) => unknown;
 }
 
 interface IRunAutoApplyTarget {
@@ -337,6 +364,552 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.strictEqual(target.activeThreadId, 'thread-1');
 		assert.strictEqual(selectedThread, 'thread-1');
 		assert.strictEqual(focusInputCalled, true);
+	});
+
+	test('openSession keeps runtime-owned empty threads on the runtime-only read path', async () => {
+		let selectedThread: string | undefined;
+		let focusInputCalled = false;
+		let getTurnsCalls = 0;
+		let hydrateCalls = 0;
+
+		const pane = createPaneHarness() as unknown as ITestPaneTarget & {
+			refreshPlanModeControl: () => void;
+			refreshModelControls: () => void;
+			historyService: {
+				getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+				ensureHydratedFromHistory: (threadId: string, turns: IVSCloneChatHistoryTurn[]) => unknown;
+			};
+		};
+		pane.railVisible = true;
+		pane.isCompactLayout = false;
+		pane.rootContainer = document.createElement('div');
+		pane.railContainer = document.createElement('div');
+		pane.railResizeHandle = document.createElement('div');
+		pane.threadsById = new Map([
+			['thread-1', {
+				threadId: 'thread-1',
+				sessionResource: 'vsclone://thread/thread-1',
+				title: 'Thread 1',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'active',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Preview',
+			}],
+		]);
+		pane.rail = {
+			getSelectedThread: () => selectedThread,
+			setSelectedThread: (threadId: string | undefined) => { selectedThread = threadId; },
+		};
+		pane.historyService = {
+			getTurns: () => {
+				getTurnsCalls += 1;
+				throw new Error('runtime-owned openSession should not read legacy turns');
+			},
+		};
+		pane.threadRuntimeService = {
+			getState: threadId => threadId === 'thread-1' ? {
+				threadId,
+				streamState: { kind: 'idle' },
+				messages: [],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 2,
+			} : undefined,
+			ensureHydratedFromHistory: () => {
+				hydrateCalls += 1;
+				throw new Error('runtime-owned openSession should not trigger history hydration');
+			},
+		};
+		pane.refreshConversation = () => undefined;
+		pane.refreshPlanModeControl = () => undefined;
+		pane.refreshModelControls = () => undefined;
+		pane.focusInput = () => { focusInputCalled = true; };
+		pane.applyRailLayout = () => undefined;
+
+		await pane.openSession('thread-1');
+
+		assert.strictEqual(pane.activeThreadId, 'thread-1');
+		assert.strictEqual(selectedThread, 'thread-1');
+		assert.strictEqual(focusInputCalled, true);
+		assert.strictEqual(getTurnsCalls, 0);
+		assert.strictEqual(hydrateCalls, 0);
+	});
+
+	test('openSession does not import runtime-owned threads when runtime state is missing', async () => {
+		let selectedThread: string | undefined;
+		let getTurnsCalls = 0;
+		let hydrateCalls = 0;
+
+		const pane = createPaneHarness() as unknown as ITestPaneTarget & {
+			refreshPlanModeControl: () => void;
+			refreshModelControls: () => void;
+			historyService: {
+				getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+				ensureHydratedFromHistory: (threadId: string, turns: IVSCloneChatHistoryTurn[]) => unknown;
+			};
+			threadsById: Map<string, {
+				threadId: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'completed';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+		};
+		pane.railVisible = true;
+		pane.isCompactLayout = false;
+		pane.rootContainer = document.createElement('div');
+		pane.railContainer = document.createElement('div');
+		pane.railResizeHandle = document.createElement('div');
+		pane.threadsById = new Map([
+			['thread-runtime', {
+				threadId: 'thread-runtime',
+				title: 'Runtime thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 0,
+				lastTurnPreview: '',
+				runtimeOwnedCatalog: true,
+			}],
+		]);
+		pane.rail = {
+			getSelectedThread: () => selectedThread,
+			setSelectedThread: (threadId: string | undefined) => { selectedThread = threadId; },
+		};
+		pane.historyService = {
+			getTurns: () => {
+				getTurnsCalls += 1;
+				throw new Error('runtime-owned openSession should not reconstruct from legacy history when runtime state is missing');
+			},
+		};
+		pane.threadRuntimeService = {
+			getState: () => undefined,
+			ensureHydratedFromHistory: () => {
+				hydrateCalls += 1;
+				throw new Error('runtime-owned openSession should not trigger legacy hydration when runtime state is missing');
+			},
+		};
+		pane.refreshConversation = () => undefined;
+		pane.refreshPlanModeControl = () => undefined;
+		pane.refreshModelControls = () => undefined;
+		pane.focusInput = () => undefined;
+		pane.applyRailLayout = () => undefined;
+
+		await pane.openSession('thread-runtime');
+
+		assert.strictEqual(pane.activeThreadId, 'thread-runtime');
+		assert.strictEqual(selectedThread, 'thread-runtime');
+		assert.strictEqual(getTurnsCalls, 0);
+		assert.strictEqual(hydrateCalls, 0);
+	});
+
+	test('openSession refuses to activate a legacy-only thread when explicit import cannot produce runtime state', async () => {
+		let selectedThread: string | undefined = 'thread-runtime';
+		let getTurnsCalls = 0;
+		let refreshConversationCalls = 0;
+		let showComposerCalls = 0;
+
+		const pane = createPaneHarness() as unknown as ITestPaneTarget & {
+			refreshPlanModeControl: () => void;
+			refreshModelControls: () => void;
+			showComposerForNewChat: () => void;
+			historyService: {
+				getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+				ensureHydratedFromHistory: (threadId: string, turns: IVSCloneChatHistoryTurn[]) => unknown;
+			};
+			threadsById: Map<string, {
+				threadId: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+		};
+		pane.activeThreadId = 'thread-runtime';
+		pane.railVisible = true;
+		pane.isCompactLayout = false;
+		pane.rootContainer = document.createElement('div');
+		pane.railContainer = document.createElement('div');
+		pane.railResizeHandle = document.createElement('div');
+		pane.threadsById = new Map([
+			['thread-runtime', {
+				threadId: 'thread-runtime',
+				runtimeOwnedCatalog: true,
+			}],
+			['thread-legacy', {
+				threadId: 'thread-legacy',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.rail = {
+			getSelectedThread: () => selectedThread,
+			setSelectedThread: (threadId: string | undefined) => { selectedThread = threadId; },
+		};
+		pane.historyService = {
+			getTurns: (threadId: string) => {
+				getTurnsCalls += 1;
+				assert.strictEqual(threadId, 'thread-legacy');
+				return [{
+					turnId: 'thread-legacy:turn-1',
+					threadId: 'thread-legacy',
+					sequence: 1,
+					promptText: 'Legacy prompt',
+					responseMarkdown: 'Legacy response',
+					responsePlainText: 'Legacy response',
+					startedAt: 1,
+					status: 'completed',
+					lastEventAt: 1,
+				} as IVSCloneChatHistoryTurn];
+			},
+		};
+		pane.threadRuntimeService = {
+			getState: threadId => threadId === 'thread-runtime' ? {
+				threadId,
+				streamState: { kind: 'idle' },
+				messages: [],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 2,
+			} : undefined,
+			ensureHydratedFromHistory: () => undefined,
+		};
+		pane.refreshConversation = () => {
+			refreshConversationCalls += 1;
+		};
+		pane.refreshPlanModeControl = () => undefined;
+		pane.refreshModelControls = () => undefined;
+		pane.showComposerForNewChat = () => {
+			showComposerCalls += 1;
+			pane.activeThreadId = undefined;
+			pane.rail.setSelectedThread(undefined);
+		};
+		pane.focusInput = () => undefined;
+		pane.applyRailLayout = () => undefined;
+
+		await pane.openSession('thread-legacy');
+
+		assert.strictEqual(getTurnsCalls, 1);
+		assert.strictEqual(refreshConversationCalls, 0);
+		assert.strictEqual(showComposerCalls, 0);
+		assert.strictEqual(pane.activeThreadId, 'thread-runtime');
+		assert.strictEqual(selectedThread, 'thread-runtime');
+	});
+
+	test('openSession restores the previous rail selection when a legacy-only import fails', async () => {
+		let selectedThread: string | undefined = 'thread-runtime';
+
+		const pane = createPaneHarness() as unknown as ITestPaneTarget & {
+			refreshPlanModeControl: () => void;
+			refreshModelControls: () => void;
+			historyService: {
+				getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+				ensureHydratedFromHistory: (threadId: string, turns: IVSCloneChatHistoryTurn[]) => unknown;
+			};
+			threadsById: Map<string, {
+				threadId: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'completed';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+		};
+		pane.activeThreadId = 'thread-runtime';
+		pane.railVisible = true;
+		pane.isCompactLayout = false;
+		pane.rootContainer = document.createElement('div');
+		pane.railContainer = document.createElement('div');
+		pane.railResizeHandle = document.createElement('div');
+		pane.threadsById = new Map([
+			['thread-runtime', {
+				threadId: 'thread-runtime',
+				title: 'Runtime thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Runtime response',
+				runtimeOwnedCatalog: true,
+			}],
+			['thread-legacy', {
+				threadId: 'thread-legacy',
+				title: 'Legacy thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Legacy response',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.rail = {
+			getSelectedThread: () => selectedThread,
+			setSelectedThread: (threadId: string | undefined) => { selectedThread = threadId; },
+		};
+		pane.historyService = {
+			getTurns: () => [{
+				turnId: 'thread-legacy:turn-1',
+				threadId: 'thread-legacy',
+				sequence: 1,
+				promptText: 'Legacy prompt',
+				responseMarkdown: 'Legacy response',
+				responsePlainText: 'Legacy response',
+				startedAt: 1,
+				status: 'completed',
+				lastEventAt: 1,
+			} as IVSCloneChatHistoryTurn],
+		};
+		pane.threadRuntimeService = {
+			getState: threadId => threadId === 'thread-runtime' ? {
+				threadId,
+				catalog: {
+					threadId,
+					title: 'Runtime thread',
+					createdAt: 1,
+					updatedAt: 2,
+					status: 'completed',
+					archived: false,
+					turnCount: 1,
+					lastTurnPreview: 'Runtime response',
+				},
+				streamState: { kind: 'idle' },
+				messages: [],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 2,
+			} : undefined,
+			ensureHydratedFromHistory: () => undefined,
+		};
+		pane.refreshConversation = () => undefined;
+		pane.refreshPlanModeControl = () => undefined;
+		pane.refreshModelControls = () => undefined;
+		pane.focusInput = () => undefined;
+		pane.applyRailLayout = () => undefined;
+
+		await pane.openSession('thread-legacy');
+
+		assert.strictEqual(pane.activeThreadId, 'thread-runtime');
+		assert.strictEqual(selectedThread, 'thread-runtime');
+	});
+
+	test('openSession upgrades a stale legacy-owned cache row when runtime state already exists', async () => {
+		let selectedThread: string | undefined;
+		let getTurnsCalls = 0;
+		let hydrateCalls = 0;
+
+		const pane = createPaneHarness() as unknown as ITestPaneTarget & {
+			refreshPlanModeControl: () => void;
+			refreshModelControls: () => void;
+			historyService: {
+				getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+				ensureHydratedFromHistory: (threadId: string, turns: IVSCloneChatHistoryTurn[]) => unknown;
+			};
+			threadsById: Map<string, {
+				threadId: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'completed';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+		};
+		pane.railVisible = true;
+		pane.isCompactLayout = false;
+		pane.rootContainer = document.createElement('div');
+		pane.railContainer = document.createElement('div');
+		pane.railResizeHandle = document.createElement('div');
+		pane.threadsById = new Map([
+			['thread-legacy', {
+				threadId: 'thread-legacy',
+				title: 'Legacy thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Legacy response',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.rail = {
+			getSelectedThread: () => selectedThread,
+			setSelectedThread: (threadId: string | undefined) => { selectedThread = threadId; },
+		};
+		pane.historyService = {
+			getTurns: () => {
+				getTurnsCalls += 1;
+				throw new Error('stale legacy cache upgrade should not reread history when runtime state already exists');
+			},
+		};
+		pane.threadRuntimeService = {
+			getState: threadId => threadId === 'thread-legacy' ? {
+				threadId,
+				catalog: {
+					threadId,
+					title: 'Runtime thread',
+					createdAt: 1,
+					updatedAt: 3,
+					status: 'completed',
+					archived: false,
+					turnCount: 1,
+					lastTurnPreview: 'Runtime response',
+				},
+				streamState: { kind: 'idle' },
+				messages: [
+					{ id: 'msg-user', role: 'user', createdAt: 1, content: 'Runtime prompt' },
+					{ id: 'msg-assistant', role: 'assistant', createdAt: 2, content: 'Runtime response' },
+				],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 3,
+			} : undefined,
+			ensureHydratedFromHistory: () => {
+				hydrateCalls += 1;
+				throw new Error('stale legacy cache upgrade should not rehydrate when runtime state already exists');
+			},
+		};
+		pane.refreshConversation = () => undefined;
+		pane.refreshPlanModeControl = () => undefined;
+		pane.refreshModelControls = () => undefined;
+		pane.focusInput = () => undefined;
+		pane.applyRailLayout = () => undefined;
+
+		await pane.openSession('thread-legacy');
+
+		assert.strictEqual(pane.activeThreadId, 'thread-legacy');
+		assert.strictEqual(selectedThread, 'thread-legacy');
+		assert.strictEqual(getTurnsCalls, 0);
+		assert.strictEqual(hydrateCalls, 0);
+		assert.strictEqual(pane.threadsById.get('thread-legacy')?.runtimeOwnedCatalog, true);
+	});
+
+	test('history change events for the active thread do not trigger hidden runtime imports', () => {
+		const pane = createPaneHarness() as unknown as IHandleHistoryChangeTarget;
+		const seededEvents: Array<'turnUpdate' | 'clear' | undefined> = [];
+		const conversationRefreshes: Array<number | undefined> = [];
+		const railRefreshes: Array<number | undefined> = [];
+		let autoApplyCalls = 0;
+		let importCalls = 0;
+		let getTurnsCalls = 0;
+
+		pane.historyReady = true;
+		pane.activeThreadId = 'thread-1';
+		pane.historyService = {
+			getTurns: () => {
+				getTurnsCalls += 1;
+				throw new Error('background history events should not read legacy turns');
+			},
+		};
+		pane.seedThreadCatalogFromHistory = event => {
+			seededEvents.push(event?.reason);
+		};
+		pane.refreshConversationScheduler = {
+			schedule: (delay?: number) => {
+				conversationRefreshes.push(delay);
+			},
+		};
+		pane.refreshRailScheduler = {
+			schedule: (delay?: number) => {
+				railRefreshes.push(delay);
+			},
+		};
+		pane.maybeAutoApplyCompletedTurns = () => {
+			autoApplyCalls += 1;
+		};
+		pane.ensureRuntimeThreadImportedFromHistory = () => {
+			importCalls += 1;
+			throw new Error('background history events should not cross the explicit runtime import boundary');
+		};
+
+		pane.handleHistoryChange({ reason: 'turnUpdate', threadIds: ['thread-1'] });
+		pane.handleHistoryChange({ reason: 'clear', threadIds: ['thread-1'] });
+
+		// Background history churn may refresh the merged catalog and schedule UI work, but explicit
+		// open/reload boundaries remain the only places allowed to import legacy turns into runtime.
+		assert.deepStrictEqual(seededEvents, ['turnUpdate', 'clear']);
+		assert.deepStrictEqual(conversationRefreshes, [24, 0]);
+		assert.deepStrictEqual(railRefreshes, [undefined, 0]);
+		assert.strictEqual(autoApplyCalls, 1);
+		assert.strictEqual(importCalls, 0);
+		assert.strictEqual(getTurnsCalls, 0);
+	});
+
+	test('background history events for other threads stay out of the active runtime read path', () => {
+		const pane = createPaneHarness() as unknown as IHandleHistoryChangeTarget;
+		const seededEvents: Array<'turnUpdate' | 'clear' | undefined> = [];
+		const conversationRefreshes: Array<number | undefined> = [];
+		const railRefreshes: Array<number | undefined> = [];
+		let autoApplyCalls = 0;
+		let importCalls = 0;
+		let getTurnsCalls = 0;
+
+		pane.historyReady = true;
+		pane.activeThreadId = 'thread-1';
+		pane.historyService = {
+			getTurns: () => {
+				getTurnsCalls += 1;
+				throw new Error('off-thread history events should not read legacy turns');
+			},
+		};
+		pane.seedThreadCatalogFromHistory = event => {
+			seededEvents.push(event?.reason);
+		};
+		pane.refreshConversationScheduler = {
+			schedule: (delay?: number) => {
+				conversationRefreshes.push(delay);
+			},
+		};
+		pane.refreshRailScheduler = {
+			schedule: (delay?: number) => {
+				railRefreshes.push(delay);
+			},
+		};
+		pane.maybeAutoApplyCompletedTurns = () => {
+			autoApplyCalls += 1;
+		};
+		pane.ensureRuntimeThreadImportedFromHistory = () => {
+			importCalls += 1;
+			throw new Error('off-thread history events should not cross the explicit runtime import boundary');
+		};
+
+		pane.handleHistoryChange({ reason: 'turnUpdate', threadIds: ['thread-2'] });
+		pane.handleHistoryChange({ reason: 'clear', threadIds: ['thread-2'] });
+
+		// Unrelated history churn may still update the merged rail cache, but it must not kick the
+		// active thread back through history or re-run active-thread auto-apply logic by mistake.
+		assert.deepStrictEqual(seededEvents, ['turnUpdate', 'clear']);
+		assert.deepStrictEqual(conversationRefreshes, [0]);
+		assert.deepStrictEqual(railRefreshes, [undefined, 0]);
+		assert.strictEqual(autoApplyCalls, 0);
+		assert.strictEqual(importCalls, 0);
+		assert.strictEqual(getTurnsCalls, 0);
 	});
 
 	test('compact layout collapses rail when opening a thread', async () => {
@@ -978,6 +1551,203 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.strictEqual(renderImageStripCalls, 1);
 		assert.strictEqual(updateComposerMetricsCalls, 1);
 		assert.strictEqual(focusInputCalls, 1);
+	});
+
+	test('runtime-backed copy and reuse actions do not import legacy turns when runtime state is missing', async () => {
+		const pane = createPaneHarness() as unknown as IConversationActionTarget;
+		const clipboardWrites: string[] = [];
+		let renderImageStripCalls = 0;
+		let updateComposerMetricsCalls = 0;
+		let focusInputCalls = 0;
+		pane.activeThreadId = 'thread-runtime';
+		pane.composerInput = document.createElement('textarea');
+		pane.pendingImages = [];
+		pane.clipboardService = {
+			writeText: async (text: string) => {
+				clipboardWrites.push(text);
+			},
+		};
+		pane.historyService = {
+			getTurns: () => {
+				assert.fail('copy/reuse should not consult legacy turns when runtime state is absent');
+			},
+		};
+		pane.threadRuntimeService = {
+			getState: () => undefined,
+		};
+		pane.rail = {
+			getSelectedThread: () => undefined,
+		};
+		pane.toPendingImages = () => [];
+		pane.renderImageStrip = () => { renderImageStripCalls += 1; };
+		pane.updateComposerMetrics = () => { updateComposerMetricsCalls += 1; };
+		pane.focusInput = () => { focusInputCalls += 1; };
+
+		await pane.copyPrompt();
+		await pane.copyResponse();
+		pane.reusePrompt();
+
+		assert.deepStrictEqual(clipboardWrites, []);
+		assert.strictEqual(pane.composerInput.value, '');
+		assert.deepStrictEqual(pane.pendingImages, []);
+		assert.strictEqual(renderImageStripCalls, 0);
+		assert.strictEqual(updateComposerMetricsCalls, 0);
+		assert.strictEqual(focusInputCalls, 0);
+	});
+
+	test('explicit targeted-thread copy and reuse actions import a legacy-only thread once', async () => {
+		const pane = createPaneHarness() as unknown as IConversationActionTarget & {
+			threadsById: Map<string, { threadId: string; runtimeOwnedCatalog?: boolean }>;
+		};
+		const clipboardWrites: string[] = [];
+		let renderImageStripCalls = 0;
+		let updateComposerMetricsCalls = 0;
+		let focusInputCalls = 0;
+		let getTurnsCalls = 0;
+		let importedRuntimeState: ReturnType<NonNullable<IConversationActionTarget['threadRuntimeService']['ensureHydratedFromHistory']>> | undefined;
+		const promptImages = [{ mimeType: 'image/png', base64Data: 'bGVnYWN5' }];
+		pane.threadsById = new Map([
+			['thread-legacy', {
+				threadId: 'thread-legacy',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.activeThreadId = 'thread-active';
+		pane.composerInput = document.createElement('textarea');
+		pane.pendingImages = [];
+		pane.clipboardService = {
+			writeText: async (text: string) => {
+				clipboardWrites.push(text);
+			},
+		};
+		pane.historyService = {
+			getTurns: (threadId: string) => {
+				getTurnsCalls += 1;
+				assert.strictEqual(threadId, 'thread-legacy');
+				return [{
+					turnId: 'thread-legacy:turn-1',
+					threadId: 'thread-legacy',
+					sequence: 1,
+					promptText: 'Legacy prompt',
+					promptImages: promptImages,
+					responseMarkdown: 'Legacy response',
+					responsePlainText: 'Legacy response',
+					startedAt: 1,
+					status: 'completed',
+					lastEventAt: 1,
+				} as IVSCloneChatHistoryTurn];
+			},
+		};
+		pane.threadRuntimeService = {
+			getState: (threadId: string) => threadId === 'thread-legacy' ? importedRuntimeState : undefined,
+			ensureHydratedFromHistory: (threadId, turns) => {
+				assert.strictEqual(threadId, 'thread-legacy');
+				assert.strictEqual(turns.length, 1);
+				importedRuntimeState = {
+					threadId,
+					catalog: {
+						threadId,
+						title: 'Legacy thread',
+						createdAt: 1,
+						updatedAt: 1,
+						status: 'completed',
+						archived: false,
+						turnCount: 1,
+						lastTurnPreview: turns[0].responsePlainText || turns[0].responseMarkdown,
+					},
+					streamState: { kind: 'idle' },
+					messages: [
+						{
+							role: 'user',
+							content: turns[0].promptText,
+							imageAttachments: turns[0].promptImages,
+						},
+						{
+							role: 'assistant',
+							content: turns[0].responsePlainText || turns[0].responseMarkdown,
+						},
+					],
+					checkpoints: [],
+					isRunning: false,
+					lastUpdatedAt: 1,
+				};
+				return importedRuntimeState;
+			},
+		};
+		pane.rail = {
+			getSelectedThread: () => undefined,
+		};
+		pane.toPendingImages = attachments => attachments?.map((attachment, index) => ({ ...attachment, dataUrl: `data:${attachment.mimeType};base64,${index}` })) ?? [];
+		pane.renderImageStrip = () => { renderImageStripCalls += 1; };
+		pane.updateComposerMetrics = () => { updateComposerMetricsCalls += 1; };
+		pane.focusInput = () => { focusInputCalls += 1; };
+		(pane as unknown as { getImportingRuntimeThreadIds: () => Set<string> }).getImportingRuntimeThreadIds = () => new Set();
+
+		await pane.copyPrompt('thread-legacy');
+		await pane.copyResponse('thread-legacy');
+		pane.reusePrompt('thread-legacy');
+
+		assert.strictEqual(getTurnsCalls, 1);
+		assert.strictEqual(pane.threadsById.get('thread-legacy')?.runtimeOwnedCatalog, true);
+		assert.deepStrictEqual(clipboardWrites, ['Legacy prompt', 'Legacy response']);
+		assert.strictEqual(pane.composerInput.value, 'Legacy prompt');
+		assert.strictEqual(pane.pendingImages.length, 1);
+		assert.strictEqual(renderImageStripCalls, 1);
+		assert.strictEqual(updateComposerMetricsCalls, 1);
+		assert.strictEqual(focusInputCalls, 1);
+	});
+
+	test('explicit targeted-thread copy and reuse actions do not import runtime-owned empty threads', async () => {
+		const pane = createPaneHarness() as unknown as IConversationActionTarget & {
+			threadsById: Map<string, { threadId: string; runtimeOwnedCatalog?: boolean }>;
+		};
+		const clipboardWrites: string[] = [];
+		let getTurnsCalls = 0;
+		let renderImageStripCalls = 0;
+		let updateComposerMetricsCalls = 0;
+		let focusInputCalls = 0;
+		pane.threadsById = new Map([
+			['thread-runtime', {
+				threadId: 'thread-runtime',
+				runtimeOwnedCatalog: true,
+			}],
+		]);
+		pane.composerInput = document.createElement('textarea');
+		pane.pendingImages = [];
+		pane.clipboardService = {
+			writeText: async (text: string) => {
+				clipboardWrites.push(text);
+			},
+		};
+		pane.historyService = {
+			getTurns: () => {
+				getTurnsCalls += 1;
+				assert.fail('runtime-owned explicit actions should not fall back to legacy history');
+			},
+		};
+		pane.threadRuntimeService = {
+			getState: () => undefined,
+			ensureHydratedFromHistory: () => {
+				assert.fail('runtime-owned explicit actions should not trigger history hydration');
+			},
+		};
+		pane.rail = {
+			getSelectedThread: () => undefined,
+		};
+		pane.toPendingImages = () => [];
+		pane.renderImageStrip = () => { renderImageStripCalls += 1; };
+		pane.updateComposerMetrics = () => { updateComposerMetricsCalls += 1; };
+		pane.focusInput = () => { focusInputCalls += 1; };
+
+		await pane.copyPrompt('thread-runtime');
+		await pane.copyResponse('thread-runtime');
+		pane.reusePrompt('thread-runtime');
+
+		assert.deepStrictEqual(clipboardWrites, []);
+		assert.strictEqual(getTurnsCalls, 0);
+		assert.strictEqual(renderImageStripCalls, 0);
+		assert.strictEqual(updateComposerMetricsCalls, 0);
+		assert.strictEqual(focusInputCalls, 0);
 	});
 
 	test('refreshConversation renders active runtime threads without reading legacy turns', () => {
@@ -1791,6 +2561,116 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.strictEqual(pane.threadsById.get('thread-legacy')?.archived, true);
 	});
 
+	test('setThreadArchived upgrades a stale legacy-owned cache row before using runtime archive', async () => {
+		const pane = createPaneHarness() as unknown as {
+			historyReady: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource?: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			historyService: {
+				archiveThread: (threadId: string, archived: boolean) => Promise<void>;
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+				archiveThread?: (threadId: string, archived: boolean) => Promise<void> | boolean;
+				getThreads?: () => unknown[];
+			};
+			rail: {
+				getFilterState: () => { query: string; tab: 'all' | 'active' | 'archived' };
+				setRows: (rows: Array<{ threadId: string; archived: boolean; status: string }>) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			notificationService: {
+				error: (message: string) => void;
+			};
+			setThreadArchived: (threadId: string, archived: boolean) => Promise<void>;
+		};
+		const historyArchiveCalls: Array<{ threadId: string; archived: boolean }> = [];
+		const runtimeArchiveCalls: Array<{ threadId: string; archived: boolean }> = [];
+		let archivedInRuntime = false;
+		pane.historyReady = true;
+		pane.threadsById = new Map([
+			['thread-runtime', {
+				threadId: 'thread-runtime',
+				title: 'Stale legacy row',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Legacy preview',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.historyService = {
+			archiveThread: async (threadId: string, archived: boolean) => {
+				historyArchiveCalls.push({ threadId, archived });
+			},
+		};
+		pane.threadRuntimeService = {
+			getState: (threadId: string) => threadId === 'thread-runtime' ? {
+				threadId,
+				catalog: {
+					threadId,
+					title: 'Runtime row',
+					createdAt: 1,
+					updatedAt: 3,
+					status: 'completed',
+					archived: false,
+					turnCount: 1,
+					lastTurnPreview: 'Runtime preview',
+				},
+				streamState: { kind: 'idle' },
+				messages: [
+					{ id: 'msg-user', role: 'user', createdAt: 1, content: 'Runtime prompt' },
+					{ id: 'msg-assistant', role: 'assistant', createdAt: 2, content: 'Runtime response' },
+				],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 3,
+			} : undefined,
+			archiveThread: async (threadId: string, archived: boolean) => {
+				runtimeArchiveCalls.push({ threadId, archived });
+				archivedInRuntime = archived;
+			},
+			getThreads: () => [{
+				threadId: 'thread-runtime',
+				title: 'Runtime row',
+				createdAt: 1,
+				updatedAt: 3,
+				status: archivedInRuntime ? 'archived' : 'completed',
+				archived: archivedInRuntime,
+				turnCount: 1,
+				lastTurnPreview: 'Runtime preview',
+			}],
+		};
+		pane.rail = {
+			getFilterState: () => ({ query: '', tab: 'all' }),
+			setRows: () => undefined,
+			setSelectedThread: () => undefined,
+		};
+		pane.notificationService = {
+			error: () => undefined,
+		};
+		pane.refreshRailRows = pane.refreshRailRows.bind(pane);
+
+		await pane.setThreadArchived('thread-runtime', true);
+
+		assert.deepStrictEqual(runtimeArchiveCalls, [{ threadId: 'thread-runtime', archived: true }]);
+		assert.deepStrictEqual(historyArchiveCalls, []);
+		assert.strictEqual(pane.threadsById.get('thread-runtime')?.runtimeOwnedCatalog, true);
+		assert.strictEqual(pane.threadsById.get('thread-runtime')?.archived, true);
+	});
+
 	test('deleteThread leaves the merged pane cache untouched when the runtime catalog rejects the delete', async () => {
 		const pane = createPaneHarness() as unknown as {
 			activeThreadId?: string;
@@ -2062,6 +2942,98 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		assert.strictEqual(runtimeDeleteCalls, 0);
 		assert.strictEqual(historyDeleteThreadId, 'thread-legacy');
+	});
+
+	test('deleteThread upgrades a stale legacy-owned cache row before using runtime delete', async () => {
+		const pane = createPaneHarness() as unknown as {
+			activeThreadId?: string;
+			railVisible: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource?: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			sessionService: { cancelThread: (threadId: string) => void };
+			historyService: {
+				deleteThread: (threadId: string) => Promise<void>;
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+				deleteThread: (threadId: string) => Promise<boolean>;
+			};
+			refreshRailRows: () => void;
+			refreshModelControls: () => void;
+			refreshConversation: () => void;
+			deleteThread: (threadId: string) => Promise<void>;
+		};
+		const runtimeDeleteCalls: string[] = [];
+		const historyDeleteCalls: string[] = [];
+		pane.activeThreadId = undefined;
+		pane.railVisible = true;
+		pane.threadsById = new Map([
+			['thread-runtime', {
+				threadId: 'thread-runtime',
+				title: 'Stale legacy row',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Legacy preview',
+				runtimeOwnedCatalog: false,
+			}],
+		]);
+		pane.sessionService = {
+			cancelThread: () => undefined,
+		};
+		pane.historyService = {
+			deleteThread: async (threadId: string) => {
+				historyDeleteCalls.push(threadId);
+			},
+		};
+		pane.threadRuntimeService = {
+			getState: (threadId: string) => threadId === 'thread-runtime' ? {
+				threadId,
+				catalog: {
+					threadId,
+					title: 'Runtime row',
+					createdAt: 1,
+					updatedAt: 3,
+					status: 'completed',
+					archived: false,
+					turnCount: 1,
+					lastTurnPreview: 'Runtime preview',
+				},
+				streamState: { kind: 'idle' },
+				messages: [
+					{ id: 'msg-user', role: 'user', createdAt: 1, content: 'Runtime prompt' },
+					{ id: 'msg-assistant', role: 'assistant', createdAt: 2, content: 'Runtime response' },
+				],
+				checkpoints: [],
+				isRunning: false,
+				lastUpdatedAt: 3,
+			} : undefined,
+			deleteThread: async (threadId: string) => {
+				runtimeDeleteCalls.push(threadId);
+				return true;
+			},
+		};
+		pane.refreshRailRows = () => undefined;
+		pane.refreshModelControls = () => undefined;
+		pane.refreshConversation = () => undefined;
+
+		await pane.deleteThread('thread-runtime');
+
+		assert.deepStrictEqual(runtimeDeleteCalls, ['thread-runtime']);
+		assert.deepStrictEqual(historyDeleteCalls, ['thread-runtime']);
+		assert.strictEqual(pane.threadsById.has('thread-runtime'), false);
 	});
 
 	test('deleteThread keeps the thread hidden when runtime delete succeeds but legacy cleanup fails', async () => {
@@ -3420,10 +4392,21 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			appendMarkdownSegment: (container: HTMLElement, text: string, className: string) => void;
 			looksLikePartialSearchReplaceBlock: (text: string) => boolean;
 			renderRuntimeAssistantMessage: (message: { id: string; role: 'assistant'; createdAt: number; content: string }, threadId?: string) => HTMLElement;
+			clipboardService: { writeText: (text: string) => Promise<void> };
+			composerInput: HTMLTextAreaElement;
+			pendingImages: Array<{ mimeType: string; base64Data: string; dataUrl: string }>;
+			toPendingImages: (attachments: Array<{ mimeType: string; base64Data: string }> | undefined) => Array<{ mimeType: string; base64Data: string; dataUrl: string }>;
+			renderImageStrip: () => void;
+			updateComposerMetrics: () => void;
+			copyPrompt: (threadId?: string) => Promise<void>;
+			copyResponse: (threadId?: string) => Promise<void>;
+			reusePrompt: (threadId?: string) => void;
 		};
 		const importedThreadIds: string[] = [];
 		const applyCalls: string[] = [];
 		const assistantApplyStates = new Map<string, unknown>();
+		const clipboardWrites: string[] = [];
+		let getTurnsCalls = 0;
 		let selectedThread: string | undefined;
 		pane.activeThreadId = undefined;
 		pane.pendingAssistantApplyMessageIds = new Set();
@@ -3433,24 +4416,27 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		pane.railResizeHandle = document.createElement('div');
 		pane.threadsById = new Map([[
 			'thread-import',
-			{ threadId: 'thread-import' },
+			{ threadId: 'thread-import', runtimeOwnedCatalog: false },
 		]]);
 		pane.rail = {
 			getSelectedThread: () => selectedThread,
 			setSelectedThread: (threadId: string | undefined) => { selectedThread = threadId; },
 		};
 		pane.historyService = {
-			getTurns: () => [{
-				turnId: 'thread-import:turn-1',
-				threadId: 'thread-import',
-				sequence: 1,
-				promptText: 'Legacy prompt',
-				responseMarkdown: 'Legacy response',
-				responsePlainText: 'Legacy response',
-				startedAt: 1,
-				status: 'completed',
-				lastEventAt: 1,
-			} as IVSCloneChatHistoryTurn],
+			getTurns: () => {
+				getTurnsCalls += 1;
+				return [{
+					turnId: 'thread-import:turn-1',
+					threadId: 'thread-import',
+					sequence: 1,
+					promptText: 'Legacy prompt',
+					responseMarkdown: 'Legacy response',
+					responsePlainText: 'Legacy response',
+					startedAt: 1,
+					status: 'completed',
+					lastEventAt: 1,
+				} as IVSCloneChatHistoryTurn];
+			},
 		};
 		let importedRuntimeState: {
 			threadId: string;
@@ -3469,6 +4455,17 @@ suite('VSCloneUnifiedChatViewPane', () => {
 				assistantApplyStates.clear();
 				importedRuntimeState = {
 					threadId,
+					catalog: {
+						threadId,
+						title: 'Imported thread',
+						createdAt: 1,
+						updatedAt: 1,
+						status: 'completed',
+						archived: false,
+						turnCount: 1,
+						lastTurnPreview: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+						importedFromHistory: true,
+					},
 					mode: 'plan',
 					streamState: { kind: 'idle' },
 					messages: [
@@ -3524,6 +4521,19 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		pane.refreshPlanModeControl = () => undefined;
 		pane.applyRailLayout = () => undefined;
 		pane.focusInput = () => undefined;
+		pane.clipboardService = {
+			writeText: async (text: string) => {
+				clipboardWrites.push(text);
+			},
+		};
+		pane.composerInput = document.createElement('textarea');
+		pane.pendingImages = [];
+		pane.toPendingImages = attachments => attachments?.map((attachment, index) => ({
+			...attachment,
+			dataUrl: `data:${attachment.mimeType};base64,${index}`,
+		})) ?? [];
+		pane.renderImageStrip = () => undefined;
+		pane.updateComposerMetrics = () => undefined;
 		pane.renderSearchReplaceAwareText = (container: HTMLElement, text: string) => {
 			container.textContent = text;
 		};
@@ -3535,10 +4545,23 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		await pane.openSession('thread-import');
 		await new Promise(resolve => setTimeout(resolve, 0));
 
+		// History import should remain an explicit bridge into runtime ownership rather than a
+		// fallback that later pane reads keep consulting behind the scenes.
 		assert.deepStrictEqual(importedThreadIds, ['thread-import']);
+		assert.strictEqual(getTurnsCalls, 1);
+		assert.strictEqual(pane.threadsById.get('thread-import')?.runtimeOwnedCatalog, true);
 		assert.strictEqual(selectedThread, 'thread-import');
 		assert.deepStrictEqual(applyCalls, []);
 		assert.strictEqual(assistantApplyStates.size, 0);
+		await pane.copyPrompt('thread-import');
+		await pane.copyResponse('thread-import');
+		pane.reusePrompt('thread-import');
+		assert.strictEqual(getTurnsCalls, 1);
+		assert.deepStrictEqual(clipboardWrites, [
+			'Imported prompt',
+			'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+		]);
+		assert.strictEqual(pane.composerInput.value, 'Imported prompt');
 		const importedAssistantMessage = importedRuntimeState?.messages[1] as { id: string; role: 'assistant'; createdAt: number; content: string };
 		const rendered = pane.renderRuntimeAssistantMessage(importedAssistantMessage, 'thread-import');
 		const applyButton = rendered.querySelector('.vsclone-thread-message-apply') as HTMLButtonElement | null;
@@ -3590,8 +4613,19 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			looksLikePartialSearchReplaceBlock: (text: string) => boolean;
 			renderRuntimeAssistantMessage: (message: { id: string; role: 'assistant'; createdAt: number; content: string }, threadId?: string) => HTMLElement;
 			reloadHistory: () => Promise<void>;
+			clipboardService: { writeText: (text: string) => Promise<void> };
+			composerInput: HTMLTextAreaElement;
+			pendingImages: Array<{ mimeType: string; base64Data: string; dataUrl: string }>;
+			toPendingImages: (attachments: Array<{ mimeType: string; base64Data: string }> | undefined) => Array<{ mimeType: string; base64Data: string; dataUrl: string }>;
+			renderImageStrip: () => void;
+			updateComposerMetrics: () => void;
+			copyPrompt: (threadId?: string) => Promise<void>;
+			copyResponse: (threadId?: string) => Promise<void>;
+			reusePrompt: (threadId?: string) => void;
 		};
 		const applyCalls: string[] = [];
+		const clipboardWrites: string[] = [];
+		let getTurnsCalls = 0;
 		let importedRuntimeState: {
 			threadId: string;
 			mode: 'act';
@@ -3623,17 +4657,20 @@ suite('VSCloneUnifiedChatViewPane', () => {
 				turnCount: 1,
 				lastTurnPreview: 'Legacy response',
 			}],
-			getTurns: () => [{
-				turnId: 'thread-reload:turn-1',
-				threadId: 'thread-reload',
-				sequence: 1,
-				promptText: 'Legacy prompt',
-				responseMarkdown: 'Legacy response',
-				responsePlainText: 'Legacy response',
-				startedAt: 1,
-				status: 'completed',
-				lastEventAt: 1,
-			} as IVSCloneChatHistoryTurn],
+			getTurns: () => {
+				getTurnsCalls += 1;
+				return [{
+					turnId: 'thread-reload:turn-1',
+					threadId: 'thread-reload',
+					sequence: 1,
+					promptText: 'Legacy prompt',
+					responseMarkdown: 'Legacy response',
+					responsePlainText: 'Legacy response',
+					startedAt: 1,
+					status: 'completed',
+					lastEventAt: 1,
+				} as IVSCloneChatHistoryTurn];
+			},
 		};
 		pane.planModeService = {
 			initialize: async () => undefined,
@@ -3643,6 +4680,17 @@ suite('VSCloneUnifiedChatViewPane', () => {
 			ensureHydratedFromHistory: (threadId) => {
 				importedRuntimeState = {
 					threadId,
+					catalog: {
+						threadId,
+						title: 'Reloaded thread',
+						createdAt: 1,
+						updatedAt: 2,
+						status: 'completed',
+						archived: false,
+						turnCount: 1,
+						lastTurnPreview: 'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+						importedFromHistory: true,
+					},
 					mode: 'act',
 					streamState: { kind: 'idle' },
 					messages: [
@@ -3673,6 +4721,19 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		pane.refreshRailRows = () => undefined;
 		pane.refreshConversation = () => undefined;
 		pane.applyRailLayout = () => undefined;
+		pane.clipboardService = {
+			writeText: async (text: string) => {
+				clipboardWrites.push(text);
+			},
+		};
+		pane.composerInput = document.createElement('textarea');
+		pane.pendingImages = [];
+		pane.toPendingImages = attachments => attachments?.map((attachment, index) => ({
+			...attachment,
+			dataUrl: `data:${attachment.mimeType};base64,${index}`,
+		})) ?? [];
+		pane.renderImageStrip = () => undefined;
+		pane.updateComposerMetrics = () => undefined;
 		pane.renderSearchReplaceAwareText = (container: HTMLElement, text: string) => {
 			container.textContent = text;
 		};
@@ -3684,9 +4745,260 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		await pane.reloadHistory();
 
 		assert.deepStrictEqual(applyCalls, []);
+		assert.strictEqual(getTurnsCalls, 1);
+		assert.strictEqual(pane.threadsById.get('thread-reload')?.runtimeOwnedCatalog, true);
+		await pane.copyPrompt('thread-reload');
+		await pane.copyResponse('thread-reload');
+		pane.reusePrompt('thread-reload');
+		assert.strictEqual(getTurnsCalls, 1);
+		assert.deepStrictEqual(clipboardWrites, [
+			'Imported prompt',
+			'File: src/app.ts\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE',
+		]);
+		assert.strictEqual(pane.composerInput.value, 'Imported prompt');
 		const importedAssistantMessage = importedRuntimeState?.messages[1] as { id: string; role: 'assistant'; createdAt: number; content: string };
 		const rendered = pane.renderRuntimeAssistantMessage(importedAssistantMessage, 'thread-reload');
 		assert.ok(rendered.querySelector('.vsclone-thread-message-apply'));
+	});
+
+	test('reloadHistory does not import runtime-owned threads when runtime state is missing', async () => {
+		const pane = createPaneHarness() as unknown as {
+			rootContainer: HTMLElement;
+			railVisible: boolean;
+			activeThreadId?: string;
+			historyReady: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				sessionResource?: string;
+				title: string;
+				createdAt: number;
+				updatedAt: number;
+				status: 'active' | 'completed' | 'failed' | 'archived';
+				archived: boolean;
+				turnCount: number;
+				lastTurnPreview: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			rail: {
+				setLoading: () => void;
+				setError: (message: string) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			historyService: {
+				initialize: () => Promise<void>;
+				getThreads: () => Array<{
+					threadId: string;
+					sessionResource: string;
+					title: string;
+					createdAt: number;
+					updatedAt: number;
+					status: 'active' | 'completed' | 'failed' | 'archived';
+					archived: boolean;
+					turnCount: number;
+					lastTurnPreview: string;
+				}>;
+				getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
+			};
+			planModeService: {
+				initialize: () => Promise<void>;
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+				ensureHydratedFromHistory: (threadId: string, turns: IVSCloneChatHistoryTurn[]) => unknown;
+				getThreads?: () => unknown[];
+			};
+			refreshRailRows: () => void;
+			refreshConversation: () => void;
+			applyRailLayout: () => void;
+			focusInput: () => void;
+			refreshPlanModeControl: () => void;
+			refreshModelControls: () => void;
+			reloadHistory: () => Promise<void>;
+		};
+		let getTurnsCalls = 0;
+		let hydrateCalls = 0;
+		let refreshConversationCalls = 0;
+
+		pane.rootContainer = document.createElement('div');
+		pane.railVisible = true;
+		pane.activeThreadId = 'thread-runtime';
+		pane.historyReady = false;
+		pane.threadsById = new Map([
+			['thread-runtime', {
+				threadId: 'thread-runtime',
+				title: 'Runtime thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 0,
+				lastTurnPreview: '',
+				runtimeOwnedCatalog: true,
+			}],
+		]);
+		pane.rail = {
+			setLoading: () => undefined,
+			setError: () => undefined,
+			setSelectedThread: () => undefined,
+		};
+		pane.historyService = {
+			initialize: async () => undefined,
+			getThreads: () => [],
+			getTurns: () => {
+				getTurnsCalls += 1;
+				throw new Error('runtime-owned reload should not reread legacy turns when runtime state is missing');
+			},
+		};
+		pane.planModeService = {
+			initialize: async () => undefined,
+		};
+		pane.threadRuntimeService = {
+			getState: () => undefined,
+			ensureHydratedFromHistory: () => {
+				hydrateCalls += 1;
+				throw new Error('runtime-owned reload should not trigger legacy hydration when runtime state is missing');
+			},
+			getThreads: () => [],
+		};
+		pane.refreshRailRows = () => undefined;
+		pane.refreshConversation = () => {
+			refreshConversationCalls += 1;
+		};
+		pane.applyRailLayout = () => undefined;
+		pane.focusInput = () => undefined;
+		pane.refreshPlanModeControl = () => undefined;
+		pane.refreshModelControls = () => undefined;
+
+		await pane.reloadHistory();
+
+		assert.strictEqual(getTurnsCalls, 0);
+		assert.strictEqual(hydrateCalls, 0);
+		assert.strictEqual(refreshConversationCalls, 1);
+		assert.strictEqual(pane.activeThreadId, 'thread-runtime');
+	});
+
+	test('reloadHistory fails closed when the active legacy-only thread cannot be imported into runtime', async () => {
+		const pane = createPaneHarness() as unknown as {
+			rootContainer: HTMLElement;
+			railVisible: boolean;
+			activeThreadId?: string;
+			historyReady: boolean;
+			threadsById: Map<string, {
+				threadId: string;
+				runtimeOwnedCatalog?: boolean;
+			}>;
+			rail: {
+				setLoading: () => void;
+				setError: (message: string) => void;
+				setSelectedThread: (threadId: string | undefined) => void;
+			};
+			historyService: {
+				initialize: () => Promise<void>;
+				getThreads: () => Array<{
+					threadId: string;
+					sessionResource: string;
+					title: string;
+					createdAt: number;
+					updatedAt: number;
+					status: 'active' | 'completed' | 'failed' | 'archived';
+					archived: boolean;
+					turnCount: number;
+					lastTurnPreview: string;
+				}>;
+				getTurns: (threadId: string) => IVSCloneChatHistoryTurn[];
+			};
+			planModeService: {
+				initialize: () => Promise<void>;
+			};
+			threadRuntimeService: {
+				getState: (threadId: string) => unknown;
+				ensureHydratedFromHistory: (threadId: string, turns: IVSCloneChatHistoryTurn[]) => unknown;
+			};
+			refreshRailRows: () => void;
+			refreshConversation: () => void;
+			applyRailLayout: () => void;
+			focusInput: () => void;
+			refreshPlanModeControl: () => void;
+			refreshModelControls: () => void;
+			showComposerForNewChat: () => void;
+			reloadHistory: () => Promise<void>;
+		};
+		let selectedThread: string | undefined = 'thread-legacy';
+		let getTurnsCalls = 0;
+		let refreshConversationCalls = 0;
+		let showComposerCalls = 0;
+
+		pane.rootContainer = document.createElement('div');
+		pane.railVisible = true;
+		pane.activeThreadId = 'thread-legacy';
+		pane.historyReady = false;
+		pane.threadsById = new Map();
+		pane.rail = {
+			setLoading: () => undefined,
+			setError: () => undefined,
+			setSelectedThread: (threadId: string | undefined) => {
+				selectedThread = threadId;
+			},
+		};
+		pane.historyService = {
+			initialize: async () => undefined,
+			getThreads: () => [{
+				threadId: 'thread-legacy',
+				sessionResource: 'vsclone://api/thread-legacy',
+				title: 'Legacy thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Legacy response',
+			}],
+			getTurns: (threadId: string) => {
+				getTurnsCalls += 1;
+				assert.strictEqual(threadId, 'thread-legacy');
+				return [{
+					turnId: 'thread-legacy:turn-1',
+					threadId: 'thread-legacy',
+					sequence: 1,
+					promptText: 'Legacy prompt',
+					responseMarkdown: 'Legacy response',
+					responsePlainText: 'Legacy response',
+					startedAt: 1,
+					status: 'completed',
+					lastEventAt: 1,
+				} as IVSCloneChatHistoryTurn];
+			},
+		};
+		pane.planModeService = {
+			initialize: async () => undefined,
+		};
+		pane.threadRuntimeService = {
+			getState: () => undefined,
+			ensureHydratedFromHistory: () => undefined,
+		};
+		pane.refreshRailRows = () => undefined;
+		pane.refreshConversation = () => {
+			refreshConversationCalls += 1;
+		};
+		pane.applyRailLayout = () => undefined;
+		pane.focusInput = () => undefined;
+		pane.refreshPlanModeControl = () => undefined;
+		pane.refreshModelControls = () => undefined;
+		pane.showComposerForNewChat = () => {
+			showComposerCalls += 1;
+			pane.activeThreadId = undefined;
+			pane.railVisible = false;
+			pane.rail.setSelectedThread(undefined);
+		};
+
+		await pane.reloadHistory();
+
+		assert.strictEqual(getTurnsCalls, 1);
+		assert.strictEqual(showComposerCalls, 1);
+		assert.strictEqual(refreshConversationCalls, 0);
+		assert.strictEqual(pane.activeThreadId, undefined);
+		assert.strictEqual(selectedThread, undefined);
+		assert.strictEqual(pane.threadsById.get('thread-legacy')?.runtimeOwnedCatalog, false);
 	});
 
 	test('active runtime threads do not fall back to legacy history when runtime state is missing', () => {

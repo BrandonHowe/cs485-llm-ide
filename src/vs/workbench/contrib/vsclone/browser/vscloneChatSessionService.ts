@@ -50,7 +50,9 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	private readonly apiRequestHandles = new Map<string, IVSCloneThreadRuntimeHandle>();
 
 	constructor(
-		@IVSCloneChatHistoryService private readonly historyService: IVSCloneChatHistoryService,
+		// History stays injected during the migration because neighboring services still compose with
+		// the same constructor shape, but active submit/replay logic must not silently reread it.
+		@IVSCloneChatHistoryService _historyService: IVSCloneChatHistoryService,
 		@IVSCloneThreadModelSelectionService private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
 		@IVSClonePlanModeService private readonly planModeService: IVSClonePlanModeService,
 		@ILogService private readonly logService: ILogService,
@@ -115,7 +117,9 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		await this.planModeService.setModeForThread(threadId, mode);
 		const resolvedSelection = await this.ensureThreadSelectionBinding(threadId, modelSelection);
 		const turnId = `${threadId}:api:${Date.now()}`;
-		this.importRuntimeStateForThread(threadId);
+		// Active submits now continue strictly from the persisted runtime branch. If a thread has not
+		// been explicitly imported into runtime yet, we start from an empty branch instead of hiding a
+		// legacy history reconstruction behind this send path.
 		// Sequence is derived from the runtime thread when possible so reloads and rewinds continue
 		// from the active branch instead of from whichever legacy turns still happen to be persisted.
 		const sequence = this.getNextSequenceForThread(threadId);
@@ -246,9 +250,8 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 	}
 
 	/**
-	 * Active prompt replay only reads the runtime branch. Legacy turns are allowed to feed the
-	 * runtime exactly once through the explicit hydration step below, but the replay logic itself
-	 * never reconstructs conversation context directly from history anymore.
+	 * Active prompt replay only reads the runtime branch. Threads that still exist only in legacy
+	 * history must be imported into runtime elsewhere before submission if they need prior context.
 	 */
 	private getPreviousTurnsForThread(threadId: string): IVSCloneApiConversationMessage[] {
 		const runtimeState = this.threadRuntimeService.getState(threadId);
@@ -268,20 +271,6 @@ export class VSCloneChatSessionService extends Disposable implements IVSCloneCha
 		}
 
 		return 1;
-	}
-
-	/**
-	 * History can still seed runtime during migration, but that import happens explicitly before
-	 * active send-path reads. Sequence and prompt replay helpers themselves only consult runtime so
-	 * render/send code no longer hides a legacy fallback inside what looks like a pure getter.
-	 */
-	private importRuntimeStateForThread(threadId: string): IVSCloneThreadRuntimeState | undefined {
-		const runtimeState = this.threadRuntimeService.getState(threadId);
-		if (runtimeState) {
-			return runtimeState;
-		}
-
-		return this.threadRuntimeService.ensureHydratedFromHistory(threadId, this.historyService.getTurns(threadId));
 	}
 
 	private toConversationMessagesFromRuntime(state: IVSCloneThreadRuntimeState): IVSCloneApiConversationMessage[] {

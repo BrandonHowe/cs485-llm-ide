@@ -48,6 +48,7 @@ import { IEditorService } from "../../../services/editor/common/editorService.js
 import { URI } from "../../../../base/common/uri.js";
 import { IModelService } from "../../../../editor/common/services/model.js";
 import {
+	type IVSCloneChatHistoryChangeEvent,
 	IVSCloneChatHistoryQuery,
 	IVSCloneChatHistoryThread,
 	IVSCloneChatHistoryTurn,
@@ -411,33 +412,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		this._register(
 			this.historyService.onDidChange((event) => {
-				if (!this.historyReady) {
-					return;
-				}
-				// History still carries legacy-only threads during the migration, so every history event
-				// has to refresh the history-backed side of the cache even after the runtime catalog API
-				// exists. Runtime refresh merges afterward and wins for any thread it already owns.
-				this.seedThreadCatalogFromHistory(event);
-
-				const affectsActiveThread =
-					!this.activeThreadId || event.threadIds.includes(this.activeThreadId);
-				if (event.reason === "turnUpdate") {
-					if (affectsActiveThread) {
-						this.importActiveThreadRuntimeState();
-						this.refreshConversationScheduler.schedule(24);
-						// Trigger auto-apply on the same event the streaming completes so the user
-						// never has to click the apply button on the happy path.
-						this.maybeAutoApplyCompletedTurns();
-					}
-					this.refreshRailScheduler.schedule();
-					return;
-				}
-
-				if (affectsActiveThread || event.reason === "clear") {
-					this.importActiveThreadRuntimeState();
-					this.refreshConversationScheduler.schedule(0);
-				}
-				this.refreshRailScheduler.schedule(0);
+				this.handleHistoryChange(event);
 			}),
 		);
 		this._register(
@@ -562,7 +537,24 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
-		const importedRuntimeState = this.importRuntimeThreadState(targetThreadId);
+		const previousActiveThreadId = this.activeThreadId;
+		const requiresExplicitRuntimeImport = this.isLegacyOnlyThreadCatalogEntry(targetThreadId);
+		// Selecting a legacy-only thread is the compatibility boundary where the pane may still
+		// import history into the runtime. After this point the active pane reads only runtime state,
+		// so helpers like copy/reuse/render never perform their own hidden history fallback.
+		const importedRuntimeState = requiresExplicitRuntimeImport
+			? this.ensureRuntimeThreadImportedFromHistory(targetThreadId)
+			: this.threadRuntimeService?.getState?.(targetThreadId);
+		if (requiresExplicitRuntimeImport && !importedRuntimeState) {
+			// Explicit history activation must fail closed. Leaving a legacy-only thread active without
+			// a materialized runtime branch would make the next submit start from an empty transcript.
+			if (!previousActiveThreadId || previousActiveThreadId === targetThreadId) {
+				this.showComposerForNewChat();
+			} else {
+				this.rail.setSelectedThread(previousActiveThreadId);
+			}
+			return;
+		}
 		this.activeThreadId = targetThreadId;
 		this.rail.setSelectedThread(targetThreadId);
 		this.railVisible = false;
@@ -581,9 +573,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	async copyPrompt(threadId?: string): Promise<void> {
-		this.importRuntimeThreadState(
-			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread(),
-		);
 		const latestPrompt = this.getLatestConversationPrompt(threadId);
 		if (!latestPrompt) {
 			return;
@@ -592,9 +581,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	async copyResponse(threadId?: string): Promise<void> {
-		this.importRuntimeThreadState(
-			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread(),
-		);
 		const latestResponse = this.getLatestConversationResponse(threadId);
 		if (!latestResponse) {
 			return;
@@ -603,9 +589,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	reusePrompt(threadId?: string): void {
-		this.importRuntimeThreadState(
-			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread(),
-		);
 		const latestPrompt = this.getLatestConversationPrompt(threadId);
 		if (!latestPrompt || !this.composerInput) {
 			return;
@@ -1350,7 +1333,22 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				this.railVisible = false;
 				this.applyRailLayout();
 			}
-			this.importActiveThreadRuntimeState();
+			const requiresExplicitRuntimeImport = this.isLegacyOnlyThreadCatalogEntry(this.activeThreadId);
+			// Reload is an explicit migration boundary. If the selected thread still exists only in
+			// legacy history, import it here before refreshing because the active render path never
+			// performs its own history fallback.
+			const importedRuntimeState = requiresExplicitRuntimeImport
+				? this.ensureRuntimeThreadImportedFromHistory(this.activeThreadId)
+				: this.activeThreadId
+					? this.threadRuntimeService?.getState?.(this.activeThreadId)
+					: undefined;
+			if (requiresExplicitRuntimeImport && !importedRuntimeState) {
+				// Reload must also fail closed for legacy-only threads. Otherwise the pane would keep a
+				// selected thread that has no runtime branch, and the next submit would restart from an
+				// empty context even though the rail still looks like a historical thread is active.
+				this.showComposerForNewChat();
+				return;
+			}
 			this.refreshConversation();
 		} catch {
 			this.historyReady = false;
@@ -1361,6 +1359,34 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				),
 			);
 		}
+	}
+
+	private handleHistoryChange(event: IVSCloneChatHistoryChangeEvent): void {
+		if (!this.historyReady) {
+			return;
+		}
+		// History still carries legacy-only rows during migration, so background history events keep
+		// the merged catalog fresh. They must not silently import the active thread into runtime,
+		// because active pane reads are runtime-only outside the explicit open/reload boundaries.
+		this.seedThreadCatalogFromHistory(event);
+
+		const affectsActiveThread =
+			!this.activeThreadId || event.threadIds.includes(this.activeThreadId);
+		if (event.reason === "turnUpdate") {
+			if (affectsActiveThread) {
+				this.refreshConversationScheduler.schedule(24);
+				// Trigger auto-apply on the same event the streaming completes so the user never has to
+				// click the apply button on the happy path once runtime already owns the active branch.
+				this.maybeAutoApplyCompletedTurns();
+			}
+			this.refreshRailScheduler.schedule();
+			return;
+		}
+
+		if (affectsActiveThread || event.reason === "clear") {
+			this.refreshConversationScheduler.schedule(0);
+		}
+		this.refreshRailScheduler.schedule(0);
 	}
 
 	private refreshRailRows(): void {
@@ -1398,6 +1424,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private getRuntimeThreadCatalogService(): (IVSCloneThreadRuntimeService & IVSCloneThreadRuntimeCatalogService) | undefined {
 		return this.threadRuntimeService as (IVSCloneThreadRuntimeService & IVSCloneThreadRuntimeCatalogService) | undefined;
+	}
+
+	private isLegacyOnlyThreadCatalogEntry(threadId: string | undefined): boolean {
+		return !!threadId && this.threadsById.get(threadId)?.runtimeOwnedCatalog === false;
 	}
 
 	/**
@@ -1739,7 +1769,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return target.importingRuntimeThreadIds;
 	}
 
-	private importRuntimeThreadState(
+	/**
+	 * History import is intentionally explicit: only activation/reload/history-sync entrypoints may
+	 * call this compatibility bridge. Active pane reads stay runtime-only so they cannot silently
+	 * resurrect legacy turns after the thread should already have been migrated.
+	 */
+	private ensureRuntimeThreadImportedFromHistory(
 		threadId: string | undefined,
 	): IVSCloneThreadRuntimeState | undefined {
 		if (!threadId) {
@@ -1747,6 +1782,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		const runtimeState = this.threadRuntimeService?.getState(threadId);
 		if (runtimeState) {
+			if (this.isLegacyOnlyThreadCatalogEntry(threadId)) {
+				// A stale pane cache may still think the row is history-owned even though runtime already
+				// materialized the branch. Upgrade the cached ownership immediately so later lifecycle
+				// actions route through runtime instead of back through the legacy fallback path.
+				this.syncThreadCatalogEntryFromRuntime(runtimeState);
+			}
 			return runtimeState;
 		}
 
@@ -1756,18 +1797,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const importingRuntimeThreadIds = this.getImportingRuntimeThreadIds();
 		importingRuntimeThreadIds.add(threadId);
 		try {
-			const importedState = this.threadRuntimeService?.ensureHydratedFromHistory(
+			const importedState = this.threadRuntimeService?.ensureHydratedFromHistory?.(
 				threadId,
 				this.historyService.getTurns(threadId),
 			);
+			if (importedState) {
+				// Explicit imports must also flip the cached rail ownership immediately. Some runtime
+				// implementations notify asynchronously, and keeping the row marked legacy-owned in the
+				// meantime would send later delete/archive actions down the wrong fallback path.
+				this.syncThreadCatalogEntryFromRuntime(importedState);
+			}
 			return importedState;
 		} finally {
 			importingRuntimeThreadIds.delete(threadId);
 		}
-	}
-
-	private importActiveThreadRuntimeState(): IVSCloneThreadRuntimeState | undefined {
-		return this.importRuntimeThreadState(this.activeThreadId);
 	}
 
 	private getRuntimeAssistantMessageMode(
@@ -5218,7 +5261,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 
-		const runtimeState = this.getThreadRuntimeState(candidateThreadId);
+		const runtimeState = threadId
+			? this.ensureExplicitActionThreadImported(candidateThreadId)
+			: this.threadRuntimeService?.getState(candidateThreadId);
 		if (runtimeState) {
 			for (let index = runtimeState.messages.length - 1; index >= 0; index--) {
 				const message = runtimeState.messages[index];
@@ -5243,7 +5288,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 
-		const runtimeState = this.getThreadRuntimeState(candidateThreadId);
+		const runtimeState = threadId
+			? this.ensureExplicitActionThreadImported(candidateThreadId)
+			: this.threadRuntimeService?.getState(candidateThreadId);
 		if (runtimeState) {
 			for (let index = runtimeState.messages.length - 1; index >= 0; index--) {
 				const message = runtimeState.messages[index];
@@ -5256,6 +5303,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 		return undefined;
+	}
+
+	private ensureExplicitActionThreadImported(
+		threadId: string,
+	): IVSCloneThreadRuntimeState | undefined {
+		const runtimeState = this.threadRuntimeService?.getState(threadId);
+		if (!this.isLegacyOnlyThreadCatalogEntry(threadId)) {
+			return runtimeState;
+		}
+
+		// Explicit rail-row actions on a specific legacy-only thread are the one remaining import
+		// boundary for copy/reuse helpers. Runtime-owned rows that simply lack visible messages must
+		// still stay runtime-only so an explicit action cannot accidentally fall back to history.
+		return this.ensureRuntimeThreadImportedFromHistory(threadId);
 	}
 
 	private hasPendingAssistantApply(
@@ -5287,6 +5348,19 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return this.threadsById.get(threadId);
 	}
 
+	private resolveThreadByIdForLifecycleAction(
+		threadId: string,
+	): IVSClonePaneThreadCatalogEntry | undefined {
+		const runtimeState = this.threadRuntimeService.getState?.(threadId);
+		if (runtimeState) {
+			// Lifecycle actions must honor the live runtime branch even if the pane cache is stale.
+			// Without this sync, a row that was already imported into runtime can still look legacy-
+			// owned here and incorrectly fall back to transcript-era delete/archive behavior.
+			this.syncThreadCatalogEntryFromRuntime(runtimeState);
+		}
+		return this.threadsById.get(threadId);
+	}
+
 	private getModelSwitcherContext(): {
 		threadId: string;
 		location: IVSCloneChatLocation;
@@ -5299,7 +5373,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private async deleteThread(threadId: string): Promise<void> {
 		this.sessionService.cancelThread(threadId);
-		const existing = this.threadsById.get(threadId);
+		const existing = this.resolveThreadByIdForLifecycleAction(threadId);
 		let deletedInRuntime = false;
 		let legacyCleanupFailed = false;
 		try {
@@ -5357,7 +5431,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		threadId: string,
 		archived: boolean,
 	): Promise<void> {
-		const existing = this.threadsById.get(threadId);
+		const existing = this.resolveThreadByIdForLifecycleAction(threadId);
 		const optimisticUpdatedAt = Date.now();
 		if (existing) {
 			this.threadsById.set(threadId, {

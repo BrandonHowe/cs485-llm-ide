@@ -22,6 +22,7 @@ import { IVSClonePlanModeService } from '../../common/vsclonePlanModeService.js'
 import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
 import { IVSClonePromptAssemblyService, IVSClonePromptContext } from '../../common/vsclonePromptAssemblyService.js';
 import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
+import { IVSCloneThreadRuntimeState } from '../../common/vscloneThreadRuntimeTypes.js';
 
 class TestHistoryService implements IVSCloneChatHistoryService {
 	declare readonly _serviceBrand: undefined;
@@ -71,6 +72,7 @@ class RecordingThreadRuntimeHandle implements IVSCloneThreadRuntimeHandle {
 class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	declare readonly _serviceBrand: undefined;
 	readonly onDidChangeState = Event.None;
+	readonly statesByThreadId = new Map<string, IVSCloneThreadRuntimeState>();
 	lastOptions: IVSCloneThreadRuntimeRunOptions | undefined;
 
 	runThread(options: IVSCloneThreadRuntimeRunOptions): IVSCloneThreadRuntimeHandle {
@@ -82,7 +84,7 @@ class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	cancelThread(): void { }
 	approveLatestToolRequest(): boolean { return false; }
 	rejectLatestToolRequest(): boolean { return false; }
-	getState(): undefined { return undefined; }
+	getState(threadId: string): IVSCloneThreadRuntimeState | undefined { return this.statesByThreadId.get(threadId); }
 	async rewindToCheckpoint(): Promise<boolean> { return false; }
 }
 
@@ -119,30 +121,52 @@ function createSelection(): IVSCloneModelSelection {
 	};
 }
 
-function createHistoricalTurn(overrides: Partial<IVSCloneChatHistoryTurn>): IVSCloneChatHistoryTurn {
-	return {
-		turnId: 'thread-1:turn-1',
-		threadId: 'thread-1',
-		sequence: 1,
-		promptText: 'Initial prompt',
-		responseMarkdown: 'Assistant response from markdown',
-		responsePlainText: '',
-		startedAt: 1,
-		status: 'completed',
-		...overrides,
-	};
-}
-
 suite('VSCloneChatExecutionIntegration', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('submit should preserve previous assistant context when only response markdown is stored', async () => {
+	test('submit should preserve previous assistant context from runtime after explicit legacy import', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const historyService = new TestHistoryService([
-			createHistoricalTurn({ responsePlainText: '', responseMarkdown: 'Assistant response from markdown' }),
-		]);
+		const historyService = new TestHistoryService([]);
 		const selectionService = new StaticSelectionService(createSelection());
 		const threadRuntimeService = new RecordingThreadRuntimeService();
+		// Imported markdown-only legacy turns are normalized into assistant runtime messages before
+		// active submit. The session layer should reuse that runtime branch without rereading history.
+		threadRuntimeService.statesByThreadId.set('thread-1', {
+			threadId: 'thread-1',
+			catalog: {
+				threadId: 'thread-1',
+				title: 'Imported thread',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Assistant response from markdown',
+				importedFromHistory: true,
+			},
+			streamState: { kind: 'idle' },
+			messages: [
+				{
+					id: 'thread-1:turn-1:user',
+					role: 'user',
+					mode: 'act',
+					createdAt: 1,
+					content: 'Initial prompt',
+					metadata: { importedFromHistory: true },
+				},
+				{
+					id: 'thread-1:turn-1:assistant',
+					role: 'assistant',
+					mode: 'act',
+					createdAt: 2,
+					content: 'Assistant response from markdown',
+					metadata: { importedFromHistory: true },
+				},
+			],
+			checkpoints: [],
+			isRunning: false,
+			lastUpdatedAt: 2,
+		});
 		const sessionService = testDisposables.add(new VSCloneChatSessionService(
 			historyService,
 			selectionService,
@@ -163,7 +187,7 @@ suite('VSCloneChatExecutionIntegration', () => {
 			sessionResource: 'vsclone://api/thread-1',
 		});
 		assert.deepStrictEqual(threadRuntimeService.lastOptions?.previousTurns, [
-			{ role: 'user', content: 'Initial prompt', imageAttachments: undefined },
+			{ role: 'user', content: 'Initial prompt' },
 			{ role: 'assistant', content: 'Assistant response from markdown' },
 		]);
 	});

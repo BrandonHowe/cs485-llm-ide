@@ -450,7 +450,6 @@ interface IChatSessionServiceInternals {
 	getApiVendor(selection: IVSCloneModelSelection | undefined): 'openai' | 'anthropic' | 'google' | undefined;
 	getPreviousTurnsForThread(threadId: string): readonly unknown[];
 	getNextSequenceForThread(threadId: string): number;
-	importRuntimeStateForThread(threadId: string): IVSCloneThreadRuntimeState | undefined;
 }
 
 function asInternals(service: VSCloneChatSessionService): IChatSessionServiceInternals {
@@ -526,7 +525,7 @@ suite('VSCloneChatSessionService', () => {
 		assert.strictEqual(harness.threadRuntimeService.runCalls, 0);
 	});
 
-	test('CS-05 successful routing preserves prior turns, binds the selection, and passes attachments through', async () => {
+	test('CS-05 successful routing does not hydrate legacy turns behind the active submit path', async () => {
 		const harness = createHarness({
 			turnsByThread: [[
 				'thread-1',
@@ -553,6 +552,9 @@ suite('VSCloneChatSessionService', () => {
 			context: createContext(),
 		});
 		store.add(harness.testDisposables);
+		harness.historyService.getTurns = () => {
+			throw new Error('active submit should not read legacy history');
+		};
 
 		const result = await harness.service.submitPrompt('Implement a fix', {
 			threadId: 'thread-1',
@@ -571,31 +573,11 @@ suite('VSCloneChatSessionService', () => {
 		assert.strictEqual(harness.promptAssemblyService.lastMode, 'act');
 		assert.strictEqual(harness.contextGatheringService.calls, 1);
 		assert.strictEqual(harness.threadRuntimeService.runCalls, 1);
-		// The first read imports legacy turns into runtime. Subsequent read-model access then reuses
-		// that hydrated runtime state instead of asking history for a second reconstruction pass.
-		assert.deepStrictEqual(harness.threadRuntimeService.hydratedThreadIds, ['thread-1']);
-		assert.deepStrictEqual(harness.threadRuntimeService.lastRunOptions?.previousTurns, [
-			{
-				role: 'user',
-				content: 'Existing prompt',
-				imageAttachments: [createImageAttachment()],
-			},
-			{
-				role: 'assistant',
-				content: 'Existing response',
-			},
-			{
-				role: 'user',
-				content: 'Streaming prompt',
-				imageAttachments: [createImageAttachment()],
-			},
-			{
-				role: 'assistant',
-				content: 'Streaming response',
-			},
-		]);
+		assert.deepStrictEqual(harness.threadRuntimeService.hydratedThreadIds, []);
+		assert.deepStrictEqual(harness.threadRuntimeService.lastRunOptions?.previousTurns, []);
 		assert.deepStrictEqual(harness.threadRuntimeService.lastRunOptions?.imageAttachments, [createImageAttachment()]);
 		assert.strictEqual(harness.threadRuntimeService.lastRunOptions?.systemMessage, 'SYSTEM:openai:act');
+		assert.strictEqual(harness.threadRuntimeService.lastRunOptions?.sequence, 1);
 		assert.strictEqual(harness.selectionService.getCurrentSelectionForThread('thread-1', 'chat')?.modelIdentifier, 'openai/gpt-5.3-codex');
 		harness.threadRuntimeService.completeLastRun();
 	});
@@ -756,6 +738,73 @@ suite('VSCloneChatSessionService', () => {
 		assert.strictEqual(harness.threadRuntimeService.lastRunOptions?.sequence, 3);
 	});
 
+	test('CS-05c active runtime submit never rereads legacy history during import or replay', async () => {
+		const harness = createHarness({
+			turnsByThread: [[
+				'thread-1',
+				[
+					createTurn('thread-1', {
+						turnId: 'thread-1:turn-legacy',
+						sequence: 1,
+						status: 'completed',
+						promptText: 'Legacy prompt',
+						responsePlainText: 'Legacy response',
+					}),
+				],
+			]],
+			context: createContext(),
+		});
+		store.add(harness.testDisposables);
+		harness.threadRuntimeService.statesByThreadId.set('thread-1', {
+			threadId: 'thread-1',
+			streamState: { kind: 'idle' },
+			messages: [
+				{
+					id: 'msg-10',
+					role: 'user',
+					createdAt: 1,
+					content: 'Runtime prompt one',
+				},
+				{
+					id: 'msg-11',
+					role: 'assistant',
+					createdAt: 2,
+					content: 'Runtime response one',
+				},
+			],
+			checkpoints: [],
+			isRunning: false,
+			lastUpdatedAt: 2,
+		});
+		let getTurnsCalls = 0;
+		harness.historyService.getTurns = () => {
+			getTurnsCalls += 1;
+			throw new Error('active runtime submit should not reread legacy turns');
+		};
+
+		await harness.service.submitPrompt('Continue from runtime only', {
+			threadId: 'thread-1',
+			sessionResource: 'vsclone://api/thread-1',
+			modelSelection: createModelSelection(),
+		});
+
+		// This pins the active send path to runtime state so future migrations cannot smuggle a
+		// getTurns() fallback back into the import, replay, or sequence helpers.
+		assert.deepStrictEqual(harness.threadRuntimeService.lastRunOptions?.previousTurns, [
+			{
+				role: 'user',
+				content: 'Runtime prompt one',
+			},
+			{
+				role: 'assistant',
+				content: 'Runtime response one',
+			},
+		]);
+		assert.strictEqual(getTurnsCalls, 0);
+		assert.deepStrictEqual(harness.threadRuntimeService.hydratedThreadIds, []);
+		assert.strictEqual(harness.threadRuntimeService.lastRunOptions?.sequence, 2);
+	});
+
 	test('CS-05d explicit runtime hydration becomes the only source of truth for later submits', async () => {
 		const turns = [
 			createTurn('thread-1', {
@@ -846,7 +895,7 @@ suite('VSCloneChatSessionService', () => {
 		assert.strictEqual(harness.threadRuntimeService.lastRunOptions?.sequence, 3);
 	});
 
-	test('CS-05e sequence and replay helpers do not hydrate implicitly when runtime is missing', () => {
+	test('CS-05e sequence and replay helpers stay runtime-only when runtime is missing', () => {
 		const turns = [
 			createTurn('thread-1', {
 				turnId: 'thread-1:turn-1',
@@ -860,32 +909,13 @@ suite('VSCloneChatSessionService', () => {
 			turnsByThread: [['thread-1', turns]],
 		});
 		store.add(harness.testDisposables);
+		harness.historyService.getTurns = () => {
+			throw new Error('runtime-only helpers should not read legacy history');
+		};
 
 		assert.deepStrictEqual(asInternals(harness.service).getPreviousTurnsForThread('thread-1'), []);
 		assert.strictEqual(asInternals(harness.service).getNextSequenceForThread('thread-1'), 1);
 		assert.deepStrictEqual(harness.threadRuntimeService.hydratedThreadIds, []);
-
-		const imported = asInternals(harness.service).importRuntimeStateForThread('thread-1');
-		assert.ok(imported);
-		assert.deepStrictEqual(harness.threadRuntimeService.hydratedThreadIds, ['thread-1']);
-
-		assert.deepStrictEqual(asInternals(harness.service).getPreviousTurnsForThread('thread-1'), [
-			{
-				role: 'user',
-				content: 'Legacy prompt one',
-				imageAttachments: [
-					{
-						mimeType: 'image/png',
-						base64Data: 'ZmFrZQ==',
-					},
-				],
-			},
-			{
-				role: 'assistant',
-				content: 'Legacy response one',
-			},
-		]);
-		assert.strictEqual(asInternals(harness.service).getNextSequenceForThread('thread-1'), 2);
 	});
 
 	test('CS-06 context gathering failures fall back to a request without a system message', async () => {
