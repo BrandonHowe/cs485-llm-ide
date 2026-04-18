@@ -22,12 +22,11 @@ import { type IVSCloneToolDefinition, type VSCloneToolApprovalType, VSCLONE_TOOL
 import { formatToolResultWithDiff } from '../common/vscloneToolResultDiff.js';
 import { isVSCloneAmbiguousWorkspaceRelativePath, resolveVSCloneWorkspacePath } from '../common/vscloneWorkspacePaths.js';
 import { resolveContentEdits } from './vscloneEditCodeService.js';
-import type {
-	IVSCloneEditCodeService as IVSCloneEditCodeServiceContract,
-	VSCloneParsedEdit as IVSCloneParsedEdit,
-	VSCloneResolvedContentEdit as IVSCloneResolvedContentEdit,
+import {
+	IVSCloneEditCodeService,
+	type VSCloneParsedEdit as IVSCloneParsedEdit,
+	type VSCloneResolvedContentEdit as IVSCloneResolvedContentEdit,
 } from './vscloneEditCodeServiceInterface.js';
-import { IVSCloneEditCodeService } from './vscloneEditCodeServiceInterface.js';
 import { IVSCloneTerminalToolService } from './vscloneTerminalToolService.js';
 
 const maxReadChars = 100000;
@@ -35,6 +34,15 @@ const maxDirectoryEntries = 200;
 const maxSearchMatches = 50;
 const maxDiffPreviewLines = 220;
 const maxDiffPreviewChars = 12000;
+const malformedEditFileChangesMessage = [
+	'No SEARCH/REPLACE blocks found in changes parameter.',
+	'The `changes` value for edit_file must contain one or more blocks in this exact format:',
+	'<<<<<<< SEARCH',
+	'<exact existing text>',
+	'=======',
+	'<replacement text>',
+	'>>>>>>> REPLACE',
+].join('\n');
 
 export interface IVSCloneToolExecutionResult {
 	readonly success: boolean;
@@ -110,7 +118,7 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IVSClonePlanModeService private readonly planModeService: IVSClonePlanModeService,
 		@ILogService private readonly logService: ILogService,
-		@IVSCloneEditCodeService private readonly editCodeService: IVSCloneEditCodeServiceContract,
+		@IVSCloneEditCodeService private readonly editCodeService: IVSCloneEditCodeService,
 		@IVSCloneTerminalToolService private readonly terminalToolService?: IVSCloneTerminalToolService,
 	) {
 	}
@@ -397,9 +405,20 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 
 		const parsedBlocks = parseSearchReplaceBlocks(changes);
 		if (parsedBlocks.length === 0) {
-			return { success: false, output: 'No SEARCH/REPLACE blocks found in changes parameter.' };
+			// This warning is intentionally structured around the malformed payload preview because the
+			// UI error alone does not explain whether the model omitted delimiters entirely or only sent
+			// prose. Keeping a short preview in logs makes bad tool-call generations debuggable.
+			this.logService.warn('[VSCloneToolExecution] edit_file called without SEARCH/REPLACE blocks', {
+				path: target.rawPath,
+				changesPreview: summarizeEditPayload(changes),
+			});
+			return { success: false, output: malformedEditFileChangesMessage };
 		}
 		if (parsedBlocks.some(block => block.searchText.trim().length === 0)) {
+			this.logService.warn('[VSCloneToolExecution] edit_file called with an empty SEARCH block', {
+				path: target.rawPath,
+				changesPreview: summarizeEditPayload(changes),
+			});
 			return { success: false, output: 'Empty SEARCH blocks are not allowed in edit_file. Use create_file for new files.' };
 		}
 
@@ -781,6 +800,14 @@ function parseSearchReplaceBlocks(changes: string): readonly IParsedSearchReplac
 
 function normalizePath(rawPath: string): string {
 	return rawPath.trim().replace(/^`+|`+$/g, '').replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, '');
+}
+
+function summarizeEditPayload(changes: string): string {
+	const compact = changes.replace(/\s+/g, ' ').trim();
+	if (compact.length <= 160) {
+		return compact;
+	}
+	return `${compact.slice(0, 157)}...`;
 }
 
 function toBoolean(value: string | undefined): boolean {

@@ -106,7 +106,7 @@ export interface IVSCloneEditCodeService {
 	restoreVSCloneFileSnapshot(uri: URI, snapshot: VSCloneFileSnapshot): void;
 
 	hasSearchReplaceBlocks(responseText: string): boolean;
-	parseSearchReplaceBlocks(responseText: string): readonly VSCloneParsedEdit[];
+	parseSearchReplaceBlocks(responseText: string, defaultFilePath?: string): readonly VSCloneParsedEdit[];
 	startApplyingSearchReplaceBlocks(responseText: string): Promise<VSCloneEditApplyResult>;
 	applySearchReplaceBlocks(responseText: string): Promise<VSCloneEditApplyResult>;
 	undoEditApply(fileChanges: readonly VSCloneEditFileChange[]): Promise<VSCloneEditUndoResult>;

@@ -43,6 +43,10 @@ suite('VSClonePrompts', () => {
 		assert.ok(!message.includes('## Workspace Structure'));
 		assert.ok(!message.includes('## Diagnostics'));
 		assert.ok(message.includes('Use SEARCH/REPLACE edit blocks only when calling edit_file.'));
+		assert.ok(message.includes('For edit_file, the `changes` argument must contain only exact SEARCH/REPLACE blocks; never send prose, explanations, or summaries in that field.'));
+		assert.ok(message.includes('For edit_file, the `changes` argument must contain only one or more SEARCH/REPLACE blocks in this exact format:'));
+		assert.ok(message.includes('<<<<<<< SEARCH'));
+		assert.ok(message.includes('>>>>>>> REPLACE'));
 	});
 
 	test('keeps large active files summarized while preserving a capped selection preview', () => {

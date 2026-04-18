@@ -143,16 +143,18 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			return null;
 		}
 
-		// Click-apply is the current bridge between the higher-level workflow runtime and the new
-		// edit engine. If the payload contains SEARCH/REPLACE blocks we route through the diff-aware
-		// apply path; otherwise we treat it as a whole-file rewrite fallback.
-		const applyPromise = this.hasSearchReplaceBlocks(opts.applyStr)
+		// Click-apply already resolved the target URI, so bare SEARCH/REPLACE payloads must count as
+		// structured edits before we choose between the diff-aware apply path and whole-file rewrite.
+		const applyPromise = this.parseSearchReplaceBlocks(opts.applyStr, resolvedUri.toString()).length > 0
 			? this.instantlyApplySearchReplaceBlocks({ uri: resolvedUri, searchReplaceBlocks: opts.applyStr }).then(() => undefined)
 			: this.instantlyRewriteFile({ uri: resolvedUri, newContent: opts.applyStr }).then(() => undefined);
 		return [resolvedUri, applyPromise];
 	}
 
 	async instantlyApplySearchReplaceBlocks(opts: { uri: URI; searchReplaceBlocks: string }): Promise<VSCloneEditApplyResult> {
+		// edit_file already resolves the target resource before it reaches the engine, so the
+		// engine must accept bare SEARCH/REPLACE blocks here instead of requiring an extra File:
+		// header that only multi-file transcript apply paths need.
 		return this.applySearchReplaceBlocksToString(opts.searchReplaceBlocks, { createDiffZones: true, overrideUri: opts.uri });
 	}
 
@@ -198,7 +200,7 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			_linkedStreamingDiffZone: null,
 		};
 
-		const ctrlKZone = this.addDiffArea<VSCloneCtrlKZone>(adding);
+		const ctrlKZone = this.addDiffArea(adding);
 		this._onDidAddOrDeleteDiffZones.fire({ uri });
 		return ctrlKZone.diffareaid;
 	}
@@ -217,8 +219,8 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		return this.parseSearchReplaceBlocks(responseText).length > 0;
 	}
 
-	parseSearchReplaceBlocks(responseText: string): readonly VSCloneParsedEdit[] {
-		return parseSearchReplaceBlocks(responseText);
+	parseSearchReplaceBlocks(responseText: string, defaultFilePath?: string): readonly VSCloneParsedEdit[] {
+		return parseSearchReplaceBlocks(responseText, defaultFilePath);
 	}
 
 	async startApplyingSearchReplaceBlocks(responseText: string): Promise<VSCloneEditApplyResult> {
@@ -443,15 +445,15 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		const clonedSnapshot = this.cloneFileSnapshot(snapshot);
 		for (const diffareaid in clonedSnapshot.snapshottedDiffAreaOfId) {
 			const diffArea = clonedSnapshot.snapshottedDiffAreaOfId[diffareaid];
-				if (diffArea.type === 'DiffZone') {
-					// Snapshot entries intentionally drop runtime-only editor state. Rebuild those fields per
-					// discriminated branch instead of spreading the union back into the live store.
-					if (diffArea.originalCode === undefined) {
-						throw new Error('VSClone diff snapshots must retain originalCode so restore can rebuild the live diff zone.');
-					}
-					const restoredDiffZone: VSCloneDiffZone = {
-						type: 'DiffZone',
-						diffareaid: diffArea.diffareaid,
+			if (diffArea.type === 'DiffZone') {
+				// Snapshot entries intentionally drop runtime-only editor state. Rebuild those fields per
+				// discriminated branch instead of spreading the union back into the live store.
+				if (diffArea.originalCode === undefined) {
+					throw new Error('VSClone diff snapshots must retain originalCode so restore can rebuild the live diff zone.');
+				}
+				const restoredDiffZone: VSCloneDiffZone = {
+					type: 'DiffZone',
+					diffareaid: diffArea.diffareaid,
 					startLine: diffArea.startLine,
 					endLine: diffArea.endLine,
 					originalCode: diffArea.originalCode,
@@ -459,15 +461,15 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 					_diffOfId: {},
 					_streamState: { isStreaming: false },
 					_removeStylesFns: new Set(),
-					};
-					this.diffAreaOfId[diffareaid] = restoredDiffZone;
-				} else if (diffArea.type === 'CtrlKZone') {
-					if (diffArea.editorId === undefined) {
-						throw new Error('VSClone Ctrl+K snapshots must retain editorId so restore can rebind the inline zone.');
-					}
-					const restoredCtrlKZone: VSCloneCtrlKZone = {
-						type: 'CtrlKZone',
-						diffareaid: diffArea.diffareaid,
+				};
+				this.diffAreaOfId[diffareaid] = restoredDiffZone;
+			} else if (diffArea.type === 'CtrlKZone') {
+				if (diffArea.editorId === undefined) {
+					throw new Error('VSClone Ctrl+K snapshots must retain editorId so restore can rebind the inline zone.');
+				}
+				const restoredCtrlKZone: VSCloneCtrlKZone = {
+					type: 'CtrlKZone',
+					diffareaid: diffArea.diffareaid,
 					startLine: diffArea.startLine,
 					endLine: diffArea.endLine,
 					editorId: diffArea.editorId,
@@ -485,8 +487,11 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		await this.writeWholeFile(uri, clonedSnapshot.entireFileCode);
 	}
 
-	private async applySearchReplaceBlocksToString(responseText: string, mode: IApplyMode, overrideUri?: URI): Promise<VSCloneEditApplyResult> {
-		const parsedEdits = this.parseSearchReplaceBlocks(responseText);
+	private async applySearchReplaceBlocksToString(responseText: string, mode: IApplyMode): Promise<VSCloneEditApplyResult> {
+		// Single-file tool and click-apply paths resolve the target URI before they reach the shared
+		// parser, so thread that URI through here to keep bare SEARCH/REPLACE payloads on the edit
+		// path instead of silently dropping them as "missing" file headers.
+		const parsedEdits = this.parseSearchReplaceBlocks(responseText, mode.overrideUri?.toString());
 		if (parsedEdits.length === 0) {
 			return {
 				attemptedEdits: 0,
@@ -502,7 +507,7 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		const groupedByTarget = new Map<string, { uri: URI; edits: VSCloneParsedEdit[] }>();
 
 		for (const edit of parsedEdits) {
-			const uri = overrideUri ?? await this.resolveEditTargetUri(edit.filePath, workspaceFolders);
+			const uri = mode.overrideUri ?? await this.resolveEditTargetUri(edit.filePath, workspaceFolders);
 			if (!uri) {
 				failures.push(`Could not resolve file path: ${edit.filePath}`);
 				continue;
@@ -803,7 +808,7 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			_diffOfId: {},
 			_removeStylesFns: new Set(),
 		};
-		const diffZone = this.addDiffArea<VSCloneDiffZone>(adding);
+		const diffZone = this.addDiffArea(adding);
 
 		if (plan.resolvedEdits.length === 0) {
 			// A pure create-file apply still deserves a diff entry so accept/reject can remain
@@ -854,11 +859,18 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		this.deleteDiffZone(diffArea);
 	}
 
-	private addDiffArea<T extends VSCloneDiffArea>(diffArea: Omit<T, 'diffareaid'>): T {
+	private addDiffArea(diffArea: Omit<VSCloneCtrlKZone, 'diffareaid'>): VSCloneCtrlKZone;
+	private addDiffArea(diffArea: Omit<VSCloneDiffZone, 'diffareaid'>): VSCloneDiffZone;
+	private addDiffArea(
+		diffArea: Omit<VSCloneCtrlKZone, 'diffareaid'> | Omit<VSCloneDiffZone, 'diffareaid'>,
+	): VSCloneCtrlKZone | VSCloneDiffZone {
 		const diffareaid = this._diffareaidPool++;
-		// `diffareaid` is the only field assigned here; the caller already supplied a complete
-		// discriminated zone shape, so reasserting `T` avoids widening the union back to its common keys.
-		const diffArea2 = { diffareaid, ...diffArea } as T;
+		// `addDiffArea` only services the concrete editable zone types, so overloads preserve the
+		// caller's exact zone shape while we attach the runtime-generated id in one place.
+		const diffArea2 = {
+			diffareaid,
+			...diffArea,
+		};
 		this.addOrInitializeDiffAreaAtURI(diffArea2._URI, diffareaid);
 		this.diffAreaOfId[diffareaid] = diffArea2;
 		return diffArea2;
@@ -1206,14 +1218,16 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 	}
 }
 
-export function parseSearchReplaceBlocks(responseText: string): readonly VSCloneParsedEdit[] {
+export function parseSearchReplaceBlocks(responseText: string, defaultFilePath?: string): readonly VSCloneParsedEdit[] {
 	const normalized = responseText.replace(/\r\n/g, '\n');
 	const blockPattern = /<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
 	const edits: VSCloneParsedEdit[] = [];
 
 	let match: RegExpExecArray | null;
 	while ((match = blockPattern.exec(normalized)) !== null) {
-		const filePath = findNearestFilePathLine(normalized, match.index);
+		// When the caller already resolved a concrete URI, allow single-file SEARCH/REPLACE payloads
+		// to omit File: headers. Multi-file transcript applies still rely on nearby File: lines.
+		const filePath = findNearestFilePathLine(normalized, match.index) ?? defaultFilePath;
 		if (!filePath) {
 			continue;
 		}

@@ -25,6 +25,10 @@ suite('VSCloneToolDefinitions', () => {
 		assert.ok(promptSection.includes('Do not hand-write XML or pseudo-tool syntax.'));
 		assert.ok(promptSection.includes('Never invent tool results yourself.'));
 		assert.ok(promptSection.includes('For attempt_completion, put the final user-facing summary in the `result` argument'));
+		assert.ok(promptSection.includes('For edit_file, the `changes` argument must contain only one or more SEARCH/REPLACE blocks in this exact format:'));
+		assert.ok(promptSection.includes('<<<<<<< SEARCH'));
+		assert.ok(promptSection.includes('<exact existing text>'));
+		assert.ok(promptSection.includes('>>>>>>> REPLACE'));
 	});
 
 	test('filters mutating tools from the prompt in plan mode', () => {

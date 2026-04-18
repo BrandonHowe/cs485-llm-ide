@@ -99,6 +99,7 @@ export function getVSCloneTurnPolicySection(mode: VSCloneChatMode): readonly str
 		'## Turn Policy',
 		'You may inspect and modify the workspace with tools during this turn.',
 		'Use SEARCH/REPLACE edit blocks only when calling edit_file.',
+		'For edit_file, the `changes` argument must contain only exact SEARCH/REPLACE blocks; never send prose, explanations, or summaries in that field.',
 		'For new files, use create_file with the full file contents.',
 	];
 }

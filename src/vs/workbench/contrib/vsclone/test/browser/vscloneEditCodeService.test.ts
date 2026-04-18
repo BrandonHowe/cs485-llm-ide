@@ -6,12 +6,16 @@
 import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { ResourceTextEdit } from '../../../../../editor/browser/services/bulkEditService.js';
 import { VSCloneEditCodeService } from '../../browser/vscloneEditCodeService.js';
 
 suite('VSCloneEditCodeService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	type IVSCloneEditCodeServiceHarness = {
+		instantlyApplySearchReplaceBlocks: VSCloneEditCodeService['instantlyApplySearchReplaceBlocks'];
+		instantlyRewriteFile: VSCloneEditCodeService['instantlyRewriteFile'];
+		startApplying: VSCloneEditCodeService['startApplying'];
 		recordAppliedDiffZone: (plan: {
 			uri: URI;
 			action: 'create' | 'modify';
@@ -34,6 +38,9 @@ suite('VSCloneEditCodeService', () => {
 		_onDidAddOrDeleteDiffZones: { fire: (value: unknown) => void };
 		_onDidChangeDiffsInDiffZoneNotStreaming: { fire: (value: unknown) => void };
 		bulkEditService: { apply: (edits: readonly unknown[], options: { label: string }) => Promise<{ isApplied: boolean }> };
+		workspaceContextService: { getWorkspace: () => { folders: Array<{ uri: URI; name: string; index: number }> } };
+		editorService: { openEditor: (input: { resource: URI }) => Promise<void> };
+		safeCreateModelReference: (uri: URI) => Promise<{ object: { textEditorModel: { getValue: () => string; getLineCount: () => number; getLineMaxColumn: (lineNumber: number) => number } }; dispose: () => void } | undefined>;
 	};
 
 	function trackHarnessLifetime<T extends object>(service: T): T {
@@ -58,6 +65,13 @@ suite('VSCloneEditCodeService', () => {
 		service.bulkEditService = {
 			apply: async () => ({ isApplied: true }),
 		};
+		service.workspaceContextService = {
+			getWorkspace: () => ({ folders: [{ uri: URI.file('/workspace'), name: 'workspace', index: 0 }] }),
+		};
+		service.editorService = {
+			openEditor: async () => undefined,
+		};
+		service.safeCreateModelReference = async () => undefined;
 		return trackHarnessLifetime(service);
 	}
 
@@ -154,5 +168,97 @@ suite('VSCloneEditCodeService', () => {
 		assert.notStrictEqual(trackedZoneIds[0], firstZoneIds[0]);
 		assert.strictEqual(Object.keys(service.diffAreaOfId).length, 1);
 		assert.strictEqual(Object.keys(service.diffOfId).length, 1);
+	});
+
+	test('instantlyApplySearchReplaceBlocks accepts bare SEARCH/REPLACE blocks when the target URI is already known', async () => {
+		const service = createServiceHarness();
+		const uri = URI.file('/workspace/src/app.ts');
+		const appliedResourceEdits: unknown[][] = [];
+		service.safeCreateModelReference = async () => ({
+			object: {
+				textEditorModel: {
+					getValue: () => 'alpha\nbeta\n',
+					getLineCount: () => 2,
+					getLineMaxColumn: (lineNumber: number) => lineNumber === 1 ? 6 : 5,
+				},
+			},
+			dispose: () => undefined,
+		});
+		service.bulkEditService = {
+			apply: async (edits) => {
+				appliedResourceEdits.push([...edits]);
+				return { isApplied: true };
+			},
+		};
+
+		const result = await service.instantlyApplySearchReplaceBlocks({
+			uri,
+			searchReplaceBlocks: [
+				'<<<<<<< SEARCH',
+				'alpha',
+				'=======',
+				'ALPHA',
+				'>>>>>>> REPLACE',
+			].join('\n'),
+		});
+
+		assert.deepStrictEqual(result.failures, []);
+		assert.strictEqual(result.appliedEdits, 1);
+		assert.deepStrictEqual(result.modifiedFiles, [uri]);
+		assert.strictEqual(appliedResourceEdits.length, 1);
+		assert.strictEqual(appliedResourceEdits[0].length, 1);
+		assert.ok(appliedResourceEdits[0][0] instanceof ResourceTextEdit);
+	});
+
+	test('startApplying routes bare SEARCH/REPLACE payloads through the edit path when the target URI is already known', async () => {
+		const service = createServiceHarness();
+		const uri = URI.file('/workspace/src/app.ts');
+		let applyCalls = 0;
+		let rewriteCalls = 0;
+		service.instantlyApplySearchReplaceBlocks = async ({ uri: target, searchReplaceBlocks }) => {
+			applyCalls += 1;
+			assert.strictEqual(target.toString(), uri.toString());
+			assert.ok(searchReplaceBlocks.includes('<<<<<<< SEARCH'));
+			return {
+				attemptedEdits: 1,
+				appliedEdits: 1,
+				modifiedFiles: [uri],
+				failures: [],
+				fileChanges: [],
+			};
+		};
+		service.instantlyRewriteFile = async () => {
+			rewriteCalls += 1;
+			return {
+				attemptedEdits: 0,
+				appliedEdits: 0,
+				modifiedFiles: [],
+				failures: [],
+				fileChanges: [],
+			};
+		};
+
+		const apply = service.startApplying({
+			from: 'ClickApply',
+			applyStr: [
+				'<<<<<<< SEARCH',
+				'alpha',
+				'=======',
+				'ALPHA',
+				'>>>>>>> REPLACE',
+			].join('\n'),
+			uri,
+			startBehavior: 'reject-conflicts',
+		});
+
+		assert.ok(apply);
+		if (!apply) {
+			return;
+		}
+
+		assert.strictEqual(apply[0].toString(), uri.toString());
+		await apply[1];
+		assert.strictEqual(applyCalls, 1);
+		assert.strictEqual(rewriteCalls, 0);
 	});
 });

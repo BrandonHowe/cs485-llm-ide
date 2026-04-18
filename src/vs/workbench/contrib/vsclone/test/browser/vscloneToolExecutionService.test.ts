@@ -480,8 +480,8 @@ suite('VSCloneToolExecutionService', () => {
 		const helpers = asInternals(service);
 		const ambiguousPath = 'src/file.ts';
 		const ambiguousDirectoryPath = 'src';
-		const ambiguousMessage = "Invalid path 'src/file.ts'. Relative paths are ambiguous in a multi-root workspace; prefix them with a workspace folder name or use an absolute path inside the workspace.";
-		const ambiguousDirectoryMessage = "Invalid path 'src'. Relative paths are ambiguous in a multi-root workspace; prefix them with a workspace folder name or use an absolute path inside the workspace.";
+		const ambiguousMessage = 'Invalid path \'src/file.ts\'. Relative paths are ambiguous in a multi-root workspace; prefix them with a workspace folder name or use an absolute path inside the workspace.';
+		const ambiguousDirectoryMessage = 'Invalid path \'src\'. Relative paths are ambiguous in a multi-root workspace; prefix them with a workspace folder name or use an absolute path inside the workspace.';
 
 		assert.strictEqual(helpers.resolveWorkspacePath(ambiguousPath), undefined);
 		assert.strictEqual(helpers.resolveWorkspacePath(ambiguousDirectoryPath), undefined);
@@ -727,8 +727,22 @@ suite('VSCloneToolExecutionService', () => {
 			].join('\n'),
 		});
 
-		assert.deepStrictEqual(noBlocks, { success: false, output: 'No SEARCH/REPLACE blocks found in changes parameter.' });
+		assert.deepStrictEqual(noBlocks, {
+			success: false,
+			output: [
+				'No SEARCH/REPLACE blocks found in changes parameter.',
+				'The `changes` value for edit_file must contain one or more blocks in this exact format:',
+				'<<<<<<< SEARCH',
+				'<exact existing text>',
+				'=======',
+				'<replacement text>',
+				'>>>>>>> REPLACE',
+			].join('\n'),
+		});
 		assert.deepStrictEqual(emptySearch, { success: false, output: 'Empty SEARCH blocks are not allowed in edit_file. Use create_file for new files.' });
+		assert.strictEqual(testHarness.logService.warnings.length, 2);
+		assert.strictEqual(testHarness.logService.warnings[0][0], '[VSCloneToolExecution] edit_file called without SEARCH/REPLACE blocks');
+		assert.strictEqual(testHarness.logService.warnings[1][0], '[VSCloneToolExecution] edit_file called with an empty SEARCH block');
 	});
 
 	test('TE-17 fails before edits are applied when SEARCH blocks do not match', async () => {

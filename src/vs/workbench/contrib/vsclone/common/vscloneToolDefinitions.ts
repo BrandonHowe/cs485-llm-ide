@@ -45,6 +45,8 @@ export interface IVSCloneToolJsonSchema {
 	readonly required?: readonly string[];
 }
 
+const editFileChangesParameterDescription = 'One or more SEARCH/REPLACE edit blocks using the exact delimiter lines <<<<<<< SEARCH, =======, and >>>>>>> REPLACE. Do not send prose or summaries in this field.';
+
 export const VSCLONE_TOOL_DEFINITIONS: readonly IVSCloneToolDefinition[] = [
 	{
 		name: 'read_file',
@@ -85,7 +87,7 @@ export const VSCLONE_TOOL_DEFINITIONS: readonly IVSCloneToolDefinition[] = [
 		planModeAllowed: false,
 		parameters: [
 			{ name: 'path', required: true, description: 'Absolute or workspace-relative file path.' },
-			{ name: 'changes', required: true, description: 'SEARCH/REPLACE edit blocks.' },
+			{ name: 'changes', required: true, description: editFileChangesParameterDescription },
 		],
 	},
 	{
@@ -221,6 +223,14 @@ export function formatToolDefinitionsForPrompt(mode: VSCloneChatMode = 'act'): s
 	} else {
 		lines.push('- Read a file before editing it.');
 		lines.push('- Use search_for_files and ls_dir to explore unfamiliar areas.');
+		// Keep the exact block delimiters in the prompt so the model does not have to infer the
+		// syntax from a short tool description after an edit_file failure.
+		lines.push('- For edit_file, the `changes` argument must contain only one or more SEARCH/REPLACE blocks in this exact format:');
+		lines.push('<<<<<<< SEARCH');
+		lines.push('<exact existing text>');
+		lines.push('=======');
+		lines.push('<replacement text>');
+		lines.push('>>>>>>> REPLACE');
 		lines.push('- Use run_command for one-off shell output and open_persistent_terminal/run_persistent_command when a shell needs to stay open.');
 	}
 	lines.push('- The system prompt does not include a precomputed workspace tree, open-files list, or diagnostics dump. Discover that context lazily with tools.');
