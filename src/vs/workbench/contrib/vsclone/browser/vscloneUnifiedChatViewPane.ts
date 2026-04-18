@@ -1506,16 +1506,21 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	): HTMLElement[] {
 		const nodes: HTMLElement[] = [];
 
-		// Classify each assistant message as intermediate narration (has a tool call somewhere
-		// after it) vs. the final answer (nothing but other assistants/checkpoints after it).
-		// Intermediate narrations get collapsed into a "Thought briefly" block so the transcript
-		// reads as short status lines instead of a wall of planning text between tool calls.
+		// Classify each assistant message as intermediate narration vs. the final answer of its
+		// turn. Intermediate = a tool call appears later in the same turn; final = the turn ends
+		// (next user message) without another tool call. The lookahead stops at the next user
+		// message so a completed assistant answer doesn't retroactively collapse into a Thought
+		// block when the user sends a follow-up that triggers its own tool calls.
 		const isIntermediateAssistant: boolean[] = state.messages.map((message, index) => {
 			if (message.role !== 'assistant') {
 				return false;
 			}
 			for (let j = index + 1; j < state.messages.length; j++) {
-				if (state.messages[j].role === 'tool') {
+				const next = state.messages[j];
+				if (next.role === 'user') {
+					return false;
+				}
+				if (next.role === 'tool') {
 					return true;
 				}
 			}
