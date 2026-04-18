@@ -187,6 +187,17 @@
 	gap: 0;
 }
 
+/* Final assistant answer renders as flat prose, matching Void/Codex. The outer card chrome was
+ * redundant on top of already-bubbled message styling elsewhere in the transcript. */
+.vsclone-thread-message.runtime-assistant {
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	max-width: 100%;
+	gap: 0;
+}
+
 .vsclone-runtime-status-badge {
 	display: inline-flex;
 	align-items: center;
@@ -262,13 +273,16 @@
 	display: block;
 }
 
-.vsclone-thread-message-text-segment {
+.vsclone-thread-message-text-segment,
+.vsclone-thread-message-assistant-text {
 	margin-bottom: 6px;
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown,
+.vsclone-thread-message-assistant-text.rendered-markdown,
 .vsclone-tool-card-output.rendered-markdown,
 .vsclone-thread-message-text-segment > .rendered-markdown,
+.vsclone-thread-message-assistant-text > .rendered-markdown,
 .vsclone-tool-card-output > .rendered-markdown {
 	color: inherit;
 	white-space: normal;
@@ -277,47 +291,63 @@
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown p,
+.vsclone-thread-message-assistant-text.rendered-markdown p,
 .vsclone-tool-card-output.rendered-markdown p,
 .vsclone-thread-message-text-segment > .rendered-markdown p,
+.vsclone-thread-message-assistant-text > .rendered-markdown p,
 .vsclone-tool-card-output > .rendered-markdown p {
 	margin: 0 0 8px;
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown li > p,
+.vsclone-thread-message-assistant-text.rendered-markdown li > p,
 .vsclone-tool-card-output.rendered-markdown li > p,
 .vsclone-thread-message-text-segment > .rendered-markdown li > p,
+.vsclone-thread-message-assistant-text > .rendered-markdown li > p,
 .vsclone-tool-card-output > .rendered-markdown li > p {
 	margin: 0;
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown ul,
 .vsclone-thread-message-text-segment.rendered-markdown ol,
+.vsclone-thread-message-assistant-text.rendered-markdown ul,
+.vsclone-thread-message-assistant-text.rendered-markdown ol,
 .vsclone-tool-card-output.rendered-markdown ul,
 .vsclone-tool-card-output.rendered-markdown ol,
 .vsclone-thread-message-text-segment > .rendered-markdown ul,
 .vsclone-thread-message-text-segment > .rendered-markdown ol,
+.vsclone-thread-message-assistant-text > .rendered-markdown ul,
+.vsclone-thread-message-assistant-text > .rendered-markdown ol,
 .vsclone-tool-card-output > .rendered-markdown ul,
 .vsclone-tool-card-output > .rendered-markdown ol {
-	margin: 6px 0;
+	margin: 4px 0;
 	padding-inline-start: 20px;
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown li,
+.vsclone-thread-message-assistant-text.rendered-markdown li,
 .vsclone-tool-card-output.rendered-markdown li,
 .vsclone-thread-message-text-segment > .rendered-markdown li,
+.vsclone-thread-message-assistant-text > .rendered-markdown li,
 .vsclone-tool-card-output > .rendered-markdown li {
-	margin: 0 0 4px;
+	margin: 0 0 2px;
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown h1,
 .vsclone-thread-message-text-segment.rendered-markdown h2,
 .vsclone-thread-message-text-segment.rendered-markdown h3,
+.vsclone-thread-message-assistant-text.rendered-markdown h1,
+.vsclone-thread-message-assistant-text.rendered-markdown h2,
+.vsclone-thread-message-assistant-text.rendered-markdown h3,
 .vsclone-tool-card-output.rendered-markdown h1,
 .vsclone-tool-card-output.rendered-markdown h2,
 .vsclone-tool-card-output.rendered-markdown h3,
 .vsclone-thread-message-text-segment > .rendered-markdown h1,
 .vsclone-thread-message-text-segment > .rendered-markdown h2,
 .vsclone-thread-message-text-segment > .rendered-markdown h3,
+.vsclone-thread-message-assistant-text > .rendered-markdown h1,
+.vsclone-thread-message-assistant-text > .rendered-markdown h2,
+.vsclone-thread-message-assistant-text > .rendered-markdown h3,
 .vsclone-tool-card-output > .rendered-markdown h1,
 .vsclone-tool-card-output > .rendered-markdown h2,
 .vsclone-tool-card-output > .rendered-markdown h3 {
@@ -325,15 +355,19 @@
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown > :first-child,
+.vsclone-thread-message-assistant-text.rendered-markdown > :first-child,
 .vsclone-tool-card-output.rendered-markdown > :first-child,
 .vsclone-thread-message-text-segment > .rendered-markdown > :first-child,
+.vsclone-thread-message-assistant-text > .rendered-markdown > :first-child,
 .vsclone-tool-card-output > .rendered-markdown > :first-child {
 	margin-top: 0;
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown > :last-child,
+.vsclone-thread-message-assistant-text.rendered-markdown > :last-child,
 .vsclone-tool-card-output.rendered-markdown > :last-child,
 .vsclone-thread-message-text-segment > .rendered-markdown > :last-child,
+.vsclone-thread-message-assistant-text > .rendered-markdown > :last-child,
 .vsclone-tool-card-output > .rendered-markdown > :last-child {
 	margin-bottom: 0;
 }

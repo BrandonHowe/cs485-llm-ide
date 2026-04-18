@@ -1662,7 +1662,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		threadId: string = this.activeThreadId ?? "",
 	): HTMLElement {
 		const item = document.createElement('div');
-		item.className = 'vsclone-thread-message assistant runtime';
+		item.className = 'vsclone-thread-message assistant runtime runtime-assistant';
 
 		const meta = document.createElement('div');
 		meta.className = 'vsclone-thread-message-meta';
@@ -1920,12 +1920,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		// Live tool_request messages get a Void-style compact approval row: a short prompt with
 		// primary/secondary buttons, no nested tool-card chrome. Historical (non-live) tool_requests
-		// fall through to the default path so the transcript still shows they existed.
+		// are suppressed because the following success/rejected/tool_error message (or the inline
+		// diff card) already communicates the outcome, so rendering the request card too produces
+		// a redundant "Approval requested for ..." row alongside the actual result.
 		if (message.type === "tool_request") {
 			const livePendingRequest = this.getLatestAwaitingRuntimeToolRequest(state);
 			if (livePendingRequest?.id === message.id) {
 				return this.renderRuntimeApprovalRequest(threadId, message);
 			}
+			return undefined;
 		}
 
 		// Edit-producing tools: suppress "Running" transitions entirely, render the completed
@@ -1954,12 +1957,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}
 		}
 
-		// Only terminal/edit result records carry renderer-facing output text. Pending and progress
-		// cards reuse the same shell UI but intentionally omit output so the transcript cannot imply
-		// a tool has already produced a result before the runtime has one.
-		const toolOutput = message.type === "tool_request" || message.type === "running_now"
-			? undefined
-			: message.output;
+		// Only terminal/edit result records carry renderer-facing output text. Progress cards
+		// reuse the same shell UI but intentionally omit output so the transcript cannot imply a
+		// tool has already produced a result before the runtime has one. (tool_request is handled
+		// earlier in this method, so it never reaches here.)
+		const toolOutput = message.type === "running_now" ? undefined : message.output;
 		const item = document.createElement("div");
 		item.className = "vsclone-thread-message assistant runtime runtime-tool";
 
