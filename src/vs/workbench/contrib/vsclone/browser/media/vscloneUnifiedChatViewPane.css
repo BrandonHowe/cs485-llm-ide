@@ -719,6 +719,67 @@
 	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 50%, transparent 50%);
 }
 
+/* Void-style tool approval row: compact prompt + primary/secondary buttons, no nested tool-card. */
+.vsclone-runtime-approval {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px 12px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 60%, transparent 40%);
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 55%, var(--vscode-editor-background) 45%);
+	box-sizing: border-box;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.vsclone-runtime-approval-message {
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--vscode-editor-foreground);
+	word-break: break-word;
+}
+
+.vsclone-runtime-approval-buttons {
+	display: flex;
+	gap: 6px;
+}
+
+.vsclone-runtime-approval-button {
+	padding: 4px 12px;
+	border-radius: 3px;
+	font-size: 12px;
+	font-weight: 500;
+	border: 1px solid transparent;
+	cursor: pointer;
+	line-height: 1.4;
+	font-family: inherit;
+}
+
+.vsclone-runtime-approval-button.approve {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border-color: var(--vscode-button-border, transparent);
+}
+
+.vsclone-runtime-approval-button.approve:hover {
+	background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
+
+.vsclone-runtime-approval-button.reject {
+	background: var(--vscode-button-secondaryBackground, color-mix(in srgb, var(--vscode-editorWidget-background) 80%, transparent 20%));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+}
+
+.vsclone-runtime-approval-button.reject:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.vsclone-runtime-approval-button:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
 .vsclone-thread-message.runtime-tool-compact {
 	padding: 0;
 	background: transparent;

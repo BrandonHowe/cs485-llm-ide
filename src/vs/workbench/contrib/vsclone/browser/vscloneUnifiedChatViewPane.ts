@@ -1900,6 +1900,16 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return this.renderCompactRuntimeToolMessage(message);
 		}
 
+		// Live tool_request messages get a Void-style compact approval row: a short prompt with
+		// primary/secondary buttons, no nested tool-card chrome. Historical (non-live) tool_requests
+		// fall through to the default path so the transcript still shows they existed.
+		if (message.type === "tool_request") {
+			const livePendingRequest = this.getLatestAwaitingRuntimeToolRequest(state);
+			if (livePendingRequest?.id === message.id) {
+				return this.renderRuntimeApprovalRequest(threadId, message);
+			}
+		}
+
 		// Edit-producing tools: suppress "Running" transitions entirely, render the completed
 		// diff as a flat card without the outer tool-card shell, and fall back to a compact
 		// status line on rejection or error. The approval request still goes through the
@@ -2057,6 +2067,90 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		actions.appendChild(rejectButton);
 
 		return actions;
+	}
+
+	private renderRuntimeApprovalRequest(
+		threadId: string,
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool"; readonly type: "tool_request" }>,
+	): HTMLElement {
+		const item = document.createElement("div");
+		item.className = "vsclone-thread-message assistant runtime runtime-tool runtime-tool-approval";
+
+		const row = document.createElement("div");
+		row.className = "vsclone-runtime-approval";
+
+		const messageEl = document.createElement("div");
+		messageEl.className = "vsclone-runtime-approval-message";
+		messageEl.textContent = this.getRuntimeApprovalMessage(message);
+		row.appendChild(messageEl);
+
+		const buttons = document.createElement("div");
+		buttons.className = "vsclone-runtime-approval-buttons";
+
+		const approveButton = document.createElement("button");
+		approveButton.type = "button";
+		approveButton.className = "vsclone-runtime-approval-button approve";
+		approveButton.textContent = localize(
+			"vsclone.thread.runtime.tool.approve",
+			"Approve",
+		);
+		approveButton.addEventListener(EventType.CLICK, () => {
+			if (!this.threadRuntimeService.approveLatestToolRequest(threadId)) {
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.runtime.tool.approveMissing",
+						"The pending tool request is no longer available.",
+					),
+				);
+			}
+		});
+		buttons.appendChild(approveButton);
+
+		const rejectButton = document.createElement("button");
+		rejectButton.type = "button";
+		rejectButton.className = "vsclone-runtime-approval-button reject";
+		rejectButton.textContent = localize(
+			"vsclone.thread.runtime.tool.reject",
+			"Reject",
+		);
+		rejectButton.addEventListener(EventType.CLICK, () => {
+			if (!this.threadRuntimeService.rejectLatestToolRequest(threadId, "Tool request was rejected by the user.")) {
+				this.notificationService.warn(
+					localize(
+						"vsclone.thread.runtime.tool.rejectMissing",
+						"The pending tool request is no longer available.",
+					),
+				);
+			}
+		});
+		buttons.appendChild(rejectButton);
+
+		row.appendChild(buttons);
+		item.appendChild(row);
+		return item;
+	}
+
+	private getRuntimeApprovalMessage(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool"; readonly type: "tool_request" }>,
+	): string {
+		const params = message.params;
+		if (isFlatDiffRuntimeTool(message.toolName)) {
+			const filename = params.path ? (params.path.split("/").pop() ?? params.path) : undefined;
+			return filename
+				? localize("vsclone.thread.runtime.approval.edit", "Approve edit to {0}?", filename)
+				: localize("vsclone.thread.runtime.approval.editGeneric", "Approve file edit?");
+		}
+		if (message.approvalType === "terminal") {
+			const command = params.command;
+			return command
+				? localize("vsclone.thread.runtime.approval.run", "Approve running `{0}`?", command)
+				: localize("vsclone.thread.runtime.approval.terminal", "Approve terminal action?");
+		}
+		return localize(
+			"vsclone.thread.runtime.approval.generic",
+			"Approve {0}?",
+			message.toolName,
+		);
 	}
 
 	private getLatestAwaitingRuntimeToolRequest(
