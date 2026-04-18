@@ -502,15 +502,25 @@ function DiffCard(props: { card: IVSCloneConversationDiffCardView }) {
 }
 
 function ThinkingBlock(props: { messages: readonly string[]; open: boolean }) {
+	const stepCount = props.messages.filter(message => message.trim()).length;
+	const qualifier = stepCount <= 3
+		? localize('vsclone.thread.thinking.briefly', 'briefly')
+		: stepCount <= 10
+			? localize('vsclone.thread.thinking.moment', 'for a moment')
+			: localize('vsclone.thread.thinking.while', 'for a while');
 	return (
 		<details className="vsclone-thinking-block" open={props.open}>
 			<summary className="vsclone-thinking-summary">
-				<Codicon icon="codicon-lightbulb" extraClassName="vsclone-thinking-icon" />
-				<span>
-					{props.open
-						? localize('vsclone.thread.thinking.active', 'Thinking...')
-						: localize('vsclone.thread.thinking.label', 'Thinking ({0} steps)', props.messages.length.toString())}
-				</span>
+				{props.open ? (
+					<span className="vsclone-thinking-summary-label">
+						{localize('vsclone.thread.thinking.active', 'Thinking…')}
+					</span>
+				) : (
+					<span className="vsclone-thinking-summary-label">
+						<strong>{localize('vsclone.thread.thinking.past', 'Thought')}</strong>
+						<span className="vsclone-thinking-summary-qualifier">{qualifier}</span>
+					</span>
+				)}
 			</summary>
 			<div className="vsclone-thinking-content">
 				{props.messages.filter(message => message.trim()).map((message, index) => (

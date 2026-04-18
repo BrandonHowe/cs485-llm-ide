@@ -35,7 +35,7 @@
 }
 
 .interactive-item-container {
-	padding: 12px 16px;
+	padding: 8px 14px;
 	display: flex;
 	flex-direction: column;
 	color: var(--vscode-interactive-session-foreground);
@@ -539,17 +539,15 @@
 	}
 
 	.tool-output-part {
-		border: 1px solid var(--vscode-widget-border);
-		border-radius: 6px;
-		background: var(--vscode-editor-background);
-		margin: 4px 0;
+		border-left: 2px solid var(--vscode-widget-border);
+		margin: 4px 0 4px 2px;
+		padding-left: 8px;
 		overflow: hidden;
 
 		.output-title {
-			padding: 8px 12px;
-			background: var(--vscode-editorWidget-background);
-			border-bottom: 1px solid var(--vscode-widget-border);
+			padding: 4px 0 6px;
 			font-size: var(--vscode-chat-font-size-body-m);
+			color: var(--vscode-descriptionForeground);
 		}
 
 		.webview-output {
@@ -2661,18 +2659,22 @@ have to be updated for changes to the rules above, or to support more deeply nes
 
 	.checkpoint-restore-container {
 		margin-top: 10px;
+		justify-content: center;
 
 		.checkpoint-label-text {
-			font-size: 12px;
+			font-size: 11px;
+			text-transform: uppercase;
+			letter-spacing: 0.5px;
 			color: var(--vscode-descriptionForeground);
 			background-color: var(--vscode-sideBar-background);
-			padding: 4px;
+			padding: 0 8px;
 			display: flex;
 			align-items: center;
 			gap: 4px;
 			position: absolute;
-			margin-left: 71px;
-			margin-top: 2px;
+			left: 50%;
+			transform: translateX(-50%);
+			top: 6px;
 		}
 	}
 

@@ -176,6 +176,17 @@
 	padding: 8px 10px;
 }
 
+/* Tool rows carry their own inner chrome (tool card / diff card / compact line), so strip the
+ * outer thread-message card to avoid the double-nested look on approval and standard tool cards. */
+.vsclone-thread-message.runtime-tool {
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	max-width: 100%;
+	gap: 0;
+}
+
 .vsclone-runtime-status-badge {
 	display: inline-flex;
 	align-items: center;
@@ -353,27 +364,25 @@
 	color: color-mix(in srgb, var(--vscode-testing-iconFailed) 88%, var(--vscode-editor-foreground) 12%);
 }
 
-/* Collapsible thinking block: keeps reasoning present but visually secondary until expanded. */
+/* Collapsible thinking block: flat inline summary that expands to show reasoning steps. */
 
 .vsclone-thinking-block {
-	margin: 6px 0;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 50%, transparent 50%);
-	border-radius: 6px;
-	overflow: hidden;
-	background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-editorWidget-background) 8%);
+	margin: 4px 0;
 	box-sizing: border-box;
 	min-width: 0;
 	max-width: 100%;
+	background: transparent;
+	border: none;
+	border-radius: 0;
 }
 
 .vsclone-thinking-summary {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 5px 9px;
+	gap: 5px;
+	padding: 2px 0;
 	font-size: 12px;
-	font-style: italic;
-	color: color-mix(in srgb, var(--vscode-editor-foreground) 68%, transparent 32%);
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 70%, transparent 30%);
 	cursor: pointer;
 	user-select: none;
 	list-style: none;
@@ -383,18 +392,14 @@
 	display: none;
 }
 
-.vsclone-thinking-block[open] > .vsclone-thinking-summary {
-	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 40%, transparent 60%);
-}
-
 .vsclone-thinking-summary::before {
 	content: '';
 	display: inline-block;
 	width: 0;
 	height: 0;
-	border-left: 5px solid color-mix(in srgb, var(--vscode-editor-foreground) 55%, transparent 45%);
-	border-top: 4px solid transparent;
-	border-bottom: 4px solid transparent;
+	border-left: 4px solid color-mix(in srgb, var(--vscode-editor-foreground) 50%, transparent 50%);
+	border-top: 3.5px solid transparent;
+	border-bottom: 3.5px solid transparent;
 	transition: transform 0.15s ease;
 	flex-shrink: 0;
 }
@@ -403,29 +408,82 @@
 	transform: rotate(90deg);
 }
 
-.vsclone-thinking-icon {
-	font-size: 14px;
-	color: color-mix(in srgb, var(--vscode-symbolIcon-colorForeground, var(--vscode-editor-foreground)) 72%, transparent 28%);
+.vsclone-thinking-summary-label {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 5px;
+}
+
+.vsclone-thinking-summary-label strong {
+	font-weight: 600;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 88%, transparent 12%);
+}
+
+.vsclone-thinking-summary-qualifier {
+	font-style: italic;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 55%, transparent 45%);
 }
 
 .vsclone-thinking-content {
-	padding: 6px 9px 8px;
+	padding: 6px 0 4px;
 }
 
 .vsclone-thinking-step {
-	font-size: 12px;
-	line-height: 1.4;
-	font-style: italic;
+	font-size: 13px;
+	line-height: 1.55;
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 62%, transparent 38%);
-	padding: 2px 0 2px 18px;
-	position: relative;
+	padding: 4px 0;
 }
 
-.vsclone-thinking-step::before {
-	content: '\2022';
-	position: absolute;
-	left: 6px;
-	color: color-mix(in srgb, var(--vscode-editor-foreground) 40%, transparent 60%);
+.vsclone-thinking-step p {
+	margin: 0 0 6px 0;
+}
+
+.vsclone-thinking-step p:last-child {
+	margin-bottom: 0;
+}
+
+.vsclone-thinking-step strong,
+.vsclone-thinking-step b {
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 82%, transparent 18%);
+	font-weight: 600;
+}
+
+.vsclone-thinking-step code {
+	font-family: var(--monaco-monospace-font);
+	font-size: 12px;
+	padding: 0 3px;
+	border-radius: 3px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 60%, transparent 40%);
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 78%, transparent 22%);
+}
+
+/* Narration-grouped thought blocks render without the surrounding message-card chrome. */
+.vsclone-thread-message.runtime-thought {
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	max-width: 100%;
+	gap: 0;
+}
+
+.vsclone-thread-message.runtime-thought .vsclone-thinking-block {
+	margin: 0;
+}
+
+/* Collapse the parent 10px row-gap between consecutive lightweight rows (compact tool lines,
+ * thought blocks, flat diff cards). Full assistant/user bubbles keep the full gap for contrast. */
+.vsclone-thread-message.runtime-tool-compact + .vsclone-thread-message.runtime-tool-compact,
+.vsclone-thread-message.runtime-tool-compact + .vsclone-thread-message.runtime-thought,
+.vsclone-thread-message.runtime-tool-compact + .vsclone-thread-message.runtime-tool-flat-diff,
+.vsclone-thread-message.runtime-thought + .vsclone-thread-message.runtime-tool-compact,
+.vsclone-thread-message.runtime-thought + .vsclone-thread-message.runtime-thought,
+.vsclone-thread-message.runtime-thought + .vsclone-thread-message.runtime-tool-flat-diff,
+.vsclone-thread-message.runtime-tool-flat-diff + .vsclone-thread-message.runtime-tool-compact,
+.vsclone-thread-message.runtime-tool-flat-diff + .vsclone-thread-message.runtime-thought,
+.vsclone-thread-message.runtime-tool-flat-diff + .vsclone-thread-message.runtime-tool-flat-diff {
+	margin-top: -6px;
 }
 
 /* Activity group: collapsible container for consecutive tool calls and thinking. */
@@ -661,6 +719,31 @@
 	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 50%, transparent 50%);
 }
 
+.vsclone-thread-message.runtime-tool-compact {
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	max-width: 100%;
+	gap: 0;
+}
+
+.vsclone-runtime-tool-compact-line {
+	margin: 2px 0;
+	padding: 1px 2px;
+	font-size: 12px;
+	font-style: italic;
+	line-height: 1.4;
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 90%, transparent 10%);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vsclone-thread-message.runtime-tool-compact.status-error .vsclone-runtime-tool-compact-line {
+	color: color-mix(in srgb, var(--vscode-testing-iconFailed) 80%, transparent 20%);
+}
+
 .vsclone-runtime-checkpoint-button {
 	border: 1px solid color-mix(in srgb, var(--vscode-button-border, var(--vscode-button-background)) 55%, transparent 45%);
 	background: color-mix(in srgb, var(--vscode-button-secondaryBackground, var(--vscode-editorWidget-background)) 76%, transparent 24%);
@@ -684,17 +767,14 @@
 /* Diff/code card: renders compact file changes and code snippets inside tool output. */
 
 .vsclone-tool-diff-card {
-	margin: 8px 0 6px;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, transparent 18%);
-	border-radius: 6px;
-	background: color-mix(in srgb, var(--vscode-editor-background) 94%, black 6%);
-	overflow: hidden;
+	margin: 6px 0;
 	box-sizing: border-box;
 	min-width: 0;
 	max-width: 100%;
+	background: transparent;
 }
 
-/* When diff card is nested inside a tool card, remove redundant border/margin */
+/* When diff card is nested inside a tool card, keep the original bordered behavior. */
 .vsclone-tool-card .vsclone-tool-diff-card {
 	margin: 0;
 	border: none;
@@ -705,27 +785,80 @@
 .vsclone-tool-diff-title {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 6px 10px;
+	gap: 8px;
+	padding: 2px 0 6px;
 	font-size: 12px;
-	font-weight: 500;
-	background: color-mix(in srgb, var(--vscode-editorWidget-background) 82%, var(--vscode-editor-background) 18%);
-	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
-	color: color-mix(in srgb, var(--vscode-editor-foreground) 80%, transparent 20%);
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 88%, transparent 12%);
 }
 
-.vsclone-tool-diff-title-icon {
-	font-size: 14px;
-	color: color-mix(in srgb, var(--vscode-editor-foreground) 62%, transparent 38%);
+/* Lang tag pill: small uppercase badge keyed to file extension. */
+.vsclone-tool-diff-title-lang-tag {
+	display: inline-flex;
+	align-items: center;
+	font-family: var(--monaco-monospace-font);
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.3px;
+	padding: 1px 4px;
+	border-radius: 3px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 75%, transparent 25%);
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 65%, transparent 35%);
 	flex-shrink: 0;
+	text-transform: uppercase;
+}
+
+.vsclone-tool-diff-title-lang-tag.lang-ts,
+.vsclone-tool-diff-title-lang-tag.lang-tsx {
+	color: #3178c6;
+	background: color-mix(in srgb, #3178c6 16%, transparent 84%);
+}
+
+.vsclone-tool-diff-title-lang-tag.lang-js,
+.vsclone-tool-diff-title-lang-tag.lang-jsx {
+	color: #f0db4f;
+	background: color-mix(in srgb, #f0db4f 18%, transparent 82%);
+}
+
+.vsclone-tool-diff-title-lang-tag.lang-css {
+	color: #66a1ff;
+	background: color-mix(in srgb, #66a1ff 16%, transparent 84%);
+}
+
+.vsclone-tool-diff-title-lang-tag.lang-html {
+	color: #e76f51;
+	background: color-mix(in srgb, #e76f51 16%, transparent 84%);
+}
+
+.vsclone-tool-diff-title-lang-tag.lang-json {
+	color: #cbb26a;
+	background: color-mix(in srgb, #cbb26a 16%, transparent 84%);
+}
+
+.vsclone-tool-diff-title-lang-tag.lang-md {
+	color: #9ca3af;
+	background: color-mix(in srgb, #9ca3af 16%, transparent 84%);
+}
+
+.vsclone-tool-diff-title-lang-tag.lang-py {
+	color: #3776ab;
+	background: color-mix(in srgb, #3776ab 18%, transparent 82%);
+}
+
+.vsclone-tool-diff-title-lang-tag.lang-rs {
+	color: #dea584;
+	background: color-mix(in srgb, #dea584 16%, transparent 84%);
+}
+
+.vsclone-tool-diff-title-lang-tag.lang-go {
+	color: #00add8;
+	background: color-mix(in srgb, #00add8 16%, transparent 84%);
 }
 
 .vsclone-tool-diff-title-filename {
-	font-family: var(--monaco-monospace-font);
-	font-size: 11.5px;
-	color: var(--vscode-textLink-foreground, color-mix(in srgb, var(--vscode-editor-foreground) 82%, transparent 18%));
+	font-weight: 600;
+	font-size: 12px;
+	color: var(--vscode-editor-foreground);
 	text-decoration: none;
-	flex: 1;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -736,16 +869,22 @@
 	text-decoration: underline;
 }
 
-.vsclone-tool-diff-title-line {
+.vsclone-tool-diff-title-stats {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
 	font-family: var(--monaco-monospace-font);
-	font-size: 11px;
-	color: color-mix(in srgb, var(--vscode-editorLineNumber-foreground, var(--vscode-editor-foreground)) 72%, transparent 28%);
-	text-decoration: none;
+	font-size: 11.5px;
+	font-weight: 600;
 	flex-shrink: 0;
 }
 
-.vsclone-tool-diff-title-line:hover {
-	text-decoration: underline;
+.vsclone-tool-diff-title-stats-added {
+	color: color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 85%, transparent 15%);
+}
+
+.vsclone-tool-diff-title-stats-removed {
+	color: color-mix(in srgb, var(--vscode-testing-iconFailed, #f85149) 85%, transparent 15%);
 }
 
 .vsclone-tool-diff-body {
@@ -754,15 +893,17 @@
 	font-family: var(--monaco-monospace-font);
 	font-size: 12px;
 	line-height: 1.5;
-	padding: 8px 0;
+	padding: 0;
+	border-radius: 4px;
 }
 
 .vsclone-tool-diff-line {
-	display: flex;
+	display: block;
 	white-space: pre;
-	padding: 0 12px 0 0;
-	min-height: 20px;
+	padding: 0 10px;
+	min-height: 19px;
 	color: var(--vscode-editor-foreground);
+	border-left: 3px solid transparent;
 }
 
 .vsclone-tool-diff-line.clickable {
@@ -773,23 +914,14 @@
 	filter: brightness(1.06);
 }
 
-.vsclone-tool-diff-gutter {
-	display: inline-block;
-	width: 32px;
-	min-width: 32px;
-	padding-right: 8px;
-	text-align: right;
-	color: color-mix(in srgb, var(--vscode-editorLineNumber-foreground, var(--vscode-editor-foreground)) 40%, transparent 60%);
-	user-select: none;
-	flex-shrink: 0;
-}
-
 .vsclone-tool-diff-line.added {
 	background: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground, #2ea04340) 70%, transparent 30%);
+	border-left-color: color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 65%, transparent 35%);
 }
 
 .vsclone-tool-diff-line.removed {
 	background: color-mix(in srgb, var(--vscode-diffEditor-removedLineBackground, #f8514940) 70%, transparent 30%);
+	border-left-color: color-mix(in srgb, var(--vscode-testing-iconFailed, #f85149) 65%, transparent 35%);
 }
 
 .vsclone-tool-diff-line.hunk {
@@ -798,6 +930,16 @@
 
 .vsclone-tool-diff-line.file {
 	display: none;
+}
+
+/* Flat edit-card wrapper: applied when the diff card renders without the outer tool-card shell. */
+.vsclone-thread-message.runtime-tool-flat-diff {
+	padding: 4px 0;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	max-width: 100%;
+	gap: 0;
 }
 
 /* Syntax token colors for diff cards: keeps inline code readable without a full editor surface. */

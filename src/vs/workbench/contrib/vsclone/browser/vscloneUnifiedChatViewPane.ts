@@ -68,10 +68,10 @@ import {
 	toVSCloneThreadRailRows,
 } from "./vscloneThreadRailTree.js";
 import {
+	IVSCloneEditCodeService,
 	type VSCloneEditApplyResult as IVSCloneEditApplyResult,
 	type VSCloneEditFileChange as IVSCloneEditFileChange,
 } from "./vscloneEditCodeServiceInterface.js";
-import { IVSCloneEditCodeService } from "./vscloneEditCodeServiceInterface.js";
 import { parseToolResultDiff } from "../common/vscloneToolResultDiff.js";
 import {
 	toVSCloneImageDataUrl,
@@ -90,6 +90,72 @@ const modelSwitcherEnabledSetting = "vsclone.modelSwitcher.enabled";
 const railMinWidth = 220;
 const railMaxWidth = 520;
 const compactRailBreakpoint = 900;
+
+// Read-only tool calls get collapsed to a single italic status line. `list_directory` is kept
+// alongside `ls_dir` so historical transcripts that used the old alias still render compactly.
+const COMPACT_RUNTIME_TOOL_NAMES = new Set<string>([
+	"read_file",
+	"ls_dir",
+	"list_directory",
+	"search_for_files",
+]);
+
+function isCompactRuntimeTool(toolName: string): boolean {
+	return COMPACT_RUNTIME_TOOL_NAMES.has(toolName);
+}
+
+// Edit-producing tools get their own flattened treatment: the final diff card renders inline
+// without an outer tool-card wrapper, "Running" transitions are suppressed, and the approval
+// request stays visible because it needs the Approve/Reject buttons.
+const FLAT_DIFF_RUNTIME_TOOL_NAMES = new Set<string>([
+	"edit_file",
+	"create_file",
+]);
+
+function isFlatDiffRuntimeTool(toolName: string): boolean {
+	return FLAT_DIFF_RUNTIME_TOOL_NAMES.has(toolName);
+}
+
+// Light palette for language tags on edit cards. Kept deliberately small; unknown languages
+// fall back to a neutral token. Colors pull from VS Code symbol-icon tokens so themes can still
+// override them without the chat pane needing to ship a full icon-theme dependency.
+const LANG_TAG_COLOR_CLASS: Record<string, string> = {
+	TS: "lang-ts",
+	TSX: "lang-ts",
+	JS: "lang-js",
+	JSX: "lang-js",
+	CSS: "lang-css",
+	SCSS: "lang-css",
+	HTML: "lang-html",
+	JSON: "lang-json",
+	MD: "lang-md",
+	PY: "lang-py",
+	RS: "lang-rs",
+	GO: "lang-go",
+};
+
+interface ICompactRuntimeToolAction {
+	readonly past: string;
+	readonly gerund: string;
+	readonly infinitive: string;
+}
+
+function compactRuntimeToolAction(toolName: string): ICompactRuntimeToolAction {
+	switch (toolName) {
+		case "ls_dir":
+		case "list_directory":
+			return { past: "Listed", gerund: "Listing", infinitive: "list" };
+		case "search_for_files":
+			return { past: "Searched for", gerund: "Searching for", infinitive: "search" };
+		case "edit_file":
+			return { past: "Edited", gerund: "Editing", infinitive: "edit" };
+		case "create_file":
+			return { past: "Created", gerund: "Creating", infinitive: "create" };
+		case "read_file":
+		default:
+			return { past: "Read", gerund: "Reading", infinitive: "read" };
+	}
+}
 
 interface IPendingImageAttachment extends IVSCloneImageAttachment {
 	readonly dataUrl: string;
@@ -1421,18 +1487,61 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		state: IVSCloneThreadRuntimeState,
 	): HTMLElement[] {
 		const nodes: HTMLElement[] = [];
-		for (const message of state.messages) {
+
+		// Classify each assistant message as intermediate narration (has a tool call somewhere
+		// after it) vs. the final answer (nothing but other assistants/checkpoints after it).
+		// Intermediate narrations get collapsed into a "Thought briefly" block so the transcript
+		// reads as short status lines instead of a wall of planning text between tool calls.
+		const isIntermediateAssistant: boolean[] = state.messages.map((message, index) => {
+			if (message.role !== 'assistant') {
+				return false;
+			}
+			for (let j = index + 1; j < state.messages.length; j++) {
+				if (state.messages[j].role === 'tool') {
+					return true;
+				}
+			}
+			return false;
+		});
+
+		type IntermediateAssistantMessage = Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>;
+		let narrationGroup: IntermediateAssistantMessage[] = [];
+		const flushNarration = () => {
+			if (narrationGroup.length === 0) {
+				return;
+			}
+			const block = this.renderRuntimeAssistantNarrationBlock(narrationGroup);
+			if (block) {
+				nodes.push(block);
+			}
+			narrationGroup = [];
+		};
+
+		for (let index = 0; index < state.messages.length; index++) {
+			const message = state.messages[index];
 			switch (message.role) {
 				case 'user':
+					flushNarration();
 					nodes.push(this.renderRuntimeUserMessage(message));
 					break;
 				case 'assistant':
-					nodes.push(this.renderRuntimeAssistantMessage(message, state.threadId));
+					if (isIntermediateAssistant[index]) {
+						narrationGroup.push(message as IntermediateAssistantMessage);
+					} else {
+						flushNarration();
+						nodes.push(this.renderRuntimeAssistantMessage(message, state.threadId));
+					}
 					break;
-				case 'tool':
-					nodes.push(this.renderRuntimeToolMessage(state.threadId, state, message));
+				case 'tool': {
+					flushNarration();
+					const toolNode = this.renderRuntimeToolMessage(state.threadId, state, message);
+					if (toolNode) {
+						nodes.push(toolNode);
+					}
 					break;
+				}
 				case 'checkpoint':
+					flushNarration();
 					nodes.push(
 						this.renderRuntimeCheckpointMessage(
 							state.threadId,
@@ -1443,12 +1552,65 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					break;
 			}
 		}
+		flushNarration();
 
 		const statusMessage = this.renderRuntimeStatusMessage(state);
 		if (statusMessage) {
 			nodes.push(statusMessage);
 		}
 		return nodes;
+	}
+
+	private renderRuntimeAssistantNarrationBlock(
+		messages: readonly Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>[],
+	): HTMLElement | undefined {
+		const visibleMessages = messages
+			.map(message => ({ message, text: this.stripRuntimeAssistantWorkflowMarkup(message.content).trim() }))
+			.filter(entry => entry.text.length > 0);
+		if (visibleMessages.length === 0) {
+			return undefined;
+		}
+
+		const totalChars = visibleMessages.reduce((sum, entry) => sum + entry.text.length, 0);
+		const qualifierText = totalChars <= 400
+			? localize('vsclone.thread.thought.briefly', 'briefly')
+			: totalChars <= 1600
+				? localize('vsclone.thread.thought.moment', 'for a moment')
+				: localize('vsclone.thread.thought.while', 'for a while');
+
+		const item = document.createElement('div');
+		item.className = 'vsclone-thread-message assistant runtime runtime-thought';
+
+		const details = document.createElement('details');
+		details.className = 'vsclone-thinking-block';
+
+		const summary = document.createElement('summary');
+		summary.className = 'vsclone-thinking-summary';
+
+		const label = document.createElement('span');
+		label.className = 'vsclone-thinking-summary-label';
+
+		const verb = document.createElement('strong');
+		verb.textContent = localize('vsclone.thread.thought.past', 'Thought');
+		label.appendChild(verb);
+
+		const qualifier = document.createElement('span');
+		qualifier.className = 'vsclone-thinking-summary-qualifier';
+		qualifier.textContent = qualifierText;
+		label.appendChild(qualifier);
+
+		summary.appendChild(label);
+		details.appendChild(summary);
+
+		const content = document.createElement('div');
+		content.className = 'vsclone-thinking-content';
+		for (const entry of visibleMessages) {
+			this.appendMarkdownSegment(content, entry.text, 'vsclone-thinking-step');
+		}
+		details.appendChild(content);
+
+		item.appendChild(details);
+		return item;
 	}
 
 	private renderRuntimeUserMessage(
@@ -1726,7 +1888,44 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		threadId: string,
 		state: IVSCloneThreadRuntimeState,
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
-	): HTMLElement {
+	): HTMLElement | undefined {
+		// Read-only tools (read_file, ls_dir, search_for_files) are high-volume and low-signal:
+		// every call otherwise renders three cards (pending → running → completed) plus the full
+		// tool output. Collapse them to a single italic status line emitted only on the terminal
+		// state, and suppress the intermediate transitions entirely.
+		if (isCompactRuntimeTool(message.toolName)) {
+			if (message.type === "tool_request" || message.type === "running_now") {
+				return undefined;
+			}
+			return this.renderCompactRuntimeToolMessage(message);
+		}
+
+		// Edit-producing tools: suppress "Running" transitions entirely, render the completed
+		// diff as a flat card without the outer tool-card shell, and fall back to a compact
+		// status line on rejection or error. The approval request still goes through the
+		// normal tool-card path below so Approve/Reject buttons stay attached.
+		if (isFlatDiffRuntimeTool(message.toolName)) {
+			if (message.type === "running_now") {
+				return undefined;
+			}
+			if (message.type === "success" && message.output) {
+				const diffCard = this.renderToolResultDiffCard(message.toolName, message.output);
+				if (diffCard) {
+					const item = document.createElement("div");
+					item.className = "vsclone-thread-message assistant runtime runtime-tool runtime-tool-flat-diff";
+					const body = document.createElement("div");
+					body.className = "vsclone-thread-message-body";
+					body.appendChild(diffCard);
+					item.appendChild(body);
+					return item;
+				}
+				// Fall through to the default tool-card path when the diff cannot be parsed.
+			}
+			if (message.type === "rejected" || message.type === "tool_error") {
+				return this.renderCompactRuntimeToolMessage(message);
+			}
+		}
+
 		// Only terminal/edit result records carry renderer-facing output text. Pending and progress
 		// cards reuse the same shell UI but intentionally omit output so the transcript cannot imply
 		// a tool has already produced a result before the runtime has one.
@@ -1739,19 +1938,65 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const body = document.createElement("div");
 		body.className = "vsclone-thread-message-body";
 		body.appendChild(
-				this.renderToolCard(
-					message.toolName,
-					this.getRuntimeToolDisplayLabel(message),
-					this.toRuntimeToolCardStatus(message),
-					toolOutput,
-					message.type === "success" && toolOutput
-						? this.renderToolResultDiffCard(message.toolName, toolOutput)
-						: undefined,
-					this.renderRuntimeToolActions(threadId, state, message),
-				),
+			this.renderToolCard(
+				message.toolName,
+				this.getRuntimeToolDisplayLabel(message),
+				this.toRuntimeToolCardStatus(message),
+				toolOutput,
+				message.type === "success" && toolOutput
+					? this.renderToolResultDiffCard(message.toolName, toolOutput)
+					: undefined,
+				this.renderRuntimeToolActions(threadId, state, message),
+			),
 		);
 		item.appendChild(body);
 		return item;
+	}
+
+	private renderCompactRuntimeToolMessage(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
+	): HTMLElement {
+		const item = document.createElement("div");
+		item.className = "vsclone-thread-message assistant runtime runtime-tool runtime-tool-compact";
+		const status = this.toRuntimeToolCardStatus(message);
+		item.classList.add(`status-${status}`);
+
+		const line = document.createElement("div");
+		line.className = "vsclone-runtime-tool-compact-line";
+		line.textContent = this.getCompactRuntimeToolLabel(message);
+		item.appendChild(line);
+		return item;
+	}
+
+	private getCompactRuntimeToolLabel(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
+	): string {
+		const target = this.describeCompactRuntimeToolTarget(message.toolName, message.params);
+		const verb = this.getCompactRuntimeToolVerb(message);
+		return target ? `${verb} ${target}` : verb;
+	}
+
+	private getCompactRuntimeToolVerb(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
+	): string {
+		const action = compactRuntimeToolAction(message.toolName);
+		switch (message.type) {
+			case "success":
+				return action.past;
+			case "rejected":
+				return localize("vsclone.thread.runtime.tool.compact.rejected", "Rejected {0}", action.gerund.toLowerCase());
+			case "tool_error":
+				return localize("vsclone.thread.runtime.tool.compact.failed", "Failed to {0}", action.infinitive);
+			default:
+				return action.gerund;
+		}
+	}
+
+	private describeCompactRuntimeToolTarget(toolName: string, params: Record<string, string>): string {
+		if (toolName === "search_for_files") {
+			return params.pattern ?? params.path ?? "";
+		}
+		return params.path ?? "";
 	}
 
 	private renderRuntimeToolActions(
@@ -2675,15 +2920,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const titleBar = document.createElement("div");
 		titleBar.className = "vsclone-tool-diff-title";
 
-		const fileIcon = document.createElement("span");
-		fileIcon.className = "codicon codicon-file vsclone-tool-diff-title-icon";
-		titleBar.appendChild(fileIcon);
-
 		const filename = filePath.split('/').pop() ?? filePath;
 		const langLabel = this.getLanguageLabelFromFilename(filename);
+		const langTag = document.createElement("span");
+		langTag.className = "vsclone-tool-diff-title-lang-tag";
+		const langColorClass = LANG_TAG_COLOR_CLASS[langLabel];
+		if (langColorClass) {
+			langTag.classList.add(langColorClass);
+		}
+		langTag.textContent = langLabel;
+		titleBar.appendChild(langTag);
+
 		const fileLabel = document.createElement("span");
 		fileLabel.className = "vsclone-tool-diff-title-filename";
-		fileLabel.textContent = `${langLabel} ${filename}`;
+		fileLabel.textContent = filename;
 		fileLabel.title = filePath;
 		titleBar.appendChild(fileLabel);
 
@@ -2700,11 +2950,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			const lineEl = document.createElement("div");
 			lineEl.className = "vsclone-tool-diff-line removed";
 
-			const gutter = document.createElement("span");
-			gutter.className = "vsclone-tool-diff-gutter";
-			gutter.textContent = "-";
-			lineEl.appendChild(gutter);
-
 			const content = document.createElement("span");
 			content.textContent = line;
 			lineEl.appendChild(content);
@@ -2715,11 +2960,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		for (const line of replaceLines) {
 			const lineEl = document.createElement("div");
 			lineEl.className = "vsclone-tool-diff-line added";
-
-			const gutter = document.createElement("span");
-			gutter.className = "vsclone-tool-diff-gutter";
-			gutter.textContent = "+";
-			lineEl.appendChild(gutter);
 
 			const content = document.createElement("span");
 			content.textContent = line;
@@ -3079,29 +3319,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return { lines: renderedLines, titleNavigation };
 	}
 
-	private formatDiffLineLabel(
-		navigation: IDiffLineNavigationState,
-	): string | undefined {
-		if (navigation.startLineNumber === undefined) {
-			return undefined;
-		}
-
-		const endLineNumber =
-			navigation.endLineNumber ?? navigation.startLineNumber;
-		return endLineNumber > navigation.startLineNumber
-			? localize(
-				"vsclone.thread.toolDiff.lineRange",
-				"Ln {0}-{1}",
-				navigation.startLineNumber.toString(),
-				endLineNumber.toString(),
-			)
-			: localize(
-				"vsclone.thread.toolDiff.lineNumber",
-				"Ln {0}",
-				navigation.startLineNumber.toString(),
-			);
-	}
-
 	private openDiffTarget(
 		fileUri: string,
 		navigation: IDiffLineNavigationState,
@@ -3158,18 +3375,29 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const titleNavigation: IDiffLineNavigationState = {
 			...renderedDiff.titleNavigation,
 		};
-		let lineBadge: HTMLAnchorElement | HTMLSpanElement | undefined;
+
+		let addedCount = 0;
+		let removedCount = 0;
+		for (const renderedLine of renderedDiff.lines) {
+			if (renderedLine.kind === "added") { addedCount++; }
+			else if (renderedLine.kind === "removed") { removedCount++; }
+		}
 
 		if (filename) {
 			const langLabel = this.getLanguageLabelFromFilename(filename);
-			const fileIcon = document.createElement("span");
-			fileIcon.className = "codicon codicon-file vsclone-tool-diff-title-icon";
-			titleBar.appendChild(fileIcon);
+			const langTag = document.createElement("span");
+			langTag.className = "vsclone-tool-diff-title-lang-tag";
+			const langColorClass = LANG_TAG_COLOR_CLASS[langLabel];
+			if (langColorClass) {
+				langTag.classList.add(langColorClass);
+			}
+			langTag.textContent = langLabel;
+			titleBar.appendChild(langTag);
 
 			// Make the filename a clickable link that opens the file
 			const fileLabel = document.createElement("a");
 			fileLabel.className = "vsclone-tool-diff-title-filename";
-			fileLabel.textContent = `${langLabel} ${filename}`;
+			fileLabel.textContent = filename;
 			fileLabel.title =
 				titleNavigation.startLineNumber !== undefined
 					? localize(
@@ -3189,36 +3417,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}
 			titleBar.appendChild(fileLabel);
 
-			if (fileUri) {
-				const anchorLineBadge = document.createElement("a");
-				anchorLineBadge.className = "vsclone-tool-diff-title-line";
-				const lineLabel = this.formatDiffLineLabel(titleNavigation);
-				anchorLineBadge.hidden = lineLabel === undefined;
-				if (
-					lineLabel !== undefined &&
-					titleNavigation.startLineNumber !== undefined
-				) {
-					anchorLineBadge.textContent = lineLabel;
-					anchorLineBadge.title = localize(
-						"vsclone.thread.toolDiff.openLineTitle",
-						"Open line {0}",
-						titleNavigation.startLineNumber.toString(),
-					);
+			if (addedCount > 0 || removedCount > 0) {
+				const stats = document.createElement("span");
+				stats.className = "vsclone-tool-diff-title-stats";
+				if (addedCount > 0) {
+					const added = document.createElement("span");
+					added.className = "vsclone-tool-diff-title-stats-added";
+					added.textContent = `+${addedCount}`;
+					stats.appendChild(added);
 				}
-				anchorLineBadge.href = "#";
-				anchorLineBadge.addEventListener("click", (e) => {
-					e.preventDefault();
-					this.openDiffTarget(fileUri, titleNavigation);
-				});
-				lineBadge = anchorLineBadge;
-				titleBar.appendChild(anchorLineBadge);
-			} else if (titleNavigation.startLineNumber !== undefined) {
-				lineBadge = document.createElement("span");
-				lineBadge.className = "vsclone-tool-diff-title-line";
-				lineBadge.textContent = this.formatDiffLineLabel(titleNavigation) ?? "";
-				titleBar.appendChild(lineBadge);
+				if (removedCount > 0) {
+					const removed = document.createElement("span");
+					removed.className = "vsclone-tool-diff-title-stats-removed";
+					removed.textContent = `-${removedCount}`;
+					stats.appendChild(removed);
+				}
+				titleBar.appendChild(stats);
 			}
-
 		} else {
 			const label = document.createElement("span");
 			label.className = "vsclone-tool-diff-title-filename";
@@ -3265,17 +3480,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				line.classList.add(diffLine.kind);
 			}
 
-			if (diffLine.kind !== "file" && diffLine.kind !== "hunk") {
-				const gutter = document.createElement("span");
-				gutter.className = "vsclone-tool-diff-gutter";
-				gutter.textContent =
-					lineNavigation.startLineNumber !== undefined
-						? lineNavigation.startLineNumber.toString()
-						: "";
-				line.appendChild(gutter);
-			}
-
-			// Syntax-highlighted content keeps the diff prefix visible while the line gutter stays separate.
+			// Syntax-highlighted content keeps the diff prefix visible; the line gutter has been
+			// removed from the flat diff card to match the Codex-style inline preview.
 			if (diffLine.kind !== "file") {
 				line.appendChild(this.syntaxHighlightLine(diffLine.rawText));
 			}
