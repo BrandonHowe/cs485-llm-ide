@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { VSCloneReasoningEffortLevel } from './vscloneModelCatalogService.js';
+import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 
 /**
@@ -28,6 +28,12 @@ export interface IVSCloneModelSelection {
 	selectedAt: number;
 }
 
+/**
+ * Thread-bound selections stay location-scoped so a future chat thread can retain distinct chat,
+ * inline, notebook, and terminal picks without overwriting the previously persisted entry.
+ */
+export type IVSCloneThreadSelectionMap = Partial<Record<IVSCloneChatLocation, IVSCloneModelSelection>>;
+
 export interface IVSCloneModelSelectionChangeEvent {
 	threadId?: string;
 	previous: IVSCloneModelSelection | undefined;
@@ -40,7 +46,7 @@ export interface IVSCloneModelSelectionChangeEvent {
  * defaults cannot drift apart in memory or on disk.
  */
 export interface IVSCloneUnifiedChatSelectionState {
-	selectedByThread: Record<string, IVSCloneModelSelection>;
+	selectedByThread: Record<string, IVSCloneThreadSelectionMap>;
 	selectedByLocation: Partial<Record<IVSCloneChatLocation, IVSCloneModelSelection>>;
 	recentModelIdentifiers: readonly string[];
 }

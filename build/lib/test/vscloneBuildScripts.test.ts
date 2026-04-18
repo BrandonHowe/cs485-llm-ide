@@ -16,6 +16,7 @@ suite('VSClone build scripts', () => {
 	const currentDirectory = dirname(fileURLToPath(import.meta.url));
 	const repositoryRoot = join(currentDirectory, '..', '..', '..');
 	const packageJsonPath = join(repositoryRoot, 'package.json');
+	const devScriptPath = join(repositoryRoot, 'scripts', 'dev.sh');
 
 	function readPackageScripts(): Record<string, string | undefined> {
 		// This test intentionally locks the package-script wiring because the generated VSClone Preact
@@ -25,6 +26,13 @@ suite('VSClone build scripts', () => {
 			readFileSync(packageJsonPath, 'utf8'),
 		) as IPackageJsonLike;
 		return packageJson.scripts ?? {};
+	}
+
+	function readDevScript(): string {
+		// The dev launcher waits on concrete emitted bundle paths before opening Electron.
+		// Keeping those paths under test prevents silent hangs where startup blocks forever
+		// on a renamed VSClone surface that is no longer part of the active bundle graph.
+		return readFileSync(devScriptPath, 'utf8');
 	}
 
 	test('compile builds the vsclone preact bundle before gulp compile', () => {
@@ -102,6 +110,27 @@ suite('VSClone build scripts', () => {
 		assert.ok(
 			watchWebClientScript.includes('gulp watch-web'),
 			'Expected watch-web-client to continue invoking the standard gulp watch-web step.',
+		);
+	});
+
+	test('dev launcher waits for the current VSClone preact entrypoints', () => {
+		const devScript = readDevScript();
+
+		assert.ok(
+			devScript.includes('preact/out/thread-rail/index.js'),
+			'Expected scripts/dev.sh to wait for the current thread rail bundle.',
+		);
+		assert.ok(
+			devScript.includes('preact/out/model-switcher/index.js'),
+			'Expected scripts/dev.sh to wait for the model switcher bundle.',
+		);
+		assert.ok(
+			devScript.includes('preact/out/unified-conversation-surface/index.js'),
+			'Expected scripts/dev.sh to wait for the unified conversation surface bundle.',
+		);
+		assert.ok(
+			!devScript.includes('preact/out/chat-history-rail/index.js'),
+			'Expected scripts/dev.sh to stop waiting on the deleted chat history rail bundle.',
 		);
 	});
 });

@@ -67,12 +67,12 @@
 	border-right: none;
 }
 
-.vsclone-unified-chat-view-pane.history-screen .vsclone-chat-left-rail {
+.vsclone-unified-chat-view-pane.thread-rail-screen .vsclone-chat-left-rail {
 	width: 100% !important;
 	border-right: none;
 }
 
-.vsclone-unified-chat-view-pane.history-screen .vsclone-chat-conversation {
+.vsclone-unified-chat-view-pane.thread-rail-screen .vsclone-chat-conversation {
 	display: none;
 }
 
@@ -1700,7 +1700,7 @@
 	box-shadow: none;
 }
 
-.vsclone-unified-chat-view-pane.compact-layout.history-screen .vsclone-chat-left-rail {
+.vsclone-unified-chat-view-pane.compact-layout.thread-rail-screen .vsclone-chat-left-rail {
 	position: relative;
 	max-width: none;
 	box-shadow: none;
@@ -1728,7 +1728,7 @@
 	}
 }
 
-.vsclone-chat-history-rail {
+.vsclone-thread-rail {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
@@ -1736,7 +1736,7 @@
 	position: relative;
 }
 
-.vsclone-chat-history-rail-header {
+.vsclone-thread-rail-header {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
@@ -1744,14 +1744,14 @@
 	border-bottom: 1px solid var(--vscode-panel-border);
 }
 
-.vsclone-chat-history-rail-header-row {
+.vsclone-thread-rail-header-row {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
 }
 
-.vsclone-chat-history-rail-title {
+.vsclone-thread-rail-title {
 	flex: 1;
 	font-size: 12px;
 	font-weight: 700;
@@ -1759,7 +1759,7 @@
 	opacity: 0.85;
 }
 
-.vsclone-chat-history-back {
+.vsclone-thread-rail-back {
 	height: 26px;
 	width: 26px;
 	border: 1px solid var(--vscode-panel-border);
@@ -1774,11 +1774,11 @@
 	padding: 0;
 }
 
-.vsclone-chat-history-back:hover {
+.vsclone-thread-rail-back:hover {
 	background: var(--vscode-button-secondaryHoverBackground);
 }
 
-.vsclone-chat-history-new-chat {
+.vsclone-thread-rail-new-chat {
 	height: 26px;
 	padding: 0 10px;
 	border: 1px solid var(--vscode-panel-border);
@@ -1790,11 +1790,11 @@
 	color: var(--vscode-button-secondaryForeground);
 }
 
-.vsclone-chat-history-new-chat:hover {
+.vsclone-thread-rail-new-chat:hover {
 	background: var(--vscode-button-secondaryHoverBackground);
 }
 
-.vsclone-chat-history-search {
+.vsclone-thread-rail-search {
 	height: 30px;
 	border: none;
 	outline: none;
@@ -1804,17 +1804,17 @@
 	color: var(--vscode-input-foreground);
 }
 
-.vsclone-chat-history-search::placeholder {
+.vsclone-thread-rail-search::placeholder {
 	color: var(--vscode-input-placeholderForeground);
 }
 
-.vsclone-chat-history-tabs {
+.vsclone-thread-rail-tabs {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 4px;
 }
 
-.vsclone-chat-history-tab {
+.vsclone-thread-rail-tab {
 	height: 28px;
 	border: 1px solid var(--vscode-panel-border);
 	border-radius: 4px;
@@ -1824,34 +1824,34 @@
 	font-weight: 600;
 }
 
-.vsclone-chat-history-tab:hover {
+.vsclone-thread-rail-tab:hover {
 	background: var(--vscode-button-secondaryHoverBackground);
 }
 
-.vsclone-chat-history-tab.active {
+.vsclone-thread-rail-tab.active {
 	border-color: color-mix(in srgb, var(--vscode-button-background) 65%, white 35%);
 	background: var(--vscode-button-background);
 	color: var(--vscode-button-foreground);
 }
 
-.vsclone-chat-history-rail-body {
+.vsclone-thread-rail-body {
 	position: relative;
 	flex: 1;
 	min-height: 0;
 }
 
-.vsclone-chat-history-list,
-.vsclone-chat-history-state {
+.vsclone-thread-rail-list,
+.vsclone-thread-rail-state {
 	height: 100%;
 	overflow: auto;
 }
 
-.vsclone-chat-history-list.hidden,
-.vsclone-chat-history-state.hidden {
+.vsclone-thread-rail-list.hidden,
+.vsclone-thread-rail-state.hidden {
 	display: none;
 }
 
-.vsclone-chat-history-row {
+.vsclone-thread-rail-row {
 	display: block;
 	width: 100%;
 	border: none;
@@ -1864,22 +1864,22 @@
 	cursor: pointer;
 }
 
-.vsclone-chat-history-row:hover {
+.vsclone-thread-rail-row:hover {
 	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 50%, transparent 50%);
 }
 
-.vsclone-chat-history-row.selected {
+.vsclone-thread-rail-row.selected {
 	background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 75%, transparent 25%);
 	color: var(--vscode-list-activeSelectionForeground);
 }
 
-.vsclone-chat-history-row-top {
+.vsclone-thread-rail-row-top {
 	display: flex;
 	align-items: baseline;
 	gap: 8px;
 }
 
-.vsclone-chat-history-row-title {
+.vsclone-thread-rail-row-title {
 	flex: 1;
 	font-weight: 600;
 	white-space: nowrap;
@@ -1887,12 +1887,12 @@
 	text-overflow: ellipsis;
 }
 
-.vsclone-chat-history-row-timestamp {
+.vsclone-thread-rail-row-timestamp {
 	font-size: 11px;
 	opacity: 0.8;
 }
 
-.vsclone-chat-history-row-preview {
+.vsclone-thread-rail-row-preview {
 	margin-top: 3px;
 	font-size: 12px;
 	opacity: 0.88;
@@ -1901,7 +1901,7 @@
 	text-overflow: ellipsis;
 }
 
-.vsclone-chat-history-row-metadata {
+.vsclone-thread-rail-row-metadata {
 	margin-top: 5px;
 	display: flex;
 	align-items: center;
@@ -1910,14 +1910,14 @@
 	opacity: 0.8;
 }
 
-.vsclone-chat-history-row-archived {
+.vsclone-thread-rail-row-archived {
 	padding: 1px 5px;
 	border-radius: 8px;
 	background: color-mix(in srgb, var(--vscode-badge-background) 65%, transparent 35%);
 	color: var(--vscode-badge-foreground);
 }
 
-.vsclone-chat-history-state {
+.vsclone-thread-rail-state {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -1927,7 +1927,7 @@
 	text-align: center;
 }
 
-.vsclone-chat-history-state-icon {
+.vsclone-thread-rail-state-icon {
 	height: 68px;
 	width: 68px;
 	border-radius: 50%;
@@ -1938,23 +1938,23 @@
 	background: color-mix(in srgb, var(--vscode-editorWidget-background) 70%, transparent 30%);
 }
 
-.vsclone-chat-history-state-icon.error {
+.vsclone-thread-rail-state-icon.error {
 	color: var(--vscode-errorForeground);
 	background: color-mix(in srgb, var(--vscode-errorForeground) 22%, transparent 78%);
 }
 
-.vsclone-chat-history-state-title {
+.vsclone-thread-rail-state-title {
 	font-size: 28px;
 	max-width: 280px;
 	font-weight: 600;
 }
 
-.vsclone-chat-history-state-description {
+.vsclone-thread-rail-state-description {
 	max-width: 280px;
 	opacity: 0.85;
 }
 
-.vsclone-chat-history-retry {
+.vsclone-thread-rail-retry {
 	height: 32px;
 	padding: 0 16px;
 	border: none;
@@ -1965,11 +1965,11 @@
 	color: var(--vscode-button-foreground);
 }
 
-.vsclone-chat-history-retry:hover {
+.vsclone-thread-rail-retry:hover {
 	background: var(--vscode-button-hoverBackground);
 }
 
-.vsclone-chat-history-skeleton {
+.vsclone-thread-rail-skeleton {
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
@@ -1977,31 +1977,31 @@
 	padding: 12px;
 }
 
-.vsclone-chat-history-skeleton-row {
+.vsclone-thread-rail-skeleton-row {
 	padding: 10px 0;
 	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 75%, transparent 25%);
 }
 
-.vsclone-chat-history-skeleton-line {
+.vsclone-thread-rail-skeleton-line {
 	height: 8px;
 	border-radius: 5px;
 	margin-bottom: 7px;
 	background: color-mix(in srgb, var(--vscode-editorWidget-border) 55%, transparent 45%);
 }
 
-.vsclone-chat-history-skeleton-line:nth-child(1) {
+.vsclone-thread-rail-skeleton-line:nth-child(1) {
 	width: 65%;
 }
 
-.vsclone-chat-history-skeleton-line:nth-child(2) {
+.vsclone-thread-rail-skeleton-line:nth-child(2) {
 	width: 92%;
 }
 
-.vsclone-chat-history-skeleton-line:nth-child(3) {
+.vsclone-thread-rail-skeleton-line:nth-child(3) {
 	width: 48%;
 }
 
-.vsclone-chat-history-delete-overlay {
+.vsclone-thread-rail-delete-overlay {
 	position: absolute;
 	inset: 0;
 	display: none;
@@ -2012,11 +2012,11 @@
 	z-index: 40;
 }
 
-.vsclone-chat-history-delete-overlay.visible {
+.vsclone-thread-rail-delete-overlay.visible {
 	display: flex;
 }
 
-.vsclone-chat-history-delete-modal {
+.vsclone-thread-rail-delete-modal {
 	width: min(360px, 100%);
 	border-radius: 8px;
 	padding: 16px;
@@ -2025,26 +2025,26 @@
 	box-shadow: 0 8px 28px color-mix(in srgb, black 50%, transparent 50%);
 }
 
-.vsclone-chat-history-delete-title {
+.vsclone-thread-rail-delete-title {
 	font-weight: 700;
 	font-size: 20px;
 }
 
-.vsclone-chat-history-delete-description {
+.vsclone-thread-rail-delete-description {
 	margin-top: 10px;
 	line-height: 1.4;
 	opacity: 0.9;
 }
 
-.vsclone-chat-history-delete-actions {
+.vsclone-thread-rail-delete-actions {
 	display: grid;
 	grid-template-columns: 1fr 1fr;
 	gap: 8px;
 	margin-top: 14px;
 }
 
-.vsclone-chat-history-delete-cancel,
-.vsclone-chat-history-delete-confirm {
+.vsclone-thread-rail-delete-cancel,
+.vsclone-thread-rail-delete-confirm {
 	height: 34px;
 	border: none;
 	border-radius: 5px;
@@ -2052,12 +2052,12 @@
 	font-weight: 600;
 }
 
-.vsclone-chat-history-delete-cancel {
+.vsclone-thread-rail-delete-cancel {
 	background: var(--vscode-button-secondaryBackground);
 	color: var(--vscode-button-secondaryForeground);
 }
 
-.vsclone-chat-history-delete-confirm {
+.vsclone-thread-rail-delete-confirm {
 	background: color-mix(in srgb, var(--vscode-errorForeground) 35%, transparent 65%);
 	color: var(--vscode-errorForeground);
 	border: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 50%, transparent 50%);

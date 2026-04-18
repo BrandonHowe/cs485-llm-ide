@@ -9,6 +9,16 @@ interface IModernDecoratorContext {
 }
 
 type DecoratedFunction = (...args: unknown[]) => unknown;
+type LegacyDecoratedTarget = Object;
+type LegacyDecoratedDescriptor<T> = TypedPropertyDescriptor<T>;
+
+interface ILegacyDescriptorDecorator {
+	<T>(target: LegacyDecoratedTarget, key: string | symbol, descriptor: LegacyDecoratedDescriptor<T>): void | LegacyDecoratedDescriptor<T>;
+}
+
+interface IHybridLegacyModernDecorator extends ILegacyDescriptorDecorator {
+	<T extends DecoratedFunction>(value: T, context: IModernDecoratorContext): T;
+}
 
 /**
  * Keep shared decorators compatible with both legacy descriptor decorators and
@@ -24,6 +34,10 @@ function isModernDecoratorContext(value: string | symbol | IModernDecoratorConte
 		&& (value.kind === 'getter' || value.kind === 'method');
 }
 
+function isDecoratedFunction(value: unknown): value is DecoratedFunction {
+	return typeof value === 'function';
+}
+
 function getDecoratorKey(key: string | symbol): string {
 	if (typeof key === 'symbol') {
 		throw new Error('not supported');
@@ -32,10 +46,10 @@ function getDecoratorKey(key: string | symbol): string {
 	return key;
 }
 
-function createDecorator(mapFn: (fn: DecoratedFunction, key: string) => DecoratedFunction): MethodDecorator {
-	return ((targetOrValue: Object | DecoratedFunction, keyOrContext: string | symbol | IModernDecoratorContext, descriptor?: PropertyDescriptor) => {
+function createDecorator(mapFn: (fn: DecoratedFunction, key: string) => DecoratedFunction): IHybridLegacyModernDecorator {
+	return ((targetOrValue: LegacyDecoratedTarget | DecoratedFunction, keyOrContext: string | symbol | IModernDecoratorContext, descriptor?: PropertyDescriptor) => {
 		if (isModernDecoratorContext(keyOrContext)) {
-			if (typeof targetOrValue !== 'function') {
+			if (!isDecoratedFunction(targetOrValue)) {
 				throw new Error('not supported');
 			}
 
@@ -53,7 +67,7 @@ function createDecorator(mapFn: (fn: DecoratedFunction, key: string) => Decorate
 		}
 
 		throw new Error('not supported');
-	}) as MethodDecorator;
+	}) as IHybridLegacyModernDecorator;
 }
 
 function createMemoizedFunction(fn: DecoratedFunction, key: string): DecoratedFunction {
@@ -77,9 +91,13 @@ function createMemoizedFunction(fn: DecoratedFunction, key: string): DecoratedFu
 	};
 }
 
-export function memoize(targetOrValue: Object | DecoratedFunction, keyOrContext: string | symbol | IModernDecoratorContext, descriptor?: PropertyDescriptor) {
+// The explicit overloads keep `@memoize` assignable to legacy method/getter decorator slots even
+// though the implementation also supports the newer `__esDecorate` runtime shape during transition.
+export function memoize<T>(target: LegacyDecoratedTarget, key: string | symbol, descriptor: LegacyDecoratedDescriptor<T>): void | LegacyDecoratedDescriptor<T>;
+export function memoize<T extends DecoratedFunction>(value: T, context: IModernDecoratorContext): T;
+export function memoize(targetOrValue: LegacyDecoratedTarget | DecoratedFunction, keyOrContext: string | symbol | IModernDecoratorContext, descriptor?: PropertyDescriptor): DecoratedFunction | LegacyDecoratedDescriptor<unknown> | void {
 	if (isModernDecoratorContext(keyOrContext)) {
-		if (typeof targetOrValue !== 'function') {
+		if (!isDecoratedFunction(targetOrValue)) {
 			throw new Error('not supported');
 		}
 

@@ -397,7 +397,8 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	private readonly _refreshPromises = new Map<VSCloneModelVendor, DeferredPromise<void>>();
 	private readonly _authEpochByVendor = new Map<VSCloneModelVendor, number>();
 	private _initialized = false;
-	private loopbackChannel: IChannel | undefined;
+	private oauthChannel: IChannel | undefined;
+	private didResolveOAuthChannel = false;
 
 	constructor(
 		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
@@ -481,13 +482,18 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		this._setProviderStatus(vendor, 'signing_in');
 
 		try {
+			// Browser launch and token exchange both run through the desktop main process, so fail
+			// explicitly here when the OAuth bridge is unavailable instead of silently drifting into
+			// a "manual fallback" path that still cannot complete the flow.
+			const oauthChannel = this._requireOAuthChannel();
+
 			// Generate PKCE
 			const codeVerifier = generateCodeVerifier();
 			const codeChallenge = await generateCodeChallenge(codeVerifier);
 			const state = generateState();
 			const authorization = config.redirectStrategy === 'loopback'
-				? await this._acquireLoopbackAuthorizationCode(vendor, config, state, codeChallenge)
-				: await this._acquireManualAuthorizationCode(vendor, config, state, codeChallenge);
+				? await this._acquireLoopbackAuthorizationCode(vendor, config, state, codeChallenge, oauthChannel)
+				: await this._acquireManualAuthorizationCode(vendor, config, state, codeChallenge, oauthChannel);
 
 			if (!authorization) {
 				this._setProviderStatus(vendor, 'signed_out');
@@ -497,7 +503,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 			const { code, redirectUri } = authorization;
 
 			// Exchange code for tokens
-			const tokenResponse = await exchangeCodeForTokens(this._getLoopbackChannel()!, config, code, redirectUri, codeVerifier, state);
+			const tokenResponse = await exchangeCodeForTokens(oauthChannel, config, code, redirectUri, codeVerifier, state);
 
 			// Extract metadata
 			const { userDisplayName, providerMetadata } = extractMetadata(vendor, tokenResponse);
@@ -544,11 +550,12 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		vendor: VSCloneModelVendor,
 		config: IVSCloneOAuthProviderConfig,
 		expectedState: string,
-		codeChallenge: string
+		codeChallenge: string,
+		oauthChannel: IChannel = this._requireOAuthChannel()
 	): Promise<{ code: string; redirectUri: string } | undefined> {
 		const redirectUri = config.redirectUriTemplate;
 		const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
-		await this._getLoopbackChannel()!.call(VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL, authUrl);
+		await oauthChannel.call(VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL, authUrl);
 
 		const code = await this._promptForAuthorizationCode(vendor, config, expectedState);
 		if (!code) {
@@ -562,56 +569,55 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		vendor: VSCloneModelVendor,
 		config: IVSCloneOAuthProviderConfig,
 		expectedState: string,
-		codeChallenge: string
+		codeChallenge: string,
+		oauthChannel: IChannel = this._requireOAuthChannel()
 	): Promise<{ code: string; redirectUri: string } | undefined> {
 		let redirectUri = getLoopbackRedirectUri(config);
 		let browserOpened = false;
 		let sessionId: string | undefined;
-		const loopbackChannel = this._getLoopbackChannel();
 
 		// Try automatic localhost callback capture first so the user sees a completion page
-		// instead of a browser network error. If this path fails, fall back to manual paste.
-		if (loopbackChannel) {
-			sessionId = generateUuid();
-			try {
-				const startResponse = await loopbackChannel.call<IVSCloneOAuthLoopbackStartResponse>(
-					VSCLONE_OAUTH_COMMAND_START_LOOPBACK,
-					{
-						sessionId,
-						redirectUriTemplate: config.redirectUriTemplate,
-						preferredPort: config.preferredPort,
-					}
-				);
-
-				redirectUri = startResponse.redirectUri;
-				const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
-				await this._getLoopbackChannel()!.call(VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL, authUrl);
-				browserOpened = true;
-
-				const callback = await loopbackChannel.call<IVSCloneOAuthLoopbackWaitResponse>(
-					VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK,
-					{
-						sessionId,
-						timeoutMs: LOOPBACK_WAIT_TIMEOUT_MS,
-					}
-				);
-
-				if (callback.state !== expectedState) {
-					throw new Error('Returned OAuth state did not match the sign-in request.');
+		// instead of a browser network error. If starting or waiting on the localhost listener fails,
+		// keep the same desktop OAuth bridge and fall back to manual paste instead of abandoning sign-in.
+		sessionId = generateUuid();
+		try {
+			const startResponse = await oauthChannel.call<IVSCloneOAuthLoopbackStartResponse>(
+				VSCLONE_OAUTH_COMMAND_START_LOOPBACK,
+				{
+					sessionId,
+					redirectUriTemplate: config.redirectUriTemplate,
+					preferredPort: config.preferredPort,
 				}
+			);
 
-				return { code: callback.code, redirectUri };
-			} catch (err) {
-				this.logService.warn(`[VSCloneOAuth] Loopback callback flow failed for ${vendor}; falling back to manual code entry.`, err);
-			} finally {
-				await this._stopLoopbackSession(sessionId);
+			redirectUri = startResponse.redirectUri;
+			const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
+			await oauthChannel.call(VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL, authUrl);
+			browserOpened = true;
+
+			const callback = await oauthChannel.call<IVSCloneOAuthLoopbackWaitResponse>(
+				VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK,
+				{
+					sessionId,
+					timeoutMs: LOOPBACK_WAIT_TIMEOUT_MS,
+				}
+			);
+
+			if (callback.state !== expectedState) {
+				throw new Error('Returned OAuth state did not match the sign-in request.');
 			}
+
+			return { code: callback.code, redirectUri };
+		} catch (err) {
+			this.logService.warn(`[VSCloneOAuth] Loopback callback flow failed for ${vendor}; falling back to manual code entry.`, err);
+		} finally {
+			await this._stopLoopbackSession(sessionId);
 		}
 
 		// Fallback path preserves the previous manual copy/paste behavior.
 		if (!browserOpened) {
 			const authUrl = buildAuthUrl(config, expectedState, codeChallenge, redirectUri);
-			await this._getLoopbackChannel()!.call(VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL, authUrl);
+			await oauthChannel.call(VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL, authUrl);
 		}
 
 		const code = await this._promptForAuthorizationCode(vendor, config, expectedState);
@@ -662,32 +668,47 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	}
 
 	private async _stopLoopbackSession(sessionId: string | undefined): Promise<void> {
-		const loopbackChannel = this._getLoopbackChannel();
-		if (!sessionId || !loopbackChannel) {
+		const oauthChannel = this._getOAuthChannel();
+		if (!sessionId || !oauthChannel) {
 			return;
 		}
 
 		try {
-			await loopbackChannel.call<void>(VSCLONE_OAUTH_COMMAND_STOP_LOOPBACK, { sessionId });
+			await oauthChannel.call<void>(VSCLONE_OAUTH_COMMAND_STOP_LOOPBACK, { sessionId });
 		} catch {
 			// Cleanup is best-effort; the next session startup always replaces stale listeners.
 		}
 	}
 
-	private _getLoopbackChannel(): IChannel | undefined {
-		if (this.loopbackChannel) {
-			return this.loopbackChannel;
+	private _getOAuthChannel(): IChannel | undefined {
+		if (this.didResolveOAuthChannel) {
+			return this.oauthChannel;
 		}
 
-		// This channel only exists in desktop/electron. When unavailable, sign-in falls back
-		// to manual URL/code paste so OAuth still works in less capable environments.
+		this.didResolveOAuthChannel = true;
+
+		// The desktop bridge owns the non-browser-safe parts of OAuth: opening the system browser,
+		// listening on localhost for loopback callbacks, and exchanging tokens without renderer CORS.
+		// Manual paste is only a fallback for loopback capture, not for a missing OAuth bridge.
 		try {
-			this.loopbackChannel = this.mainProcessService.getChannel(VSCLONE_OAUTH_CHANNEL_NAME);
+			this.oauthChannel = this.mainProcessService.getChannel(VSCLONE_OAUTH_CHANNEL_NAME);
 		} catch {
-			this.loopbackChannel = undefined;
+			this.oauthChannel = undefined;
 		}
 
-		return this.loopbackChannel;
+		return this.oauthChannel;
+	}
+
+	private _requireOAuthChannel(): IChannel {
+		const oauthChannel = this._getOAuthChannel();
+		if (oauthChannel) {
+			return oauthChannel;
+		}
+
+		throw new Error(localize(
+			'vsclone.oauth.desktopBridgeRequired',
+			'OAuth requires the desktop VSClone bridge for browser launch and token exchange.'
+		));
 	}
 
 	// -- Sign Out --
@@ -858,7 +879,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		this._setProviderStatus(vendor, 'refreshing');
 
 		try {
-			const tokenResponse = await refreshAccessToken(this._getLoopbackChannel()!, config, tokenSet.refreshToken);
+			const tokenResponse = await refreshAccessToken(this._requireOAuthChannel(), config, tokenSet.refreshToken);
 			if ((this._authEpochByVendor.get(vendor) ?? 0) !== authEpoch) {
 				return;
 			}

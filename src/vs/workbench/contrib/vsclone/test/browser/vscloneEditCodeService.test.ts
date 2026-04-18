@@ -11,14 +11,7 @@ import { VSCloneEditCodeService } from '../../browser/vscloneEditCodeService.js'
 suite('VSCloneEditCodeService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function trackHarnessLifetime<T extends object>(service: T): T {
-		// These tests use a prototype-only harness instead of constructing the full service graph, so
-		// register a no-op disposable shell with the standard leak harness rather than calling the
-		// real Disposable constructor path.
-		return store.add(Object.assign(service, { dispose: () => undefined }));
-	}
-
-	function createServiceHarness(): VSCloneEditCodeService & {
+	type IVSCloneEditCodeServiceHarness = {
 		recordAppliedDiffZone: (plan: {
 			uri: URI;
 			action: 'create' | 'modify';
@@ -31,6 +24,7 @@ suite('VSCloneEditCodeService', () => {
 			fileChange: unknown;
 			resolvedEdits: readonly unknown[];
 		}) => void;
+		undoEditApply: VSCloneEditCodeService['undoEditApply'];
 		diffAreaOfId: Record<string, unknown>;
 		diffAreasOfURI: Record<string, Set<string> | undefined>;
 		diffOfId: Record<string, unknown>;
@@ -40,30 +34,19 @@ suite('VSCloneEditCodeService', () => {
 		_onDidAddOrDeleteDiffZones: { fire: (value: unknown) => void };
 		_onDidChangeDiffsInDiffZoneNotStreaming: { fire: (value: unknown) => void };
 		bulkEditService: { apply: (edits: readonly unknown[], options: { label: string }) => Promise<{ isApplied: boolean }> };
-	} {
-		const service = Object.create(VSCloneEditCodeService.prototype) as VSCloneEditCodeService & {
-			recordAppliedDiffZone: (plan: {
-				uri: URI;
-				action: 'create' | 'modify';
-				originalContent: string | undefined;
-				finalContent: string;
-				appliedEdits: number;
-				addedLines: number;
-				removedLines: number;
-				bulkEdit: unknown;
-				fileChange: unknown;
-				resolvedEdits: readonly unknown[];
-			}) => void;
-			diffAreaOfId: Record<string, unknown>;
-			diffAreasOfURI: Record<string, Set<string> | undefined>;
-			diffOfId: Record<string, unknown>;
-			assistantApplyDiffZoneIdsByURI: Map<string, Set<number>>;
-			_diffareaidPool: number;
-			_diffidPool: number;
-			_onDidAddOrDeleteDiffZones: { fire: (value: unknown) => void };
-			_onDidChangeDiffsInDiffZoneNotStreaming: { fire: (value: unknown) => void };
-			bulkEditService: { apply: (edits: readonly unknown[], options: { label: string }) => Promise<{ isApplied: boolean }> };
-		};
+	};
+
+	function trackHarnessLifetime<T extends object>(service: T): T {
+		// These tests use a prototype-only harness instead of constructing the full service graph, so
+		// register a no-op disposable shell with the standard leak harness rather than calling the
+		// real Disposable constructor path.
+		return store.add(Object.assign(service, { dispose: () => undefined }));
+	}
+
+	function createServiceHarness(): IVSCloneEditCodeServiceHarness {
+		// Cast through an explicit harness shape instead of intersecting with the class type because
+		// these tests intentionally bypass the real constructor and private fields.
+		const service = Object.create(VSCloneEditCodeService.prototype) as unknown as IVSCloneEditCodeServiceHarness;
 		service.diffAreaOfId = {};
 		service.diffAreasOfURI = {};
 		service.diffOfId = {};

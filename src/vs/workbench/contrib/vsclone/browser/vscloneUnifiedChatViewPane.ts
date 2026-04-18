@@ -25,7 +25,6 @@ import {
 	MutableDisposable,
 	toDisposable,
 } from "../../../../base/common/lifecycle.js";
-import { splitLines } from "../../../../base/common/strings.js";
 import { localize } from "../../../../nls.js";
 import { IClipboardService } from "../../../../platform/clipboard/common/clipboardService.js";
 import { IConfigurationService } from "../../../../platform/configuration/common/configuration.js";
@@ -36,7 +35,6 @@ import { IInstantiationService } from "../../../../platform/instantiation/common
 import { IKeybindingService } from "../../../../platform/keybinding/common/keybinding.js";
 import { INotificationService } from "../../../../platform/notification/common/notification.js";
 import { IOpenerService } from "../../../../platform/opener/common/opener.js";
-import { IFileService } from "../../../../platform/files/common/files.js";
 import { IMarkdownRendererService } from "../../../../platform/markdown/browser/markdownRenderer.js";
 import { IThemeService } from "../../../../platform/theme/common/themeService.js";
 import {
@@ -46,43 +44,34 @@ import {
 import { IViewDescriptorService } from "../../../common/views.js";
 import { IEditorService } from "../../../services/editor/common/editorService.js";
 import { URI } from "../../../../base/common/uri.js";
-import { IModelService } from "../../../../editor/common/services/model.js";
+import { VSCloneChatRailWidthSetting } from "../common/vscloneChatViewSettings.js";
 import {
-	type IVSCloneChatHistoryChangeEvent,
-	IVSCloneChatHistoryQuery,
-	IVSCloneChatHistoryThread,
-	IVSCloneChatHistoryTurn,
-	IVSCloneChatHistoryService,
-} from "../common/backend/vscloneChatHistoryService.js";
-import {
-	IVSCloneModelCatalogService,
 	type VSCloneReasoningEffortLevel,
-} from "../common/vscloneModelCatalogService.js";
+} from "../common/vscloneModelCapabilities.js";
 import { IVSClonePlanModeService } from "../common/vsclonePlanModeService.js";
 import { type VSCloneChatMode } from "../common/vsclonePlanModeTypes.js";
 import {
-	IVSCloneChatLocation,
-	IVSCloneThreadModelSelectionService,
+	type IVSCloneChatLocation,
 	type IVSCloneModelSelection,
-} from "../common/backend/vscloneThreadModelSelectionService.js";
-import { parseToolCalls } from "../common/vscloneToolCallParser.js";
+} from "../common/vscloneModelSelectionTypes.js";
+import { IVSCloneSettingsService } from "../common/vscloneSettingsService.js";
 import {
-	VSCloneChatHistoryRail,
+	VSCloneThreadRail,
 	VSCloneRailTab,
-} from "./vscloneChatHistoryRail.js";
-import { IVSCloneChatSessionService } from "./vscloneChatSessionService.js";
+} from "./vscloneThreadRail.js";
+import { IVSCloneChatThreadService } from "./vscloneChatThreadService.js";
 import { VSCloneModelSwitcherWidget } from "./vscloneModelSwitcherWidget.js";
 import { IVSCloneProviderConfigurationBridge } from "./vscloneProviderConfigurationBridge.js";
 import { IVSCloneThreadRuntimeService } from "./vscloneThreadRuntimeService.js";
 import {
 	type IVSCloneThreadCatalogEntry,
-	toVSCloneRailRows,
-} from "./vscloneChatHistoryRailTree.js";
+	toVSCloneThreadRailRows,
+} from "./vscloneThreadRailTree.js";
 import {
-	IVSCloneEditApplicationService,
-	type IVSCloneEditApplyResult,
-	type IVSCloneEditFileChange,
-} from "./vscloneEditApplicationService.js";
+	type VSCloneEditApplyResult as IVSCloneEditApplyResult,
+	type VSCloneEditFileChange as IVSCloneEditFileChange,
+} from "./vscloneEditCodeServiceInterface.js";
+import { IVSCloneEditCodeService } from "./vscloneEditCodeServiceInterface.js";
 import { parseToolResultDiff } from "../common/vscloneToolResultDiff.js";
 import {
 	toVSCloneImageDataUrl,
@@ -90,12 +79,13 @@ import {
 } from "../common/vscloneImageAttachmentTypes.js";
 import {
 	type IVSCloneThreadRuntimeAssistantEditSuggestion,
+	type IVSCloneThreadRuntimeCatalogQuery,
 	type IVSCloneThreadRuntimeCheckpoint,
 	type IVSCloneThreadRuntimeMessage,
 	type IVSCloneThreadRuntimeState,
 } from "../common/vscloneThreadRuntimeTypes.js";
 
-const railWidthSetting = "vsclone.chatHistory.railWidth";
+const railWidthSetting = VSCloneChatRailWidthSetting;
 const modelSwitcherEnabledSetting = "vsclone.modelSwitcher.enabled";
 const railMinWidth = 220;
 const railMaxWidth = 520;
@@ -108,30 +98,12 @@ interface IPendingImageAttachment extends IVSCloneImageAttachment {
 export function toVSCloneHistoryQuery(
 	query: string,
 	tab: VSCloneRailTab,
-): IVSCloneChatHistoryQuery {
+): IVSCloneThreadRuntimeCatalogQuery {
 	return {
 		text: query,
 		tab,
 		includeArchived: tab === "all",
 	};
-}
-
-interface IParsedToolResultBlock {
-	readonly toolName: string;
-	readonly success: boolean;
-	readonly output: string;
-	readonly rawXml: string;
-	readonly startOffset: number;
-	readonly endOffset: number;
-}
-
-interface IParsedAgentTraceBlock {
-	readonly type: string;
-	readonly status?: string;
-	readonly message: string;
-	readonly rawXml: string;
-	readonly startOffset: number;
-	readonly endOffset: number;
 }
 
 interface IUnifiedDiffHunkHeader {
@@ -151,60 +123,6 @@ interface IRenderedToolDiffLine {
 interface IDiffLineNavigationState {
 	startLineNumber?: number;
 	endLineNumber?: number;
-}
-
-interface ILegacyDiffHunk {
-	readonly lineIndexes: readonly number[];
-	readonly lines: readonly string[];
-}
-
-function parseToolResultBlocks(
-	text: string,
-): readonly IParsedToolResultBlock[] {
-	const blocks: IParsedToolResultBlock[] = [];
-	const pattern =
-		/<tool_result\s+tool_name="([^"]+)"\s+success="(true|false)">([\s\S]*?)<\/tool_result>/g;
-	let match: RegExpExecArray | null;
-	while ((match = pattern.exec(text)) !== null) {
-		blocks.push({
-			toolName: match[1],
-			success: match[2] === "true",
-			output: match[3].trim(),
-			rawXml: match[0],
-			startOffset: match.index,
-			endOffset: match.index + match[0].length,
-		});
-	}
-	return blocks;
-}
-
-function parseAgentTraceBlocks(
-	text: string,
-): readonly IParsedAgentTraceBlock[] {
-	const blocks: IParsedAgentTraceBlock[] = [];
-	const pattern =
-		/<agent_trace\s+type="([^"]+)"(?:\s+status="([^"]+)")?>([\s\S]*?)<\/agent_trace>/g;
-	let match: RegExpExecArray | null;
-	while ((match = pattern.exec(text)) !== null) {
-		blocks.push({
-			type: match[1],
-			status: match[2],
-			message: decodeXmlText(match[3].trim()),
-			rawXml: match[0],
-			startOffset: match.index,
-			endOffset: match.index + match[0].length,
-		});
-	}
-	return blocks;
-}
-
-function decodeXmlText(value: string): string {
-	return value
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&quot;/g, '"')
-		.replace(/&apos;/g, "'")
-		.replace(/&amp;/g, "&");
 }
 
 /**
@@ -229,7 +147,7 @@ interface IAssistantApplyTarget {
 
 interface IVSCloneThreadRuntimeCatalogService {
 	getThreads?(
-		query?: IVSCloneChatHistoryQuery,
+		query?: IVSCloneThreadRuntimeCatalogQuery,
 	): readonly IVSClonePaneThreadCatalogEntry[];
 	isDeletedThread?(threadId: string): boolean;
 	archiveThread?(threadId: string, archived: boolean): boolean | Promise<boolean>;
@@ -240,8 +158,6 @@ interface IVSClonePaneThreadCatalogEntry extends IVSCloneThreadCatalogEntry {
 	readonly sessionResource?: string;
 	readonly activeModelIdentifier?: string;
 	readonly createdAt: number;
-	readonly importedFromHistory?: boolean;
-	readonly runtimeOwnedCatalog?: boolean;
 }
 
 export class VSCloneUnifiedChatViewPane extends ViewPane {
@@ -270,16 +186,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private pendingImages: IPendingImageAttachment[] = [];
 
 	private readonly rail = this._register(
-		this.instantiationService.createInstance(VSCloneChatHistoryRail),
+		this.instantiationService.createInstance(VSCloneThreadRail),
 	);
 	private readonly threadsById = new Map<string, IVSClonePaneThreadCatalogEntry>();
 	// Durable apply summaries now live on the runtime branch via the assistant-edit application API.
 	// The pane only keeps a transient pending set so repeated refreshes do not launch duplicate
 	// browser-local apply work while the engine bridge is still running.
 	private readonly pendingAssistantApplyMessageIds = new Set<string>();
-	// Some runtime services may emit state changes while hydration is still unwinding, so imports
-	// mark the thread as transiently guarded until the imported runtime snapshot has settled.
-	private readonly importingRuntimeThreadIds = new Set<string>();
 	private readonly refreshRailScheduler = this._register(
 		new RunOnceScheduler(() => {
 			this.refreshRailRows();
@@ -294,7 +207,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private railVisible = false;
 	private railWidth = 320;
 	private activeThreadId: string | undefined;
-	private historyReady = false;
+	private catalogReady = false;
 	private isCompactLayout = false;
 	private bodyWidth = 0;
 	private submittingPrompt = false;
@@ -310,28 +223,22 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IOpenerService openerService: IOpenerService,
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
-		@IVSCloneChatHistoryService
-		private readonly historyService: IVSCloneChatHistoryService,
-		@IVSCloneChatSessionService
-		private readonly sessionService: IVSCloneChatSessionService,
-		@IVSCloneThreadModelSelectionService
-		private readonly modelSelectionService: IVSCloneThreadModelSelectionService,
+		@IVSCloneChatThreadService
+		private readonly chatThreadService: IVSCloneChatThreadService,
+		@IVSCloneSettingsService
+		private readonly settingsService: IVSCloneSettingsService,
 		@IVSClonePlanModeService
 		private readonly planModeService: IVSClonePlanModeService,
-		@IVSCloneModelCatalogService
-		private readonly modelCatalogService: IVSCloneModelCatalogService,
 		@IVSCloneProviderConfigurationBridge
 		private readonly providerConfigurationBridge: IVSCloneProviderConfigurationBridge,
 		@IClipboardService private readonly clipboardService: IClipboardService,
-		@IVSCloneEditApplicationService
-		private readonly editApplicationService: IVSCloneEditApplicationService,
+		@IVSCloneEditCodeService
+		private readonly editCodeService: IVSCloneEditCodeService,
 		@IVSCloneThreadRuntimeService
 		private readonly threadRuntimeService: IVSCloneThreadRuntimeService,
 		@INotificationService
 		private readonly notificationService: INotificationService,
 		@IEditorService private readonly editorService: IEditorService,
-		@IModelService private readonly modelService: IModelService,
-		@IFileService private readonly fileService: IFileService,
 		@IMarkdownRendererService
 		private readonly markdownRendererService: IMarkdownRendererService,
 	) {
@@ -412,23 +319,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		);
 
 		this._register(
-			this.historyService.onDidChange((event) => {
-				this.handleHistoryChange(event);
-			}),
-		);
-		this._register(
 			this.threadRuntimeService.onDidChangeState((state) => {
-				// Runtime state is now also the live rail source, so every thread state update keeps the
-				// cached catalog entry fresh instead of waiting for legacy history to catch up.
 				this.syncThreadCatalogEntryFromRuntime(state);
 				this.refreshRailScheduler.schedule(0);
 				if (state.threadId !== this.activeThreadId) {
 					return;
 				}
-				// Runtime-only workflow state currently exists outside persisted turn history, so the
-				// pane has to listen to both channels until the thread runtime becomes the sole source
-				// of truth. Refreshing through the same scheduler keeps tool/checkpoint cards aligned
-				// with the existing transcript rebuild cadence.
 				this.refreshConversationScheduler.schedule(0);
 				this.maybeAutoApplyRuntimeAssistantMessages(state);
 				this.updateComposerState();
@@ -437,28 +333,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		);
 
 		this._register(
-			this.modelSelectionService.onDidChangeSelection(() => {
-				this.refreshModelControls();
-			}),
-		);
-		this._register(
 			this.planModeService.onDidChangeMode(() => {
 				this.refreshPlanModeControl();
 				this.updateComposerState();
 			}),
 		);
 		this._register(
-			this.modelCatalogService.onDidChangeCatalog(() => {
+			this.settingsService.onDidChangeState(() => {
 				this.refreshModelControls();
 			}),
 		);
 
-		void this.modelSelectionService.initialize();
+		void this.settingsService.initialize();
 	}
 
 	override focus(): void {
 		super.focus();
-		if (!this.historyReady || this.railVisible) {
+		if (!this.catalogReady || this.railVisible) {
 			this.rail.focusSearch();
 			return;
 		}
@@ -497,13 +388,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	async refreshModelCatalog(): Promise<void> {
-		await this.modelCatalogService.refreshCatalog();
+		await this.settingsService.refreshState();
 		this.refreshModelControls();
 	}
 
 	async manageProviders(): Promise<void> {
 		await this.providerConfigurationBridge.openManageProvidersPicker();
-		await this.modelCatalogService.refreshCatalog();
+		await this.settingsService.refreshState();
 		this.refreshModelControls();
 	}
 
@@ -511,7 +402,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (!this.activeThreadId) {
 			return;
 		}
-		await this.modelSelectionService.resetSelectionForThread(
+		await this.settingsService.resetSelectionForThread(
 			this.activeThreadId,
 		);
 		this.refreshModelControls();
@@ -519,7 +410,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	async switchToNextModel(): Promise<void> {
 		const context = this.getModelSwitcherContext();
-		await this.modelSelectionService.switchToNextModel(
+		await this.settingsService.switchToNextModel(
 			context.threadId,
 			context.location,
 		);
@@ -539,16 +430,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const previousActiveThreadId = this.activeThreadId;
-		const requiresExplicitRuntimeImport = this.isLegacyOnlyThreadCatalogEntry(targetThreadId);
-		// Selecting a legacy-only thread is the compatibility boundary where the pane may still
-		// import history into the runtime. After this point the active pane reads only runtime state,
-		// so helpers like copy/reuse/render never perform their own hidden history fallback.
-		const importedRuntimeState = requiresExplicitRuntimeImport
-			? this.ensureRuntimeThreadImportedFromHistory(targetThreadId)
-			: this.threadRuntimeService?.getState?.(targetThreadId);
-		if (requiresExplicitRuntimeImport && !importedRuntimeState) {
-			// Explicit history activation must fail closed. Leaving a legacy-only thread active without
-			// a materialized runtime branch would make the next submit start from an empty transcript.
+		const runtimeState = this.threadRuntimeService?.getState?.(targetThreadId);
+		if (!runtimeState) {
+			// The rail is runtime-owned now. If a selected row no longer has runtime state, fail
+			// closed instead of silently reconstructing UI state from a stale cache.
 			if (!previousActiveThreadId || previousActiveThreadId === targetThreadId) {
 				this.showComposerForNewChat();
 			} else {
@@ -652,21 +537,21 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const actions = document.createElement("div");
 		actions.className = "vsclone-thread-actions";
 
-		const historyButton = document.createElement("button");
-		historyButton.type = "button";
-		historyButton.className = "vsclone-thread-action-button";
-		historyButton.textContent = localize(
+		const threadButton = document.createElement("button");
+		threadButton.type = "button";
+		threadButton.className = "vsclone-thread-action-button";
+		threadButton.textContent = localize(
 			"vsclone.thread.actions.history",
-			"Chat History",
+			"Threads",
 		);
 		// Mirror tooltip text into an accessible name so screen readers announce this icon-like action clearly.
-		const historyButtonLabel = localize(
+		const threadButtonLabel = localize(
 			"vsclone.thread.actions.history.tooltip",
-			"Show chat history",
+			"Show threads",
 		);
-		historyButton.title = historyButtonLabel;
-		historyButton.setAttribute("aria-label", historyButtonLabel);
-		actions.appendChild(historyButton);
+		threadButton.title = threadButtonLabel;
+		threadButton.setAttribute("aria-label", threadButtonLabel);
+		actions.appendChild(threadButton);
 
 		const overflowButton = document.createElement("button");
 		overflowButton.type = "button";
@@ -750,8 +635,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			try {
 				this.modelSwitcher = this._register(
 					new VSCloneModelSwitcherWidget(
-						this.modelCatalogService,
-						this.modelSelectionService,
+						this.settingsService,
 						this.providerConfigurationBridge,
 						() => this.getModelSwitcherContext(),
 					),
@@ -863,7 +747,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		parent.appendChild(composer);
 
 		this._register(
-			addDisposableListener(historyButton, EventType.CLICK, () => {
+			addDisposableListener(threadButton, EventType.CLICK, () => {
 				this.railVisible = true;
 				this.applyRailLayout();
 				this.rail.focusSearch();
@@ -881,14 +765,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					const menuActions = new DisposableStore();
 					const actions = [
 						menuActions.add(new Action(
-							"vsclone.chatHistory.copyPrompt",
+							"vsclone.threadRail.copyPrompt",
 							localize("vsclone.thread.actions.copyPrompt", "Copy Prompt"),
 							undefined,
 							true,
 							() => this.copyPrompt(),
 						)),
 						menuActions.add(new Action(
-							"vsclone.chatHistory.copyResponse",
+							"vsclone.threadRail.copyResponse",
 							localize(
 								"vsclone.thread.actions.copyResponse",
 								"Copy Response",
@@ -898,14 +782,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 							() => this.copyResponse(),
 						)),
 						menuActions.add(new Action(
-							"vsclone.chatHistory.reusePrompt",
+							"vsclone.threadRail.reusePrompt",
 							localize("vsclone.thread.actions.reusePrompt", "Reuse Prompt"),
 							undefined,
 							true,
 							() => this.reusePrompt(),
 						)),
 						menuActions.add(new Action(
-							"vsclone.chatHistory.deleteThread",
+							"vsclone.threadRail.deleteThread",
 							localize(
 								"vsclone.thread.actions.deleteThread",
 								"Delete Thread",
@@ -1053,7 +937,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.refreshPlanModeControl();
 		this.refreshReasoningEffortControl();
 		if (this.modelSwitcher) {
-			void this.modelCatalogService.refreshCatalog();
+			void this.settingsService.refreshState();
 		}
 	}
 
@@ -1092,7 +976,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		// Wait for restore-backed state before reading the visible composer controls so an eager send
 		// cannot capture fallback defaults while thread selections and plan mode are still hydrating.
 		await this.planModeService.initialize();
-		await this.modelSelectionService.initialize();
+		await this.settingsService.initialize();
 		const selectedModel = this.getCurrentComposerModelSelection(activeThreadId);
 		const existingThread = activeThreadId
 			? this.resolveThreadById(activeThreadId)
@@ -1104,7 +988,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			const imageAttachments = this.pendingImages.length > 0
 				? this.pendingImages.map(img => ({ mimeType: img.mimeType, base64Data: img.base64Data }))
 				: undefined;
-			const submission = await this.sessionService.submitPrompt(promptText, {
+			const submission = await this.chatThreadService.sendMessage(promptText, {
 				threadId: activeThreadId,
 				sessionResource: existingThread?.sessionResource,
 				modelSelection: selectedModel,
@@ -1112,18 +996,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			});
 			if (!submission) {
 				return;
-			}
-
-			if (!activeThreadId && selectedModel) {
-				await this.modelSelectionService.setSelectionForThread(
-					submission.threadId,
-					{
-						...selectedModel,
-						threadId: submission.threadId,
-						location: "chat",
-						selectedAt: Date.now(),
-					},
-				);
 			}
 
 			const runtimeState = this.getThreadRuntimeState(submission.threadId);
@@ -1164,7 +1036,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (busyThreadId) {
 			// Keep the stop affordance responsive immediately after the user clicks it because the
 			// turn status update lands asynchronously after the transport observes the cancellation.
-			this.sessionService.cancelThread(busyThreadId);
+			this.chatThreadService.cancelThread(busyThreadId);
 			this.updateComposerState();
 			return;
 		}
@@ -1175,7 +1047,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private async handleImageFiles(files: FileList | File[]): Promise<void> {
 		const selectedModel = this.getCurrentComposerModelSelection(this.activeThreadId);
 		if (selectedModel) {
-			const modelDescriptor = this.modelCatalogService.getModel(selectedModel.modelIdentifier);
+			const modelDescriptor = this.settingsService.getModel(selectedModel.modelIdentifier);
 			if (modelDescriptor && !modelDescriptor.supportsImages) {
 				this.notificationService.warn(
 					localize("vsclone.composer.imageNotSupported", "The selected model does not support image attachments."),
@@ -1323,10 +1195,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		this.rail.setLoading();
 		try {
-			await this.historyService.initialize();
 			await this.planModeService.initialize();
-			this.historyReady = true;
-			this.seedThreadCatalogFromHistory();
+			this.catalogReady = true;
 			this.refreshThreadCatalogFromRuntime();
 			this.refreshRailRows();
 			if (!this.activeThreadId) {
@@ -1334,64 +1204,28 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				this.railVisible = false;
 				this.applyRailLayout();
 			}
-			const requiresExplicitRuntimeImport = this.isLegacyOnlyThreadCatalogEntry(this.activeThreadId);
-			// Reload is an explicit migration boundary. If the selected thread still exists only in
-			// legacy history, import it here before refreshing because the active render path never
-			// performs its own history fallback.
-			const importedRuntimeState = requiresExplicitRuntimeImport
-				? this.ensureRuntimeThreadImportedFromHistory(this.activeThreadId)
-				: this.activeThreadId
-					? this.threadRuntimeService?.getState?.(this.activeThreadId)
-					: undefined;
-			if (requiresExplicitRuntimeImport && !importedRuntimeState) {
-				// Reload must also fail closed for legacy-only threads. Otherwise the pane would keep a
-				// selected thread that has no runtime branch, and the next submit would restart from an
-				// empty context even though the rail still looks like a historical thread is active.
+			const runtimeState = this.activeThreadId
+				? this.threadRuntimeService?.getState?.(this.activeThreadId)
+				: undefined;
+			if (this.activeThreadId && !runtimeState) {
+				// If the previously selected thread is gone from runtime, drop back to a new composer.
 				this.showComposerForNewChat();
 				return;
 			}
 			this.refreshConversation();
 		} catch {
-			this.historyReady = false;
+			this.catalogReady = false;
 			this.rail.setError(
 				localize(
 					"vsclone.rail.load.error",
-					"Failed to load chat history. Please try again.",
+					"Failed to load chat threads. Please try again.",
 				),
 			);
 		}
 	}
 
-	private handleHistoryChange(event: IVSCloneChatHistoryChangeEvent): void {
-		if (!this.historyReady) {
-			return;
-		}
-		// History still carries legacy-only rows during migration, so background history events keep
-		// the merged catalog fresh. They must not silently import the active thread into runtime,
-		// because active pane reads are runtime-only outside the explicit open/reload boundaries.
-		this.seedThreadCatalogFromHistory(event);
-
-		const affectsActiveThread =
-			!this.activeThreadId || event.threadIds.includes(this.activeThreadId);
-		if (event.reason === "turnUpdate") {
-			if (affectsActiveThread) {
-				this.refreshConversationScheduler.schedule(24);
-				// Trigger auto-apply on the same event the streaming completes so the user never has to
-				// click the apply button on the happy path once runtime already owns the active branch.
-				this.maybeAutoApplyCompletedTurns();
-			}
-			this.refreshRailScheduler.schedule();
-			return;
-		}
-
-		if (affectsActiveThread || event.reason === "clear") {
-			this.refreshConversationScheduler.schedule(0);
-		}
-		this.refreshRailScheduler.schedule(0);
-	}
-
 	private refreshRailRows(): void {
-		if (!this.historyReady) {
+		if (!this.catalogReady) {
 			return;
 		}
 
@@ -1405,14 +1239,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (this.activeThreadId && !this.resolveThreadById(this.activeThreadId)) {
 			this.activeThreadId = undefined;
 		}
-		// Clearing history through the backend removes the active thread before the pane gets an
-		// explicit UI callback, so normalize that catalog-only path back to the fresh composer state.
+		// Normalize external thread removal back to the fresh composer state.
 		if (previousActiveThreadId && !this.activeThreadId && threads.length === 0) {
 			this.showComposerForNewChat();
 			return;
 		}
 
-		const rows = toVSCloneRailRows(threads, this.activeThreadId, (timestamp) =>
+		const rows = toVSCloneThreadRailRows(threads, this.activeThreadId, (timestamp) =>
 			fromNow(timestamp, true),
 		);
 		this.rail.setRows(rows);
@@ -1427,64 +1260,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return this.threadRuntimeService as (IVSCloneThreadRuntimeService & IVSCloneThreadRuntimeCatalogService) | undefined;
 	}
 
-	private isLegacyOnlyThreadCatalogEntry(threadId: string | undefined): boolean {
-		return !!threadId && this.threadsById.get(threadId)?.runtimeOwnedCatalog === false;
-	}
-
-	/**
-	 * History still exists as the migration/import source, so the pane keeps a merged catalog cache:
-	 * history upserts legacy-only threads, runtime overwrites any thread it already owns, and delete
-	 * events prune history-only rows without blowing away runtime-owned entries.
-	 */
-	private seedThreadCatalogFromHistory(
-		event?: {
-			readonly reason?: "initialize" | "turnUpdate" | "archive" | "delete" | "clear" | "error";
-			readonly threadIds?: readonly string[];
-		},
-	): void {
-		const importedThreads = this.historyService.getThreads({ includeArchived: true });
-		const runtimeCatalog = this.getRuntimeThreadCatalogService();
-		const importedThreadIds = new Set(
-			importedThreads
-				.map(thread => thread.threadId)
-				.filter(threadId => !runtimeCatalog?.isDeletedThread?.(threadId)),
-		);
-		if (event?.reason === "clear") {
-			for (const [threadId, entry] of this.threadsById) {
-				if (!entry.runtimeOwnedCatalog) {
-					this.threadsById.delete(threadId);
-				}
-			}
-		} else if (event?.reason === "delete") {
-			for (const threadId of event.threadIds ?? []) {
-				const cached = this.threadsById.get(threadId);
-				if (cached && !cached.runtimeOwnedCatalog) {
-					this.threadsById.delete(threadId);
-				}
-			}
-		}
-
-		for (const [threadId, entry] of this.threadsById) {
-			if (!entry.runtimeOwnedCatalog && !importedThreadIds.has(threadId)) {
-				this.threadsById.delete(threadId);
-			}
-		}
-
-		for (const thread of importedThreads) {
-			if (runtimeCatalog?.isDeletedThread?.(thread.threadId)) {
-				continue;
-			}
-			const existing = this.threadsById.get(thread.threadId);
-			if (existing?.runtimeOwnedCatalog) {
-				continue;
-			}
-			this.threadsById.set(thread.threadId, {
-				...thread,
-				runtimeOwnedCatalog: false,
-			});
-		}
-	}
-
 	private refreshThreadCatalogFromRuntime(): void {
 		const runtimeCatalog = this.getRuntimeThreadCatalogService()?.getThreads?.({
 			includeArchived: true,
@@ -1494,8 +1269,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const runtimeThreadIds = new Set(runtimeCatalog.map(thread => thread.threadId));
-		for (const [threadId, entry] of this.threadsById) {
-			if (entry.runtimeOwnedCatalog && !runtimeThreadIds.has(threadId)) {
+		for (const [threadId] of this.threadsById) {
+			if (!runtimeThreadIds.has(threadId)) {
 				this.threadsById.delete(threadId);
 			}
 		}
@@ -1507,14 +1282,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				...thread,
 				sessionResource: thread.sessionResource ?? existing?.sessionResource,
 				activeModelIdentifier: thread.activeModelIdentifier ?? existing?.activeModelIdentifier,
-				importedFromHistory: thread.importedFromHistory ?? existing?.importedFromHistory,
-				runtimeOwnedCatalog: true,
 			});
 		}
 	}
 
 	private getFilteredThreadCatalog(
-		query: IVSCloneChatHistoryQuery,
+		query: IVSCloneThreadRuntimeCatalogQuery,
 	): readonly IVSCloneThreadCatalogEntry[] {
 		const needle = query.text?.trim().toLocaleLowerCase();
 		const entries = [...this.threadsById.values()]
@@ -1590,8 +1363,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			status: overrides.status ?? this.getThreadCatalogStatusFromRuntime(state, existing),
 			turnCount: overrides.turnCount ?? turnCount,
 			lastTurnPreview: overrides.lastTurnPreview ?? lastTurnPreview,
-			importedFromHistory: overrides.importedFromHistory ?? existing?.importedFromHistory,
-			runtimeOwnedCatalog: true,
 		};
 	}
 
@@ -1602,7 +1373,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (existing?.archived) {
 			return "archived";
 		}
-		if (state.isRunning || state.streamState.kind !== "idle") {
+		if (state.streamState.kind !== "idle") {
 			return "active";
 		}
 		return existing?.status === "failed" ? "failed" : "completed";
@@ -1723,9 +1494,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const visibleText = this.stripRuntimeAssistantWorkflowMarkup(message.content);
 		if (visibleText.trim().length > 0) {
 			if (visibleText.includes("<<<<<<< SEARCH") || this.looksLikePartialSearchReplaceBlock(visibleText)) {
-				// This rendering branch is display-only. Runtime apply eligibility is decided below from
-				// durable metadata or, for imported history rows that have not been upgraded yet, a narrow
-				// compatibility fallback.
 				this.renderSearchReplaceAwareText(body, visibleText, false);
 			} else {
 				this.appendMarkdownSegment(body, visibleText, 'vsclone-thread-message-assistant-text');
@@ -1770,58 +1538,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 		return this.threadRuntimeService?.getState(threadId);
-	}
-
-	private getImportingRuntimeThreadIds(): Set<string> {
-		const target = this as unknown as {
-			importingRuntimeThreadIds?: Set<string>;
-		};
-		target.importingRuntimeThreadIds ??= new Set();
-		return target.importingRuntimeThreadIds;
-	}
-
-	/**
-	 * History import is intentionally explicit: only activation/reload/history-sync entrypoints may
-	 * call this compatibility bridge. Active pane reads stay runtime-only so they cannot silently
-	 * resurrect legacy turns after the thread should already have been migrated.
-	 */
-	private ensureRuntimeThreadImportedFromHistory(
-		threadId: string | undefined,
-	): IVSCloneThreadRuntimeState | undefined {
-		if (!threadId) {
-			return undefined;
-		}
-		const runtimeState = this.threadRuntimeService?.getState(threadId);
-		if (runtimeState) {
-			if (this.isLegacyOnlyThreadCatalogEntry(threadId)) {
-				// A stale pane cache may still think the row is history-owned even though runtime already
-				// materialized the branch. Upgrade the cached ownership immediately so later lifecycle
-				// actions route through runtime instead of back through the legacy fallback path.
-				this.syncThreadCatalogEntryFromRuntime(runtimeState);
-			}
-			return runtimeState;
-		}
-
-		// Active transcript rendering only reads runtime state. If a thread still exists solely in
-		// legacy history we import that transcript into runtime first through explicit UI/session
-		// entrypoints, then later reads/rendering consume runtime state directly.
-		const importingRuntimeThreadIds = this.getImportingRuntimeThreadIds();
-		importingRuntimeThreadIds.add(threadId);
-		try {
-			const importedState = this.threadRuntimeService?.ensureHydratedFromHistory?.(
-				threadId,
-				this.historyService.getTurns(threadId),
-			);
-			if (importedState) {
-				// Explicit imports must also flip the cached rail ownership immediately. Some runtime
-				// implementations notify asynchronously, and keeping the row marked legacy-owned in the
-				// meantime would send later delete/archive actions down the wrong fallback path.
-				this.syncThreadCatalogEntryFromRuntime(importedState);
-			}
-			return importedState;
-		} finally {
-			importingRuntimeThreadIds.delete(threadId);
-		}
 	}
 
 	private getRuntimeAssistantMessageMode(
@@ -2011,22 +1727,28 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		state: IVSCloneThreadRuntimeState,
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
 	): HTMLElement {
+		// Only terminal/edit result records carry renderer-facing output text. Pending and progress
+		// cards reuse the same shell UI but intentionally omit output so the transcript cannot imply
+		// a tool has already produced a result before the runtime has one.
+		const toolOutput = message.type === "tool_request" || message.type === "running_now"
+			? undefined
+			: message.output;
 		const item = document.createElement("div");
 		item.className = "vsclone-thread-message assistant runtime runtime-tool";
 
 		const body = document.createElement("div");
 		body.className = "vsclone-thread-message-body";
 		body.appendChild(
-			this.renderToolCard(
-				message.toolName,
-				this.getRuntimeToolDisplayLabel(message),
-				this.toRuntimeToolCardStatus(message),
-				message.output,
-				message.type === "success" && message.output
-					? this.renderToolResultDiffCard(message.toolName, message.output)
-					: undefined,
-				this.renderRuntimeToolActions(threadId, state, message),
-			),
+				this.renderToolCard(
+					message.toolName,
+					this.getRuntimeToolDisplayLabel(message),
+					this.toRuntimeToolCardStatus(message),
+					toolOutput,
+					message.type === "success" && toolOutput
+						? this.renderToolResultDiffCard(message.toolName, toolOutput)
+						: undefined,
+					this.renderRuntimeToolActions(threadId, state, message),
+				),
 		);
 		item.appendChild(body);
 		return item;
@@ -2037,18 +1759,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		state: IVSCloneThreadRuntimeState,
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
 	): HTMLElement | undefined {
-		const latestRuntimeTool = state.messages.at(-1);
-		const latestRuntimeToolParams = latestRuntimeTool?.role === "tool"
-			? latestRuntimeTool.params
-			: {};
+		const livePendingRequest = this.getLatestAwaitingRuntimeToolRequest(state);
 		// Approval controls are only rendered for the live pending request. Older tool_request cards
-		// remain historical records and should not be able to mutate the current runtime.
+		// remain historical records and should not be able to mutate the current runtime, even when a
+		// later invocation repeats the same tool name and params.
 		if (
 			message.type !== "tool_request" ||
-			state.streamState.kind !== "awaiting_user" ||
-			state.streamState.toolName !== message.toolName ||
-			this.serializeRuntimeToolParams(latestRuntimeToolParams) !==
-			this.serializeRuntimeToolParams(message.params)
+			livePendingRequest?.id !== message.id
 		) {
 			return undefined;
 		}
@@ -2095,6 +1812,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		actions.appendChild(rejectButton);
 
 		return actions;
+	}
+
+	private getLatestAwaitingRuntimeToolRequest(
+		state: Pick<IVSCloneThreadRuntimeState, "messages" | "streamState">,
+	): Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool"; readonly type: "tool_request" }> | undefined {
+		if (state.streamState.kind !== "awaiting_user") {
+			return undefined;
+		}
+
+		for (let index = state.messages.length - 1; index >= 0; index--) {
+			const message = state.messages[index];
+			if (message.role === "tool" && message.type === "tool_request") {
+				return message;
+			}
+		}
+
+		return undefined;
 	}
 
 	private getRuntimeToolDisplayLabel(
@@ -2320,40 +2054,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			);
 		} finally {
 			const latestState = this.getThreadRuntimeState(threadId);
-			if (button.isConnected && !(latestState?.isRunning)) {
+			if (button.isConnected && !isRuntimeThreadExecuting(latestState)) {
 				button.disabled = false;
 			}
 		}
 	}
 
-	private renderUserMessage(turn: IVSCloneChatHistoryTurn): HTMLElement {
-		const item = document.createElement("div");
-		item.className = "vsclone-thread-message user";
-
-		const meta = document.createElement("div");
-		meta.className = "vsclone-thread-message-meta";
-		meta.textContent = localize("vsclone.thread.userLabel", "You");
-		item.appendChild(meta);
-
-		const body = document.createElement("div");
-		body.className = "vsclone-thread-message-body";
-		if (turn.promptText.trim().length > 0) {
-			const promptText = document.createElement("div");
-			promptText.className = "vsclone-thread-message-user-text";
-			promptText.textContent = turn.promptText;
-			body.appendChild(promptText);
-		}
-		if (turn.promptImages && turn.promptImages.length > 0) {
-			body.appendChild(this.renderPromptImageStrip(turn.promptImages));
-		}
-		item.appendChild(body);
-
-		return item;
-	}
-
 	/**
-	 * User-turn images are rendered from persisted turn state so restored threads keep showing the
-	 * same attachments that were actually sent to the provider.
+	 * User-turn images are rendered from persisted runtime state so restored threads keep showing
+	 * the same attachments that were actually sent to the provider.
 	 */
 	private renderPromptImageStrip(images: readonly IVSCloneImageAttachment[]): HTMLElement {
 		const strip = document.createElement('div');
@@ -2379,77 +2088,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		return strip;
-	}
-
-	private renderAssistantMessage(turn: IVSCloneChatHistoryTurn): HTMLElement {
-		const item = document.createElement("div");
-		item.className = "vsclone-thread-message assistant";
-		item.classList.toggle("error", turn.status === "failed");
-
-		const meta = document.createElement("div");
-		meta.className = "vsclone-thread-message-meta";
-		meta.textContent = localize("vsclone.thread.assistantLabel", "Assistant");
-		item.appendChild(meta);
-
-		const body = document.createElement("div");
-		body.className = "vsclone-thread-message-body";
-		const text = turn.responsePlainText || turn.responseMarkdown;
-		const isStreaming = turn.status === "streaming";
-		if (text.trim().length > 0) {
-			if (
-				text.includes("<tool_call>") ||
-				text.includes("<tool_result") ||
-				text.includes("<agent_trace")
-			) {
-				this.renderToolAwareAssistantText(
-					body,
-					text,
-					isStreaming,
-				);
-			} else if (text.includes("<<<<<<< SEARCH") || (isStreaming && this.looksLikePartialSearchReplaceBlock(text))) {
-				this.renderSearchReplaceAwareText(body, text, isStreaming);
-			} else {
-				this.appendMarkdownSegment(
-					body,
-					text,
-					"vsclone-thread-message-text-segment",
-				);
-			}
-		} else if (turn.status === "pending" || turn.status === "streaming") {
-			body.textContent = localize(
-				"vsclone.thread.assistant.pending",
-				"Thinking...",
-			);
-			item.classList.add("streaming");
-		} else if (turn.status === "cancelled") {
-			body.textContent = localize(
-				"vsclone.thread.assistant.cancelled",
-				"Response generation was cancelled.",
-			);
-		} else if (turn.status === "failed") {
-			body.textContent = localize(
-				"vsclone.thread.assistant.failed",
-				"Something went wrong while generating the response.",
-			);
-		}
-		item.appendChild(body);
-
-		// Plan-mode turns stay intentionally non-mutating even if the model emits executable-looking
-		// SEARCH/REPLACE blocks in plain text. That closes the last mutation path outside tool calls.
-		if (
-			turn.executionMode !== "plan" &&
-			turn.status === "completed" &&
-			text.trim().length > 0 &&
-			this.editApplicationService.hasSearchReplaceBlocks(text)
-		) {
-			this.appendAssistantApplyControls(item, {
-				threadId: turn.threadId,
-				id: turn.turnId,
-				responseText: text,
-			});
-		}
-
-		return item;
 	}
 
 	/**
@@ -2511,7 +2149,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			actionButton.addEventListener(EventType.CLICK, () => {
 				void this.redoAssistantEdits(target, actionButton);
 			});
-		} else if (state.retryAction === "undo") {
+		} else if (state.phase === "partial" && state.retryAction === "undo") {
 			actionLabel.textContent = localize("vsclone.thread.assistant.apply.retryUndo", "Retry Undo");
 			actionIcon.classList.add("codicon-discard");
 			actionButton.addEventListener(EventType.CLICK, () => {
@@ -2666,7 +2304,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		button.disabled = true;
 		try {
-			const undoResult = await this.editApplicationService.undoEditApply(applyResult.fileChanges);
+			const undoResult = await this.editCodeService.undoEditApply(applyResult.fileChanges);
 			if (undoResult.failures.length > 0 && undoResult.revertedFiles.length === 0) {
 				this.notificationService.warn(
 					localize(
@@ -2732,7 +2370,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		button.disabled = true;
 		try {
-			const applyResult = await this.editApplicationService.startApplyingSearchReplaceBlocks(responseText);
+			const applyResult = await this.editCodeService.startApplyingSearchReplaceBlocks(responseText);
 			if (applyResult.appliedEdits > 0 && applyResult.failures.length > 0) {
 				this.setAssistantApplyState(target, { phase: "partial", result: applyResult, retryAction: "apply" });
 				this.notificationService.warn(
@@ -2786,705 +2424,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 	}
 
-	private renderToolAwareAssistantText(
-		container: HTMLElement,
-		text: string,
-		streaming: boolean,
-	): void {
-		type ParsedBlock = {
-			readonly kind: "tool_call" | "tool_result" | "trace";
-			readonly startOffset: number;
-			readonly endOffset: number;
-			readonly rawXml: string;
-			readonly toolName: string;
-			readonly success?: boolean;
-			readonly output?: string;
-			readonly traceType?: string;
-			readonly traceStatus?: string;
-			readonly traceMessage?: string;
-		};
-
-		const callBlocks = parseToolCalls(text).toolCalls.map<ParsedBlock>(
-			(call) => ({
-				kind: "tool_call",
-				startOffset: call.startOffset,
-				endOffset: call.endOffset,
-				rawXml: call.rawXml,
-				toolName: call.name,
-			}),
-		);
-		const resultBlocks = parseToolResultBlocks(text).map<ParsedBlock>(
-			(result) => ({
-				kind: "tool_result",
-				startOffset: result.startOffset,
-				endOffset: result.endOffset,
-				rawXml: result.rawXml,
-				toolName: result.toolName,
-				success: result.success,
-				output: result.output,
-			}),
-		);
-		const traceBlocks = parseAgentTraceBlocks(text).map<ParsedBlock>(
-			(trace) => ({
-				kind: "trace",
-				startOffset: trace.startOffset,
-				endOffset: trace.endOffset,
-				rawXml: trace.rawXml,
-				toolName: "",
-				traceType: trace.type,
-				traceStatus: trace.status,
-				traceMessage: trace.message,
-			}),
-		);
-		const hasTraceBlocks = traceBlocks.length > 0;
-		// The attempt_completion tool result is the canonical final summary for a tool-driven turn.
-		// Some models still emit the same prose before the exploratory tool call, which makes
-		// restored transcripts look duplicated and out of order once the tool card is inserted
-		// between both copies. We keep the structured completion copy and suppress the earlier
-		// provisional text only when it is materially the same long-form content.
-		const completionSummaries = resultBlocks
-			.filter((result) => result.toolName === "attempt_completion")
-			.map((result) =>
-				this.normalizeTranscriptComparisonText(result.output ?? ""),
-			)
-			.filter((value): value is string => value.length > 0);
-		const firstCompletionStartOffset = resultBlocks
-			.filter((result) => result.toolName === "attempt_completion")
-			.reduce<
-				number | undefined
-			>((earliest, result) => (earliest === undefined ? result.startOffset : Math.min(earliest, result.startOffset)), undefined);
-
-		const blocks = [...callBlocks, ...resultBlocks, ...traceBlocks].sort(
-			(left, right) => left.startOffset - right.startOffset,
-		);
-		if (blocks.length === 0) {
-			container.textContent = text;
-			return;
-		}
-
-		// Collect consecutive tool calls and thinking traces into activity groups
-		// that render as a single collapsible block instead of individual cards.
-		type ActivityItem =
-			| { readonly kind: "thinking"; readonly message: string }
-			| {
-				readonly kind: "tool";
-				readonly toolName: string;
-				readonly displayMessage: string;
-				readonly status: "running" | "complete" | "success" | "error";
-				readonly output?: string;
-				readonly diffCard?: HTMLElement;
-			};
-
-		let cursor = 0;
-		let pendingActivity: ActivityItem[] = [];
-		let pendingToolTraceName: string | undefined;
-		let pendingToolTraceMessage: string | undefined;
-
-		const addTool = (
-			toolName: string,
-			displayMessage: string,
-			status: "running" | "complete" | "success" | "error",
-			output?: string,
-			diffCard?: HTMLElement,
-		) => {
-			pendingActivity.push({
-				kind: "tool",
-				toolName,
-				displayMessage,
-				status,
-				output,
-				diffCard,
-			});
-		};
-
-		const flushPendingTool = () => {
-			if (
-				pendingToolTraceName !== undefined &&
-				pendingToolTraceName !== "\x00completion"
-			) {
-				addTool(
-					pendingToolTraceName,
-					pendingToolTraceMessage ?? pendingToolTraceName,
-					streaming ? "running" : "complete",
-				);
-				pendingToolTraceName = undefined;
-				pendingToolTraceMessage = undefined;
-			}
-		};
-
-		const flushActivity = () => {
-			flushPendingTool();
-			if (pendingActivity.length > 0) {
-				container.appendChild(
-					this.renderActivityGroup(pendingActivity, streaming),
-				);
-				pendingActivity = [];
-			}
-		};
-
-		for (const block of blocks) {
-			if (block.startOffset > cursor) {
-				const segment = text.slice(cursor, block.startOffset);
-				if (segment.trim().length > 0) {
-					flushActivity();
-					if (
-						!this.shouldSuppressProvisionalCompletionSegment(
-							segment,
-							block.startOffset,
-							firstCompletionStartOffset,
-							completionSummaries,
-						)
-					) {
-						this.appendPlainAssistantTextSegment(container, segment);
-					}
-				}
-			}
-
-			if (block.kind === "tool_call") {
-				if (!hasTraceBlocks) {
-					flushPendingTool();
-					addTool(
-						block.toolName,
-						block.toolName,
-						streaming ? "running" : "complete",
-					);
-				}
-			} else if (block.kind === "tool_result") {
-				const diffCard =
-					block.success && block.output
-						? this.renderToolResultDiffCard(block.toolName, block.output)
-						: undefined;
-
-				if (
-					block.toolName === "attempt_completion" ||
-					pendingToolTraceName === "\x00completion"
-				) {
-					flushActivity();
-					this.appendMarkdownSegment(
-						container,
-						block.output ?? "",
-						"vsclone-thread-message-text-segment",
-					);
-					pendingToolTraceName = undefined;
-					pendingToolTraceMessage = undefined;
-				} else if (hasTraceBlocks && pendingToolTraceName !== undefined) {
-					addTool(
-						pendingToolTraceName,
-						pendingToolTraceMessage ?? pendingToolTraceName,
-						block.success ? "success" : "error",
-						block.output,
-						diffCard ?? undefined,
-					);
-					pendingToolTraceName = undefined;
-					pendingToolTraceMessage = undefined;
-				} else {
-					flushPendingTool();
-					if (diffCard) {
-						addTool(
-							block.toolName,
-							block.toolName,
-							block.success ? "success" : "error",
-							block.output,
-							diffCard,
-						);
-					} else if (!hasTraceBlocks && block.output?.trim()) {
-						addTool(
-							block.toolName,
-							block.toolName,
-							block.success ? "success" : "error",
-							block.output,
-						);
-					} else if (!hasTraceBlocks) {
-						addTool(
-							block.toolName,
-							block.toolName,
-							block.success ? "success" : "error",
-						);
-					}
-				}
-			} else {
-				// Agent trace block
-				if (block.traceType === "thinking") {
-					flushPendingTool();
-					pendingActivity.push({
-						kind: "thinking",
-						message: block.traceMessage ?? "",
-					});
-				} else if (block.traceType === "tool") {
-					const msg = block.traceMessage ?? "";
-					const isCompletion =
-						msg.toLowerCase().includes("attempt") &&
-						msg.toLowerCase().includes("completion");
-					if (isCompletion) {
-						flushPendingTool();
-						pendingToolTraceName = "\x00completion";
-						pendingToolTraceMessage = undefined;
-					} else {
-						flushPendingTool();
-						pendingToolTraceName = msg;
-						pendingToolTraceMessage = block.traceMessage;
-					}
-				} else if (block.traceType === "tool_result") {
-					if (pendingToolTraceName === "\x00completion") {
-						pendingToolTraceName = undefined;
-						pendingToolTraceMessage = undefined;
-					} else if (pendingToolTraceName !== undefined) {
-						addTool(
-							pendingToolTraceName,
-							pendingToolTraceMessage ?? pendingToolTraceName,
-							block.traceStatus === "success"
-								? "success"
-								: block.traceStatus === "error"
-									? "error"
-									: "complete",
-							block.traceMessage,
-						);
-						pendingToolTraceName = undefined;
-						pendingToolTraceMessage = undefined;
-					} else {
-						// Orphan tool_result trace - its tool was already paired via a
-						// structured <tool_result> block. Silently discard the duplicate.
-					}
-				} else {
-					flushPendingTool();
-					pendingActivity.push({
-						kind: "thinking",
-						message: block.traceMessage ?? "",
-					});
-				}
-			}
-			cursor = block.endOffset;
-		}
-
-		flushActivity();
-
-		if (cursor < text.length) {
-			this.appendPlainAssistantTextSegment(container, text.slice(cursor));
-		}
-	}
-
 	/**
 	 * Turns transcript text into a whitespace-insensitive comparison key so restored summaries can
 	 * be matched even when markdown serialization changed line wrapping between iterations.
 	 */
-	private normalizeTranscriptComparisonText(value: string): string {
-		return value.replace(/\s+/g, " ").trim().toLowerCase();
-	}
-
-	/**
-	 * The prompt asks the model to emit a single short "Thinking:" line immediately before each
-	 * tool call, but streamed output still sometimes collapses multiple thinking lines and trailing
-	 * prose into one run. We recover that structure here so the UI remains stable even when the
-	 * model omits the expected newlines.
-	 */
-	private extractPlainAssistantSegments(text: string): ReadonlyArray<{
-		readonly kind: "thinking" | "text";
-		readonly value: string;
-	}> {
-		const segments: { kind: "thinking" | "text"; value: string }[] = [];
-		let cursor = 0;
-		let searchOffset = 0;
-
-		const pushSegment = (kind: "thinking" | "text", value: string) => {
-			if (!value.trim()) {
-				return;
-			}
-
-			const previous =
-				segments.length > 0 ? segments[segments.length - 1] : undefined;
-			if (kind === "text" && previous?.kind === kind) {
-				previous.value = `${previous.value}\n${value.trim()}`;
-				return;
-			}
-
-			segments.push({ kind, value: value.trim() });
-		};
-
-		while (true) {
-			const markerOffset = this.findNextPlainThinkingMarker(text, searchOffset);
-			if (markerOffset < 0) {
-				break;
-			}
-
-			pushSegment("text", text.slice(cursor, markerOffset));
-
-			const messageStartOffset = markerOffset + "Thinking:".length;
-			const nextMarkerOffset = this.findNextPlainThinkingMarker(
-				text,
-				messageStartOffset,
-			);
-			const messageEndOffset =
-				nextMarkerOffset >= 0 ? nextMarkerOffset : text.length;
-			const { message, trailingText } =
-				this.splitThinkingMessageAndTrailingText(
-					text.slice(messageStartOffset, messageEndOffset),
-				);
-			pushSegment("thinking", message);
-			pushSegment("text", trailingText);
-
-			cursor = messageEndOffset;
-			searchOffset = messageEndOffset;
-		}
-
-		pushSegment("text", text.slice(cursor));
-		return segments;
-	}
-
-	/**
-	 * Plain-text thinking markers are only considered structural when they start a new sentence or
-	 * line. This prevents normal prose like `The label "Thinking:"` from being misclassified.
-	 */
-	private findNextPlainThinkingMarker(
-		text: string,
-		fromOffset: number,
-	): number {
-		let searchOffset = fromOffset;
-		while (true) {
-			const markerOffset = text.indexOf("Thinking:", searchOffset);
-			if (markerOffset < 0) {
-				return -1;
-			}
-
-			if (
-				markerOffset === 0 ||
-				/[\s.!?;:)\]}"'`>-]/.test(text[markerOffset - 1])
-			) {
-				return markerOffset;
-			}
-
-			searchOffset = markerOffset + "Thinking:".length;
-		}
-	}
-
-	/**
-	 * Recover user-facing prose that the model occasionally appends to the same line as a thinking
-	 * sentence. Because the prompt contract is "one short sentence", the first clear sentence break
-	 * is the safest place to split the planning note from the visible answer text.
-	 */
-	private splitThinkingMessageAndTrailingText(value: string): {
-		readonly message: string;
-		readonly trailingText: string;
-	} {
-		const trimmed = value.trim();
-		if (!trimmed) {
-			return { message: "", trailingText: "" };
-		}
-
-		const proseBoundary = /([.!?]["')\]]*)(\s*)(?=[A-Z0-9"'`([{])/;
-		const boundaryMatch = proseBoundary.exec(trimmed);
-		if (!boundaryMatch) {
-			return { message: trimmed, trailingText: "" };
-		}
-
-		const messageEndOffset = boundaryMatch.index + boundaryMatch[1].length;
-		return {
-			message: trimmed.slice(0, messageEndOffset).trim(),
-			trailingText: trimmed
-				.slice(boundaryMatch.index + boundaryMatch[0].length)
-				.trim(),
-		};
-	}
-
-	/**
-	 * The model occasionally emits a draft summary before exploratory tool calls and then repeats
-	 * the same content through attempt_completion once it has finished. Keeping both copies makes a
-	 * restored thread look like the final summary rendered before the tool card. We only suppress
-	 * long duplicate prose that occurs before the first completion result so short shared phrases
-	 * such as "Task complete" are never hidden accidentally.
-	 */
-	private shouldSuppressProvisionalCompletionSegment(
-		segment: string,
-		segmentEndOffset: number,
-		firstCompletionStartOffset: number | undefined,
-		completionSummaries: readonly string[],
-	): boolean {
-		if (
-			firstCompletionStartOffset === undefined ||
-			segmentEndOffset > firstCompletionStartOffset ||
-			completionSummaries.length === 0
-		) {
-			return false;
-		}
-
-		const normalizedSegment = this.normalizeTranscriptComparisonText(segment);
-		if (normalizedSegment.length < 40) {
-			return false;
-		}
-
-		return completionSummaries.some(
-			(summary) =>
-				summary === normalizedSegment ||
-				summary.includes(normalizedSegment) ||
-				normalizedSegment.includes(summary),
-		);
-	}
-
-	private appendPlainAssistantTextSegment(
-		container: HTMLElement,
-		text: string,
-	): void {
-		if (!text || text.trim().length === 0) {
-			return;
-		}
-
-		let normalLines: string[] = [];
-		let thinkingMessages: string[] = [];
-
-		const flushNormal = () => {
-			const joined = normalLines.join("\n").trim();
-			if (joined) {
-				this.appendMarkdownSegment(
-					container,
-					joined,
-					"vsclone-thread-message-text-segment",
-				);
-			}
-			normalLines = [];
-		};
-
-		const flushThinking = () => {
-			if (thinkingMessages.length > 0) {
-				container.appendChild(
-					this.renderCollapsibleThinkingBlock(thinkingMessages, false),
-				);
-				thinkingMessages = [];
-			}
-		};
-
-		for (const segment of this.extractPlainAssistantSegments(text)) {
-			if (segment.kind === "thinking") {
-				flushNormal();
-				thinkingMessages.push(segment.value);
-				continue;
-			}
-
-			for (const line of segment.value.split("\n")) {
-				const trimmed = line.trim();
-				if (/^\[Agent iteration \d+\]$/.test(trimmed) || trimmed === "---") {
-					// Internal agent loop markers: suppress them from the UI.
-					continue;
-				}
-
-				flushThinking();
-				normalLines.push(line);
-			}
-		}
-
-		flushThinking();
-		flushNormal();
-	}
-
-	/**
-	 * Renders consecutive thinking traces as a collapsible disclosure block.
-	 * While streaming, the block is expanded; once complete, it collapses to a single summary line.
-	 */
-	private renderCollapsibleThinkingBlock(
-		messages: string[],
-		streaming: boolean,
-	): HTMLElement {
-		const details = document.createElement("details");
-		details.className = "vsclone-thinking-block";
-		if (streaming) {
-			details.open = true;
-		}
-
-		const summary = document.createElement("summary");
-		summary.className = "vsclone-thinking-summary";
-
-		const icon = document.createElement("span");
-		icon.className = "codicon codicon-lightbulb vsclone-thinking-icon";
-		summary.appendChild(icon);
-
-		const label = document.createElement("span");
-		label.textContent = streaming
-			? localize("vsclone.thread.thinking.active", "Thinking...")
-			: localize(
-				"vsclone.thread.thinking.label",
-				"Thinking ({0} steps)",
-				messages.length.toString(),
-			);
-		summary.appendChild(label);
-
-		details.appendChild(summary);
-
-		const content = document.createElement("div");
-		content.className = "vsclone-thinking-content";
-		for (const msg of messages) {
-			if (msg.trim()) {
-				const step = document.createElement("div");
-				step.className = "vsclone-thinking-step";
-				step.textContent = msg;
-				content.appendChild(step);
-			}
-		}
-		details.appendChild(content);
-
-		return details;
-	}
-
-	/**
-	 * Renders a group of consecutive activity items (tool calls and thinking traces)
-	 * as a single collapsible block instead of individual cards.
-	 */
-	private renderActivityGroup(
-		items: ReadonlyArray<
-			| { readonly kind: "thinking"; readonly message: string }
-			| {
-				readonly kind: "tool";
-				readonly toolName: string;
-				readonly displayMessage: string;
-				readonly status: "running" | "complete" | "success" | "error";
-				readonly output?: string;
-				readonly diffCard?: HTMLElement;
-			}
-		>,
-		streaming: boolean,
-	): HTMLElement {
-		const toolItems = items.filter(
-			(i): i is Extract<typeof i, { kind: "tool" }> => i.kind === "tool",
-		);
-		const thinkingItems = items.filter(
-			(i): i is Extract<typeof i, { kind: "thinking" }> =>
-				i.kind === "thinking",
-		);
-		const hasDiffCards = toolItems.some((t) => t.diffCard);
-
-		// Single tool with no thinking -> keep the existing card presentation so a lone tool call
-		// does not get wrapped in a heavier grouped container.
-		if (toolItems.length === 1 && thinkingItems.length === 0) {
-			const t = toolItems[0];
-			return this.renderToolCard(
-				t.toolName,
-				t.displayMessage,
-				t.status,
-				t.output,
-				t.diffCard,
-			);
-		}
-
-		// Thinking-only output should continue using the dedicated collapsible block because
-		// that presentation already matches the intent of streamed reasoning content.
-		if (toolItems.length === 0 && thinkingItems.length > 0) {
-			return this.renderCollapsibleThinkingBlock(
-				thinkingItems.map((t) => t.message),
-				streaming,
-			);
-		}
-
-		// Mixed or multi-item activity is grouped so the transcript stays compact while still
-		// making the detailed timeline available on demand.
-		const details = document.createElement("details");
-		details.className = "vsclone-activity-group";
-		if (streaming || hasDiffCards) {
-			details.open = true;
-		}
-
-		const summaryEl = document.createElement("summary");
-		summaryEl.className = "vsclone-activity-summary";
-
-		const icon = document.createElement("span");
-		icon.className = "codicon codicon-tools vsclone-activity-icon";
-		summaryEl.appendChild(icon);
-
-		const label = document.createElement("span");
-		const isRunning =
-			streaming && toolItems.some((t) => t.status === "running");
-		if (isRunning) {
-			label.textContent = localize(
-				"vsclone.activity.running",
-				"Running tools...",
-			);
-		} else {
-			label.textContent =
-				toolItems.length === 1
-					? localize("vsclone.activity.single", "Used 1 tool")
-					: localize(
-						"vsclone.activity.count",
-						"Used {0} tools",
-						toolItems.length.toString(),
-					);
-		}
-		summaryEl.appendChild(label);
-
-		details.appendChild(summaryEl);
-
-		const content = document.createElement("div");
-		content.className = "vsclone-activity-content";
-
-		// Render thinking as a nested collapsible if present
-		if (thinkingItems.length > 0) {
-			content.appendChild(
-				this.renderCollapsibleThinkingBlock(
-					thinkingItems.map((t) => t.message),
-					streaming,
-				),
-			);
-		}
-
-		// Render compact tool rows
-		for (const tool of toolItems) {
-			content.appendChild(
-				this.renderCompactToolRow(
-					tool.toolName,
-					tool.displayMessage,
-					tool.status,
-				),
-			);
-			if (tool.diffCard) {
-				content.appendChild(tool.diffCard);
-			}
-		}
-
-		details.appendChild(content);
-		return details;
-	}
-
-	/**
-	 * Renders a single tool call as a compact one-line row with status icon, tool icon, and label.
-	 */
-	private renderCompactToolRow(
-		toolName: string,
-		displayMessage: string,
-		status: "running" | "complete" | "success" | "error",
-	): HTMLElement {
-		const row = document.createElement("div");
-		row.className = "vsclone-activity-row";
-		row.classList.add(`status-${status}`);
-
-		const statusIcon = document.createElement("span");
-		statusIcon.className = "vsclone-activity-row-status";
-		switch (status) {
-			case "running":
-				statusIcon.classList.add(
-					"codicon",
-					"codicon-loading",
-					"codicon-modifier-spin",
-				);
-				break;
-			case "success":
-				statusIcon.classList.add("codicon", "codicon-check");
-				break;
-			case "error":
-				statusIcon.classList.add("codicon", "codicon-error");
-				break;
-			default:
-				statusIcon.classList.add("codicon", "codicon-check");
-				break;
-		}
-		row.appendChild(statusIcon);
-
-		const toolIcon = document.createElement("span");
-		toolIcon.className = `codicon vsclone-activity-row-icon ${this.getToolIconClass(toolName)}`;
-		row.appendChild(toolIcon);
-
-		const labelEl = document.createElement("span");
-		labelEl.className = "vsclone-activity-row-label";
-		labelEl.textContent = displayMessage;
-		row.appendChild(labelEl);
-
-		return row;
-	}
-
 	/**
 	 * Renders a tool call and its result as a paired card with an icon, status, and optional
 	 * collapsible output or diff card.
@@ -4136,249 +3079,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return { lines: renderedLines, titleNavigation };
 	}
 
-	/**
-	 * Legacy tool results used `@@ change N @@` markers that described hunk order but not the
-	 * actual file location. To keep older transcript cards useful after we switched formats, the
-	 * renderer rehydrates a best-effort line mapping by matching the modified hunk text against
-	 * the current file contents.
-	 */
-	private async resolveLegacyDiffNavigation(
-		fileUri: string,
-		diff: string,
-	): Promise<
-		| {
-			readonly titleNavigation: IDiffLineNavigationState;
-			readonly lineNumbers: Map<number, number>;
-		}
-		| undefined
-	> {
-		const diffLines = diff.split("\n");
-		const legacyHunks = this.parseLegacyDiffHunks(diffLines);
-		if (legacyHunks.length === 0) {
-			return undefined;
-		}
-
-		const content = await this.readDiffTargetContents(URI.parse(fileUri));
-		if (content === undefined) {
-			return undefined;
-		}
-
-		const fileLines = splitLines(content).map((line) =>
-			line.replace(/\r$/, ""),
-		);
-		const lineNumbers = new Map<number, number>();
-		const titleNavigation: IDiffLineNavigationState = {};
-		let searchStartIndex = 0;
-
-		for (const hunk of legacyHunks) {
-			const modifiedLines = hunk.lines
-				.filter((line) => !line.startsWith("-"))
-				.map((line) => this.stripDiffLinePrefix(line));
-			const startIndex = this.findLegacyDiffStartIndex(
-				fileLines,
-				modifiedLines,
-				searchStartIndex,
-			);
-			if (startIndex === undefined) {
-				continue;
-			}
-
-			let currentLineNumber = startIndex + 1;
-			titleNavigation.startLineNumber ??= currentLineNumber;
-			for (let index = 0; index < hunk.lines.length; index++) {
-				const rawLine = hunk.lines[index];
-				lineNumbers.set(hunk.lineIndexes[index], currentLineNumber);
-				if (!rawLine.startsWith("-")) {
-					titleNavigation.endLineNumber =
-						titleNavigation.endLineNumber !== undefined
-							? Math.max(titleNavigation.endLineNumber, currentLineNumber)
-							: currentLineNumber;
-					currentLineNumber += 1;
-				}
-			}
-
-			searchStartIndex = Math.max(searchStartIndex, currentLineNumber - 1);
-		}
-
-		if (
-			titleNavigation.startLineNumber !== undefined &&
-			titleNavigation.endLineNumber === undefined
-		) {
-			titleNavigation.endLineNumber = titleNavigation.startLineNumber;
-		}
-
-		return lineNumbers.size > 0 ? { titleNavigation, lineNumbers } : undefined;
-	}
-
-	private parseLegacyDiffHunks(
-		diffLines: readonly string[],
-	): readonly ILegacyDiffHunk[] {
-		const hunks: ILegacyDiffHunk[] = [];
-		let currentLineIndexes: number[] | undefined;
-		let currentLines: string[] | undefined;
-
-		for (let index = 0; index < diffLines.length; index++) {
-			const line = diffLines[index];
-			if (/^@@\s*change\s+\d+\s*@@$/.test(line)) {
-				if (currentLineIndexes && currentLines && currentLines.length > 0) {
-					hunks.push({ lineIndexes: currentLineIndexes, lines: currentLines });
-				}
-				currentLineIndexes = [];
-				currentLines = [];
-				continue;
-			}
-
-			if (!currentLineIndexes || !currentLines) {
-				continue;
-			}
-
-			if (line.startsWith("@@")) {
-				if (currentLines.length > 0) {
-					hunks.push({ lineIndexes: currentLineIndexes, lines: currentLines });
-				}
-				currentLineIndexes = undefined;
-				currentLines = undefined;
-				continue;
-			}
-
-			if (line.startsWith("---") || line.startsWith("+++")) {
-				continue;
-			}
-
-			currentLineIndexes.push(index);
-			currentLines.push(line);
-		}
-
-		if (currentLineIndexes && currentLines && currentLines.length > 0) {
-			hunks.push({ lineIndexes: currentLineIndexes, lines: currentLines });
-		}
-
-		return hunks;
-	}
-
-	private async readDiffTargetContents(
-		resource: URI,
-	): Promise<string | undefined> {
-		const modelService = this.modelService as IModelService | undefined;
-		const fileService = this.fileService as IFileService | undefined;
-		const openModel = modelService?.getModel(resource);
-		if (openModel) {
-			return openModel.getValue();
-		}
-
-		if (!fileService) {
-			return undefined;
-		}
-
-		try {
-			const fileContents = await fileService.readFile(resource);
-			return fileContents.value.toString();
-		} catch {
-			return undefined;
-		}
-	}
-
-	private findLegacyDiffStartIndex(
-		fileLines: readonly string[],
-		modifiedLines: readonly string[],
-		searchStartIndex: number,
-	): number | undefined {
-		const exactMatch = this.findLegacyDiffStartIndexWithComparator(
-			fileLines,
-			modifiedLines,
-			searchStartIndex,
-			(left, right) => left === right,
-		);
-		if (exactMatch !== undefined) {
-			return exactMatch;
-		}
-
-		return this.findLegacyDiffStartIndexWithComparator(
-			fileLines,
-			modifiedLines,
-			searchStartIndex,
-			(left, right) => left.trim() === right.trim(),
-		);
-	}
-
-	private findLegacyDiffStartIndexWithComparator(
-		fileLines: readonly string[],
-		modifiedLines: readonly string[],
-		searchStartIndex: number,
-		equals: (left: string, right: string) => boolean,
-	): number | undefined {
-		if (modifiedLines.length === 0) {
-			return undefined;
-		}
-
-		for (
-			let blockLength = modifiedLines.length;
-			blockLength >= 1;
-			blockLength--
-		) {
-			for (
-				let offset = 0;
-				offset <= modifiedLines.length - blockLength;
-				offset++
-			) {
-				const block = modifiedLines.slice(offset, offset + blockLength);
-				const matchIndex = this.findContiguousLineBlock(
-					fileLines,
-					block,
-					searchStartIndex,
-					equals,
-				);
-				if (matchIndex !== undefined) {
-					return Math.max(searchStartIndex, matchIndex - offset);
-				}
-			}
-		}
-
-		return undefined;
-	}
-
-	private findContiguousLineBlock(
-		fileLines: readonly string[],
-		block: readonly string[],
-		searchStartIndex: number,
-		equals: (left: string, right: string) => boolean,
-	): number | undefined {
-		if (block.length === 0 || fileLines.length < block.length) {
-			return undefined;
-		}
-
-		for (
-			let index = searchStartIndex;
-			index <= fileLines.length - block.length;
-			index++
-		) {
-			let matches = true;
-			for (let blockIndex = 0; blockIndex < block.length; blockIndex++) {
-				if (!equals(fileLines[index + blockIndex], block[blockIndex])) {
-					matches = false;
-					break;
-				}
-			}
-			if (matches) {
-				return index;
-			}
-		}
-
-		return undefined;
-	}
-
-	private stripDiffLinePrefix(line: string): string {
-		if (
-			(line.startsWith("+") && !line.startsWith("+++")) ||
-			(line.startsWith("-") && !line.startsWith("---")) ||
-			line.startsWith(" ")
-		) {
-			return line.slice(1);
-		}
-
-		return line;
-	}
-
 	private formatDiffLineLabel(
 		navigation: IDiffLineNavigationState,
 	): string | undefined {
@@ -4459,12 +3159,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			...renderedDiff.titleNavigation,
 		};
 		let lineBadge: HTMLAnchorElement | HTMLSpanElement | undefined;
-		const renderedLineEntries: Array<{
-			readonly sourceLineIndex: number;
-			readonly state: IDiffLineNavigationState;
-			readonly line: HTMLElement;
-			readonly gutter?: HTMLElement;
-		}> = [];
 
 		if (filename) {
 			const langLabel = this.getLanguageLabelFromFilename(filename);
@@ -4525,61 +3219,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				titleBar.appendChild(lineBadge);
 			}
 
-			if (
-				fileUri &&
-				titleNavigation.startLineNumber === undefined &&
-				/^@@\s*change\s+\d+\s*@@/m.test(parsedDiff.diff)
-			) {
-				void this.resolveLegacyDiffNavigation(fileUri, parsedDiff.diff).then(
-					(resolvedNavigation) => {
-						if (!resolvedNavigation) {
-							return;
-						}
-
-						titleNavigation.startLineNumber =
-							resolvedNavigation.titleNavigation.startLineNumber;
-						titleNavigation.endLineNumber =
-							resolvedNavigation.titleNavigation.endLineNumber;
-						if (titleNavigation.startLineNumber !== undefined) {
-							fileLabel.title = localize(
-								"vsclone.thread.toolDiff.openAtLineTitle",
-								"Open {0} at line {1}",
-								filename,
-								titleNavigation.startLineNumber.toString(),
-							);
-							if (lineBadge) {
-								lineBadge.hidden = false;
-								lineBadge.textContent =
-									this.formatDiffLineLabel(titleNavigation) ?? "";
-								lineBadge.title = localize(
-									"vsclone.thread.toolDiff.openLineTitle",
-									"Open line {0}",
-									titleNavigation.startLineNumber.toString(),
-								);
-							}
-						}
-
-						for (const entry of renderedLineEntries) {
-							const resolvedLineNumber = resolvedNavigation.lineNumbers.get(
-								entry.sourceLineIndex,
-							);
-							if (resolvedLineNumber !== undefined) {
-								entry.state.startLineNumber = resolvedLineNumber;
-								entry.state.endLineNumber = resolvedLineNumber;
-								if (entry.gutter) {
-									entry.gutter.textContent = resolvedLineNumber.toString();
-								}
-								entry.line.classList.add("clickable");
-								entry.line.title = localize(
-									"vsclone.thread.toolDiff.openChangedLineTitle",
-									"Open changed line {0}",
-									resolvedLineNumber.toString(),
-								);
-							}
-						}
-					},
-				);
-			}
 		} else {
 			const label = document.createElement("span");
 			label.className = "vsclone-tool-diff-title-filename";
@@ -4626,9 +3265,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				line.classList.add(diffLine.kind);
 			}
 
-			let gutter: HTMLElement | undefined;
 			if (diffLine.kind !== "file" && diffLine.kind !== "hunk") {
-				gutter = document.createElement("span");
+				const gutter = document.createElement("span");
 				gutter.className = "vsclone-tool-diff-gutter";
 				gutter.textContent =
 					lineNavigation.startLineNumber !== undefined
@@ -4657,12 +3295,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					}
 				});
 			}
-			renderedLineEntries.push({
-				sourceLineIndex: diffLine.sourceLineIndex,
-				state: lineNavigation,
-				line,
-				gutter,
-			});
 
 			body.appendChild(line);
 		}
@@ -4708,27 +3340,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	/**
-	 * Active edit application is runtime-owned now. The pane only consumes the durable assistant
+	 * Active edit application is runtime-owned. The pane only consumes the durable assistant
 	 * edit-suggestion metadata stamped onto runtime messages, so SEARCH/REPLACE eligibility is not
-	 * re-derived from rendered transcript text on every refresh. History-imported suggestions stay
-	 * manual-only and plan-mode messages stay non-applicable because the runtime encoded that mode
-	 * before the pane ever renders them.
+	 * re-derived from rendered transcript text on every refresh. Plan-mode messages stay
+	 * non-applicable because the runtime encoded that mode before the pane ever renders them.
 	 */
-	private maybeAutoApplyCompletedTurns(): void {
-		if (!this.activeThreadId) {
-			return;
-		}
-		const runtimeState = this.getThreadRuntimeState(this.activeThreadId);
-		if (!runtimeState) {
-			return;
-		}
-		this.maybeAutoApplyRuntimeAssistantMessages(runtimeState);
-	}
-
 	private maybeAutoApplyRuntimeAssistantMessages(state: IVSCloneThreadRuntimeState): void {
-		if (this.getImportingRuntimeThreadIds().has(state.threadId)) {
-			return;
-		}
 		if (this.isThreadBusy(state.threadId)) {
 			return;
 		}
@@ -4759,7 +3376,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private async runAutoApply(target: IAssistantApplyTarget, responseText: string): Promise<void> {
 		try {
-			const applyResult = await this.editApplicationService.startApplyingSearchReplaceBlocks(responseText);
+			const applyResult = await this.editCodeService.startApplyingSearchReplaceBlocks(responseText);
 			if (applyResult.appliedEdits > 0 && applyResult.failures.length > 0) {
 				// Auto-apply can leave the workspace in a mixed state if some SEARCH/REPLACE blocks land
 				// and later ones fail. Persist that partial phase so the retry summary stays visible.
@@ -4988,7 +3605,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private isThreadBusy(threadId: string): boolean {
 		const runtimeState = this.getThreadRuntimeState(threadId);
 		if (runtimeState) {
-			return runtimeState.isRunning || runtimeState.streamState.kind !== "idle";
+			return runtimeState.streamState.kind !== "idle";
 		}
 		return false;
 	}
@@ -4999,7 +3616,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		this.rootContainer.classList.toggle("rail-hidden", !this.railVisible);
-		this.rootContainer.classList.toggle("history-screen", this.railVisible);
+		this.rootContainer.classList.toggle("thread-rail-screen", this.railVisible);
 		this.railContainer.style.width = this.railVisible ? "100%" : "0px";
 		this.railResizeHandle.style.display = "none";
 		if (this.conversationContainer) {
@@ -5110,7 +3727,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		threadId: string | undefined,
 	): IVSCloneModelSelection | undefined {
 		const selectedModel =
-			this.modelSelectionService.getCurrentSelectionForThread(
+			this.settingsService.getCurrentSelectionForFeature(
 				threadId ?? "",
 				"chat",
 			);
@@ -5118,7 +3735,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 
-		const selectedModelDescriptor = this.modelCatalogService.getModel(
+		const selectedModelDescriptor = this.settingsService.getModel(
 			selectedModel.modelIdentifier,
 		);
 		const supportedReasoningLevels =
@@ -5159,12 +3776,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const selectedModel =
-			this.modelSelectionService.getCurrentSelectionForThread(
+			this.settingsService.getCurrentSelectionForFeature(
 				this.activeThreadId ?? "",
 				"chat",
 			);
 		const selectedModelDescriptor = selectedModel
-			? this.modelCatalogService.getModel(selectedModel.modelIdentifier)
+			? this.settingsService.getModel(selectedModel.modelIdentifier)
 			: undefined;
 		const supportedReasoningLevels =
 			selectedModelDescriptor?.reasoningEffortLevels;
@@ -5205,12 +3822,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const selectedModel =
-			this.modelSelectionService.getCurrentSelectionForThread(
+			this.settingsService.getCurrentSelectionForFeature(
 				this.activeThreadId ?? "",
 				"chat",
 			);
 		const selectedModelDescriptor = selectedModel
-			? this.modelCatalogService.getModel(selectedModel.modelIdentifier)
+			? this.settingsService.getModel(selectedModel.modelIdentifier)
 			: undefined;
 		const supportedReasoningLevels =
 			selectedModelDescriptor?.reasoningEffortLevels;
@@ -5231,7 +3848,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
-		await this.modelSelectionService.setSelectionForThread(
+		await this.settingsService.setSelectionForFeature(
 			this.activeThreadId ?? "",
 			{
 				...selectedModel,
@@ -5279,9 +3896,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 
-		const runtimeState = threadId
-			? this.ensureExplicitActionThreadImported(candidateThreadId)
-			: this.threadRuntimeService?.getState(candidateThreadId);
+		const runtimeState = this.threadRuntimeService?.getState(candidateThreadId);
 		if (runtimeState) {
 			for (let index = runtimeState.messages.length - 1; index >= 0; index--) {
 				const message = runtimeState.messages[index];
@@ -5306,9 +3921,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 
-		const runtimeState = threadId
-			? this.ensureExplicitActionThreadImported(candidateThreadId)
-			: this.threadRuntimeService?.getState(candidateThreadId);
+		const runtimeState = this.threadRuntimeService?.getState(candidateThreadId);
 		if (runtimeState) {
 			for (let index = runtimeState.messages.length - 1; index >= 0; index--) {
 				const message = runtimeState.messages[index];
@@ -5321,20 +3934,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 		return undefined;
-	}
-
-	private ensureExplicitActionThreadImported(
-		threadId: string,
-	): IVSCloneThreadRuntimeState | undefined {
-		const runtimeState = this.threadRuntimeService?.getState(threadId);
-		if (!this.isLegacyOnlyThreadCatalogEntry(threadId)) {
-			return runtimeState;
-		}
-
-		// Explicit rail-row actions on a specific legacy-only thread are the one remaining import
-		// boundary for copy/reuse helpers. Runtime-owned rows that simply lack visible messages must
-		// still stay runtime-only so an explicit action cannot accidentally fall back to history.
-		return this.ensureRuntimeThreadImportedFromHistory(threadId);
 	}
 
 	private hasPendingAssistantApply(
@@ -5372,8 +3971,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const runtimeState = this.threadRuntimeService.getState?.(threadId);
 		if (runtimeState) {
 			// Lifecycle actions must honor the live runtime branch even if the pane cache is stale.
-			// Without this sync, a row that was already imported into runtime can still look legacy-
-			// owned here and incorrectly fall back to transcript-era delete/archive behavior.
+			// Without this sync, a stale cache entry can cause incorrect delete/archive behavior.
 			this.syncThreadCatalogEntryFromRuntime(runtimeState);
 		}
 		return this.threadsById.get(threadId);
@@ -5390,32 +3988,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private async deleteThread(threadId: string): Promise<void> {
-		this.sessionService.cancelThread(threadId);
 		const existing = this.resolveThreadByIdForLifecycleAction(threadId);
-		let deletedInRuntime = false;
-		let legacyCleanupFailed = false;
 		try {
-			const runtimeCatalog = this.getRuntimeThreadCatalogService();
-			if (runtimeCatalog.deleteThread && existing?.runtimeOwnedCatalog !== false) {
-				const deletedByRuntime = await runtimeCatalog.deleteThread(threadId);
-				if (!deletedByRuntime) {
-					throw new Error("Thread delete was rejected by the runtime catalog.");
-				}
-				deletedInRuntime = true;
-				// Runtime delete succeeded, so we also remove the legacy history record during migration.
-				// That keeps the deleted thread from reappearing after a reload when history is still read
-				// as the fallback import source for older workspace state. If that cleanup fails, the
-				// runtime service still persists a deleted-thread tombstone so reloads keep honoring the
-				// runtime delete until history cleanup can eventually succeed.
-				try {
-					await this.historyService.deleteThread(threadId);
-				} catch {
-					legacyCleanupFailed = true;
-				}
-			} else {
-				// Runtime-owned delete is the intended steady state. Falling back to history here only keeps
-				// migration-era builds functional until the runtime catalog service is wired everywhere.
-				await this.historyService.deleteThread(threadId);
+			if (!existing) {
+				throw new Error("Thread delete requires a runtime catalog entry.");
+			}
+
+			const deletedByRuntime = await this.chatThreadService.deleteThread(threadId);
+			if (!deletedByRuntime) {
+				throw new Error("Thread delete was rejected by the runtime catalog.");
 			}
 		} catch {
 			this.notificationService.error(
@@ -5435,14 +4016,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.refreshRailRows();
 		this.refreshModelControls();
 		this.refreshConversation();
-		if (legacyCleanupFailed && deletedInRuntime) {
-			this.notificationService.error(
-				localize(
-					"vsclone.rail.delete.cleanupError",
-					"Deleted the chat, but failed to clean up legacy history. It may reappear after reload.",
-				),
-			);
-		}
 	}
 
 	private async setThreadArchived(
@@ -5462,15 +4035,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		try {
 			const runtimeCatalog = this.getRuntimeThreadCatalogService();
-			if (runtimeCatalog.archiveThread && existing?.runtimeOwnedCatalog !== false) {
-				const archivedInRuntime = await runtimeCatalog.archiveThread(threadId, archived);
-				if (archivedInRuntime === false) {
-					throw new Error("Thread archive was rejected by the runtime catalog.");
-				}
-			} else {
-				// History remains the compatibility persistence path until the runtime catalog service owns
-				// archive/delete in every build. The pane cache still updates immediately from runtime data.
-				await this.historyService.archiveThread(threadId, archived);
+			if (!runtimeCatalog || !runtimeCatalog.archiveThread || !existing) {
+				throw new Error("Thread archive requires a runtime catalog entry.");
+			}
+
+			const archivedInRuntime = await runtimeCatalog.archiveThread(threadId, archived);
+			if (archivedInRuntime === false) {
+				throw new Error("Thread archive was rejected by the runtime catalog.");
 			}
 		} catch (error) {
 			if (existing) {
@@ -5505,4 +4076,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.applyRailLayout();
 		this.focusInput();
 	}
+}
+
+function isRuntimeThreadExecuting(state: IVSCloneThreadRuntimeState | undefined): boolean {
+	// Awaiting approval is still a non-idle stream state, but UI affordances such as rewind should
+	// only stay disabled while the runtime is actively streaming or running a tool.
+	return state?.streamState.kind === "llm" || state?.streamState.kind === "tool";
 }

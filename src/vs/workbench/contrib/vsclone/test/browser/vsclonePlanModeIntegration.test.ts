@@ -9,60 +9,77 @@ import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { IVSCloneChatHistoryService, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatTurnUpdate, VSCloneChatHistoryScope } from '../../common/backend/vscloneChatHistoryService.js';
+import { VSCloneChatThreadService } from '../../browser/vscloneChatThreadService.js';
 import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
-import { VSCloneChatSessionService } from '../../browser/vscloneChatSessionService.js';
 import { IVSCloneContextGatheringService } from '../../browser/vscloneContextGatheringService.js';
 import { IVSCloneThreadRuntimeHandle, IVSCloneThreadRuntimeRunOptions, IVSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
 import { VSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
-import { IVSClonePromptAssemblyService, IVSClonePromptContext, VSClonePromptAssemblyService } from '../../common/vsclonePromptAssemblyService.js';
-import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
-import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
+import { IVSCloneModelSelection } from '../../common/vscloneModelSelectionTypes.js';
+import type { IVSClonePromptContext } from '../../common/vsclonePrompts.js';
+import { IVSCloneSettingsService } from '../../common/vscloneSettingsService.js';
+import type { IVSCloneSettingsState } from '../../common/vscloneSettingsTypes.js';
 
-class TestHistoryService implements IVSCloneChatHistoryService {
+class SlowSettingsService implements IVSCloneSettingsService {
 	declare readonly _serviceBrand: undefined;
-	readonly onDidChange = Event.None;
-
-	async initialize(): Promise<void> { }
-	getThreads(): readonly IVSCloneChatHistoryThread[] { return []; }
-	getTurns(): readonly IVSCloneChatHistoryTurn[] { return []; }
-	applyTurnUpdate(_update: IVSCloneChatTurnUpdate): void { }
-	async archiveThread(_threadId: string, _archived: boolean): Promise<void> { }
-	async deleteThread(_threadId: string): Promise<void> { }
-	async clearAll(_scope: VSCloneChatHistoryScope): Promise<void> { }
-}
-
-class SlowSelectionService implements IVSCloneThreadModelSelectionService {
-	declare readonly _serviceBrand: undefined;
+	readonly onDidChangeState = Event.None;
 	readonly onDidChangeSelection = Event.None;
 	readonly initializeGate = new DeferredPromise<void>();
 	readonly setSelections: Array<{ threadId: string; selection: IVSCloneModelSelection }> = [];
+	private selectionByThread = new Map<string, IVSCloneModelSelection>();
 
 	async initialize(): Promise<void> {
 		await this.initializeGate.p;
 	}
 
-	getCurrentSelectionForThread(_threadId: string, _location: 'chat' | 'editorInline' | 'notebook' | 'terminal'): IVSCloneModelSelection | undefined {
-		return undefined;
+	async refreshState(): Promise<void> { }
+	getState(): IVSCloneSettingsState { throw new Error('State access is not needed in this mode snapshot test.'); }
+	getProviders() { return []; }
+	getModels() { return []; }
+	getModelsForFeature() { return []; }
+	getModel() { return undefined; }
+	getSelectableModels() { return []; }
+	getFeatureSelection() { return undefined; }
+	getFeatureDefaults() {
+		return {
+			Chat: { featureName: 'Chat' as const, location: 'chat' as const, selection: undefined },
+			Autocomplete: { featureName: 'Autocomplete' as const, location: 'editorInline' as const, selection: undefined },
+			Notebook: { featureName: 'Notebook' as const, location: 'notebook' as const, selection: undefined },
+			Terminal: { featureName: 'Terminal' as const, location: 'terminal' as const, selection: undefined },
+		};
 	}
-
-	async setSelectionForThread(threadId: string, selection: IVSCloneModelSelection): Promise<void> {
+	getCurrentSelectionForFeatureName(threadId: string): IVSCloneModelSelection | undefined {
+		return this.selectionByThread.get(threadId);
+	}
+	getCurrentSelectionForFeature(threadId: string): IVSCloneModelSelection | undefined {
+		return this.selectionByThread.get(threadId);
+	}
+	getThreadSelectionSnapshot() { return undefined; }
+	async setSelectionForFeature(threadId: string, selection: IVSCloneModelSelection): Promise<void> {
 		this.setSelections.push({ threadId, selection: { ...selection } });
+		this.selectionByThread.set(threadId, { ...selection });
 	}
 
-	async switchToNextModel(_threadId: string, _location: 'chat' | 'editorInline' | 'notebook' | 'terminal'): Promise<IVSCloneModelSelection | undefined> {
+	async switchToNextModel(): Promise<IVSCloneModelSelection | undefined> {
 		return undefined;
 	}
 
-	async resetSelectionForThread(_threadId: string): Promise<void> { }
-
-	hasSelectionForThread(_threadId: string): boolean {
-		return false;
+	async resetSelectionForThread(threadId: string): Promise<void> {
+		this.selectionByThread.delete(threadId);
 	}
 
+	hasSelectionForThread(threadId: string): boolean {
+		return this.selectionByThread.has(threadId);
+	}
+
+	getRecentModels() { return []; }
 	getRecentModelIdentifiers(_limit?: number): readonly string[] {
 		return [];
 	}
+	getEligibilityRecords() { return []; }
+	async setProviderEnabled(): Promise<void> { }
+	getIneligibilityRecord() { return undefined; }
+	async markModelIneligible(): Promise<void> { }
+	async clearIneligibilityForVendor(): Promise<void> { }
 }
 
 class RecordingThreadRuntimeHandle implements IVSCloneThreadRuntimeHandle {
@@ -84,6 +101,11 @@ class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	cancelThread(): void { }
 	approveLatestToolRequest(): boolean { return false; }
 	rejectLatestToolRequest(): boolean { return false; }
+	getThreads(): readonly [] { return []; }
+	isDeletedThread(): boolean { return false; }
+	archiveThread(): boolean { return false; }
+	deleteThread(): boolean { return false; }
+	clearAll(): void { }
 	getState(): undefined { return undefined; }
 	async rewindToCheckpoint(): Promise<boolean> { return false; }
 }
@@ -95,20 +117,6 @@ class StaticContextGatheringService implements IVSCloneContextGatheringService {
 
 	async gatherContext(): Promise<IVSClonePromptContext> {
 		return this.context;
-	}
-}
-
-class RecordingPromptAssemblyService implements IVSClonePromptAssemblyService {
-	declare readonly _serviceBrand: undefined;
-	lastMode: VSCloneChatMode | undefined;
-	lastMessage: string | undefined;
-
-	constructor(private readonly inner = new VSClonePromptAssemblyService()) { }
-
-	assembleSystemMessage(context: IVSClonePromptContext, vendor: 'openai' | 'anthropic' | 'google', mode: VSCloneChatMode): string {
-		this.lastMode = mode;
-		this.lastMessage = this.inner.assembleSystemMessage(context, vendor, mode);
-		return this.lastMessage;
 	}
 }
 
@@ -126,12 +134,7 @@ function createSelection(overrides: Partial<IVSCloneModelSelection> = {}): IVSCl
 }
 
 function createContext(): IVSClonePromptContext {
-	return {
-		openFiles: [],
-		workspaceFolders: [],
-		directoryTree: '(empty)',
-		diagnostics: [],
-	};
+	return {};
 }
 
 suite('VSClonePlanModeIntegration', () => {
@@ -141,19 +144,16 @@ suite('VSClonePlanModeIntegration', () => {
 		const testDisposables = store.add(new DisposableStore());
 		const backendService = new TestVSCloneUnifiedChatBackendService();
 		const planModeService = testDisposables.add(new VSClonePlanModeService(backendService));
-		const selectionService = new SlowSelectionService();
-		const historyService = new TestHistoryService();
+		const settingsService = new SlowSettingsService();
 		const threadRuntimeService = new RecordingThreadRuntimeService();
 		const contextGatheringService = new StaticContextGatheringService(createContext());
-		const promptAssemblyService = new RecordingPromptAssemblyService();
-		const chatSessionService = testDisposables.add(new VSCloneChatSessionService(
-			historyService,
-			selectionService,
+		const chatThreadService = testDisposables.add(new VSCloneChatThreadService(
+			settingsService,
 			planModeService,
 			new NullLogService(),
 			threadRuntimeService,
 			contextGatheringService,
-			promptAssemblyService,
+			backendService,
 		));
 
 		await planModeService.setModeForThread('thread-1', 'plan');
@@ -161,14 +161,14 @@ suite('VSClonePlanModeIntegration', () => {
 		// Keep the frontend-side dependency unresolved long enough to simulate a slow submit path.
 		// If the snapshot is taken too late, a mode flip that lands during initialization will leak
 		// into the submitted turn and the prompt will be shaped as act mode instead of plan mode.
-		const submission = chatSessionService.submitPrompt('Refactor the feature in read-only mode', {
+		const submission = chatThreadService.sendMessage('Refactor the feature in read-only mode', {
 			threadId: 'thread-1',
 			sessionResource: 'vsclone://api/thread-1',
 			modelSelection: createSelection(),
 		});
 
 		await planModeService.setModeForThread('thread-1', 'act');
-		selectionService.initializeGate.complete();
+		settingsService.initializeGate.complete();
 
 		const result = await submission;
 
@@ -176,10 +176,9 @@ suite('VSClonePlanModeIntegration', () => {
 			threadId: 'thread-1',
 			sessionResource: 'vsclone://api/thread-1',
 		});
-		assert.strictEqual(promptAssemblyService.lastMode, 'plan');
 		assert.strictEqual(threadRuntimeService.lastOptions?.mode, 'plan');
-		assert.ok(promptAssemblyService.lastMessage?.includes('PLAN MODE'));
-		assert.ok(!promptAssemblyService.lastMessage?.includes('### edit_file'));
+		assert.ok(threadRuntimeService.lastOptions?.systemMessage?.includes('PLAN MODE'));
+		assert.ok(!threadRuntimeService.lastOptions?.systemMessage?.includes('### edit_file'));
 		assert.deepStrictEqual(backendService.getPlanModeState(), {
 			modeByThread: {
 				'thread-1': 'plan',

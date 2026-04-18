@@ -7,7 +7,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
 	entry: [
-		'./src/chat-history-rail/index.tsx',
+		'./src/thread-rail/index.tsx',
 		'./src/model-switcher/index.tsx',
 		'./src/unified-conversation-surface/index.tsx',
 	],

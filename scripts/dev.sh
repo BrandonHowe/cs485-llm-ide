@@ -19,9 +19,12 @@ REQUIRED_BUILD_ARTIFACTS=(
 	"$ROOT/extensions/git-base/out/extension.js"
 	"$ROOT/extensions/merge-conflict/out/mergeConflictMain.js"
 	# The workbench controllers import generated Preact entrypoints from `out/`, so startup must
-	# wait for those emitted files instead of assuming the generic client build is sufficient.
-	"$ROOT/out/vs/workbench/contrib/vsclone/browser/preact/out/chat-history-rail/index.js"
+	# wait for the currently mounted VSClone surfaces instead of any stale bundles left by older
+	# ports. The thread rail replaced the old chat history rail, so the launcher has to watch the
+	# new emitted module or it can wait forever on an artifact that the build no longer refreshes.
+	"$ROOT/out/vs/workbench/contrib/vsclone/browser/preact/out/thread-rail/index.js"
 	"$ROOT/out/vs/workbench/contrib/vsclone/browser/preact/out/model-switcher/index.js"
+	"$ROOT/out/vs/workbench/contrib/vsclone/browser/preact/out/unified-conversation-surface/index.js"
 )
 STARTUP_TIMEOUT_SECONDS="${DEV_STARTUP_TIMEOUT_SECONDS:-900}"
 STARTUP_PROGRESS_INTERVAL_SECONDS="${DEV_STARTUP_PROGRESS_INTERVAL_SECONDS:-15}"

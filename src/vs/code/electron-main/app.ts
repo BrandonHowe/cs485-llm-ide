@@ -131,14 +131,10 @@ import { McpGatewayChannel } from '../../platform/mcp/node/mcpGatewayChannel.js'
 import { IWebContentExtractorService } from '../../platform/webContentExtractor/common/webContentExtractor.js';
 import { NativeWebContentExtractorService } from '../../platform/webContentExtractor/electron-main/webContentExtractorService.js';
 import ErrorTelemetry from '../../platform/telemetry/electron-main/errorTelemetry.js';
-// eslint-disable-next-line local/code-import-patterns -- Main process must own this network channel registration; the implementation currently lives with the VSClone feature.
-import { VSCloneChatApiChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneChatApiChannel.js';
-// eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main and is defined next to the VSClone IPC contract.
-import { VSCLONE_CHAT_API_CHANNEL_NAME } from '../../workbench/contrib/vsclone/common/vscloneChatApiIpc.js';
-// eslint-disable-next-line local/code-import-patterns -- Inline completion requests also need a main-process fetch path to avoid renderer CORS restrictions.
-import { VSCloneCompletionChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneCompletionChannel.js';
-// eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main via the VSClone completion IPC contract and lives next to the backend transport contract.
-import { VSCLONE_COMPLETION_CHANNEL_NAME } from '../../workbench/contrib/vsclone/common/backend/vscloneCompletionApiIpc.js';
+// eslint-disable-next-line local/code-import-patterns -- Phase 1.1 moves VSClone chat transport toward the Void-shaped request-id channel, which the main process must register directly.
+import { VSCloneLLMMessageChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneLLMMessageChannel.js';
+// eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main by the new VSClone LLM transport contract.
+import { VSCLONE_LLM_MESSAGE_CHANNEL_NAME } from '../../workbench/contrib/vsclone/common/vscloneLLMMessageTypes.js';
 // eslint-disable-next-line local/code-import-patterns -- Main process must host the loopback listener used by VSClone OAuth.
 import { VSCloneOAuthLoopbackChannel } from '../../workbench/contrib/vsclone/electron-main/vscloneOAuthLoopbackChannel.js';
 // eslint-disable-next-line local/code-import-patterns -- The channel name is shared across renderer/main via the VSClone OAuth IPC contract.
@@ -1277,17 +1273,15 @@ export class CodeApplication extends Disposable {
 		mainProcessElectronServer.registerChannel('logger', loggerChannel);
 		sharedProcessClient.then(client => client.registerChannel('logger', loggerChannel));
 
-		// VSClone chat API (main-process fetch path to avoid renderer CORS constraints)
-		const vscloneChatApiChannel = disposables.add(new VSCloneChatApiChannel(this.logService));
-		mainProcessElectronServer.registerChannel(VSCLONE_CHAT_API_CHANNEL_NAME, vscloneChatApiChannel);
-
-		// VSClone inline completion API (separate transport so editor suggestions stay decoupled from chat history semantics)
-		const vscloneCompletionChannel = disposables.add(new VSCloneCompletionChannel(this.logService));
-		mainProcessElectronServer.registerChannel(VSCLONE_COMPLETION_CHANNEL_NAME, vscloneCompletionChannel);
-
 		// VSClone OAuth loopback callback listener (serves a completion page on localhost and forwards code/state)
 		const vscloneOAuthLoopbackChannel = disposables.add(new VSCloneOAuthLoopbackChannel(this.logService));
 		mainProcessElectronServer.registerChannel(VSCLONE_OAUTH_CHANNEL_NAME, vscloneOAuthLoopbackChannel);
+
+		// Register the new transport eagerly now that the Phase 1.1 files live in the main tree. This
+		// keeps the compile graph honest and ensures the legacy chat API can switch over without an
+		// async race against optional dynamic imports.
+		const vscloneLLMMessageChannel = disposables.add(new VSCloneLLMMessageChannel(this.logService));
+		mainProcessElectronServer.registerChannel(VSCLONE_LLM_MESSAGE_CHANNEL_NAME, vscloneLLMMessageChannel);
 
 		// Extension Host Debug Broadcasting
 		const electronExtensionHostDebugBroadcastChannel = new ElectronExtensionHostDebugBroadcastChannel(accessor.get(IWindowsMainService));

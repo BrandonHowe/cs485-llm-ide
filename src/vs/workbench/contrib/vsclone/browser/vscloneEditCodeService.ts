@@ -11,7 +11,6 @@ import { URI } from '../../../../base/common/uri.js';
 import { IBulkEditService, ResourceFileEdit, ResourceTextEdit } from '../../../../editor/browser/services/bulkEditService.js';
 import { Range } from '../../../../editor/common/core/range.js';
 import { ITextModelService } from '../../../../editor/common/services/resolverService.js';
-import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
@@ -55,8 +54,6 @@ type IApplyMode = {
 };
 
 const defaultApplyMode: IApplyMode = { createDiffZones: false };
-
-export const IVSCloneEditCodeService = createDecorator<IVSCloneEditCodeServiceContract>('vscloneEditCodeService');
 
 export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCodeServiceContract {
 	declare readonly _serviceBrand: undefined;
@@ -446,18 +443,34 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		const clonedSnapshot = this.cloneFileSnapshot(snapshot);
 		for (const diffareaid in clonedSnapshot.snapshottedDiffAreaOfId) {
 			const diffArea = clonedSnapshot.snapshottedDiffAreaOfId[diffareaid];
-			if (diffArea.type === 'DiffZone') {
-				const restoredDiffZone: VSCloneDiffZone = {
-					...diffArea,
+				if (diffArea.type === 'DiffZone') {
+					// Snapshot entries intentionally drop runtime-only editor state. Rebuild those fields per
+					// discriminated branch instead of spreading the union back into the live store.
+					if (diffArea.originalCode === undefined) {
+						throw new Error('VSClone diff snapshots must retain originalCode so restore can rebuild the live diff zone.');
+					}
+					const restoredDiffZone: VSCloneDiffZone = {
+						type: 'DiffZone',
+						diffareaid: diffArea.diffareaid,
+					startLine: diffArea.startLine,
+					endLine: diffArea.endLine,
+					originalCode: diffArea.originalCode,
 					_URI: uri,
 					_diffOfId: {},
 					_streamState: { isStreaming: false },
 					_removeStylesFns: new Set(),
-				};
-				this.diffAreaOfId[diffareaid] = restoredDiffZone;
-			} else if (diffArea.type === 'CtrlKZone') {
-				const restoredCtrlKZone: VSCloneCtrlKZone = {
-					...diffArea,
+					};
+					this.diffAreaOfId[diffareaid] = restoredDiffZone;
+				} else if (diffArea.type === 'CtrlKZone') {
+					if (diffArea.editorId === undefined) {
+						throw new Error('VSClone Ctrl+K snapshots must retain editorId so restore can rebind the inline zone.');
+					}
+					const restoredCtrlKZone: VSCloneCtrlKZone = {
+						type: 'CtrlKZone',
+						diffareaid: diffArea.diffareaid,
+					startLine: diffArea.startLine,
+					endLine: diffArea.endLine,
+					editorId: diffArea.editorId,
 					_URI: uri,
 					_removeStylesFns: new Set(),
 					_mountInfo: null,
@@ -843,7 +856,9 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 
 	private addDiffArea<T extends VSCloneDiffArea>(diffArea: Omit<T, 'diffareaid'>): T {
 		const diffareaid = this._diffareaidPool++;
-		const diffArea2 = Object.assign({ diffareaid }, diffArea);
+		// `diffareaid` is the only field assigned here; the caller already supplied a complete
+		// discriminated zone shape, so reasserting `T` avoids widening the union back to its common keys.
+		const diffArea2 = { diffareaid, ...diffArea } as T;
 		this.addOrInitializeDiffAreaAtURI(diffArea2._URI, diffareaid);
 		this.diffAreaOfId[diffareaid] = diffArea2;
 		return diffArea2;

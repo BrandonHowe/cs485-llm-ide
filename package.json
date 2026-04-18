@@ -77,6 +77,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.23",
+    "@anthropic-ai/sdk": "^0.40.0",
+    "@google/genai": "^0.13.0",
     "@microsoft/1ds-core-js": "^3.2.13",
     "@microsoft/1ds-post-js": "^3.2.13",
     "@parcel/watcher": "^2.5.6",
@@ -115,7 +117,9 @@
     "native-is-elevated": "0.9.0",
     "native-keymap": "^3.3.5",
     "node-pty": "^1.2.0-beta.10",
+    "ollama": "^0.5.15",
     "open": "^10.1.2",
+    "openai": "^4.96.0",
     "preact": "^10.29.1",
     "tas-client": "0.3.1",
     "undici": "^7.18.2",

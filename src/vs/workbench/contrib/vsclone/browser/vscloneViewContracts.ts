@@ -3,10 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { IVSCloneChatHistoryRailRow } from './vscloneChatHistoryRailTree.js';
-import type { VSCloneRailTab, VSCloneRailState } from './vscloneChatHistoryRail.js';
-import type { IVSCloneModelCatalogModelDescriptor, IVSCloneModelCatalogState } from '../common/vscloneModelCatalogService.js';
-import type { IVSCloneModelSelection } from '../common/backend/vscloneThreadModelSelectionService.js';
+import type { IVSCloneThreadRailRow } from './vscloneThreadRailTree.js';
+import type { VSCloneRailTab, VSCloneRailState } from './vscloneThreadRail.js';
+import type { IVSCloneModelSelection } from '../common/vscloneModelSelectionTypes.js';
+import type { IVSCloneSettingsModelState, IVSCloneSettingsState } from '../common/vscloneSettingsTypes.js';
 
 // The workbench controllers and the bundled Preact sub-apps communicate through plain data
 // contracts so the browser workbench never needs to import framework code directly.
@@ -17,7 +17,7 @@ export interface IVSCloneMountedView<Props> {
 
 export interface IVSCloneRailViewProps {
 	filterState: { query: string; tab: VSCloneRailTab };
-	rows: readonly IVSCloneChatHistoryRailRow[];
+	rows: readonly IVSCloneThreadRailRow[];
 	selectedThreadId: string | undefined;
 	viewState: VSCloneRailState;
 	errorMessage: string | undefined;
@@ -28,7 +28,7 @@ export interface IVSCloneRailViewProps {
 	modalContainerRef: (element: HTMLElement | null) => void;
 	modalCancelButtonRef: (element: HTMLButtonElement | null) => void;
 	modalConfirmButtonRef: (element: HTMLButtonElement | null) => void;
-	getRowAriaLabel: (row: IVSCloneChatHistoryRailRow) => string;
+	getRowAriaLabel: (row: IVSCloneThreadRailRow) => string;
 	onBack: () => void;
 	onNewChat: () => void;
 	onSearchInput: (value: string) => void;
@@ -45,7 +45,7 @@ export interface IVSCloneRailViewProps {
 export interface IVSCloneModelSwitcherSection {
 	label: string;
 	count?: number;
-	models: readonly IVSCloneModelCatalogModelDescriptor[];
+	models: readonly IVSCloneSettingsModelState[];
 }
 
 export interface IVSCloneModelSwitcherViewProps {
@@ -54,7 +54,7 @@ export interface IVSCloneModelSwitcherViewProps {
 	menuId: string;
 	buttonLabel: string;
 	buttonAriaLabel: string;
-	state: IVSCloneModelCatalogState;
+	state: IVSCloneSettingsState;
 	selected: IVSCloneModelSelection | undefined;
 	sections: readonly IVSCloneModelSwitcherSection[];
 	showResetAction: boolean;
@@ -64,7 +64,7 @@ export interface IVSCloneModelSwitcherViewProps {
 	onRefreshCatalog: () => void;
 	onManageProviders: () => void;
 	onResetSelection: () => void;
-	onSelectModel: (model: IVSCloneModelCatalogModelDescriptor) => void;
+	onSelectModel: (model: IVSCloneSettingsModelState) => void;
 }
 
 export interface IVSCloneConversationImageView {

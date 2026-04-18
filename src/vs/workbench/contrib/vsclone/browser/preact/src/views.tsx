@@ -21,9 +21,9 @@ import type {
 	IVSCloneModelSwitcherViewProps,
 	IVSCloneRailViewProps,
 } from '../../vscloneViewContracts.js';
-import type { VSCloneRailState } from '../../vscloneChatHistoryRail.js';
-import type { IVSCloneModelCatalogModelDescriptor, IVSCloneModelCatalogState } from '../../../common/vscloneModelCatalogService.js';
-import type { IVSCloneModelSelection } from '../../../common/backend/vscloneThreadModelSelectionService.js';
+import type { VSCloneRailState } from '../../vscloneThreadRail.js';
+import type { IVSCloneModelSelection } from '../../../common/vscloneModelSelectionTypes.js';
+import type { IVSCloneSettingsModelState, IVSCloneSettingsState } from '../../../common/vscloneSettingsTypes.js';
 
 function Codicon(props: { icon: string; extraClassName?: string }) {
 	const className = props.extraClassName ? `codicon ${props.icon} ${props.extraClassName}` : `codicon ${props.icon}`;
@@ -33,13 +33,13 @@ function Codicon(props: { icon: string; extraClassName?: string }) {
 function renderRailState(viewState: VSCloneRailState, errorMessage: string | undefined, onRetry: () => void) {
 	if (viewState === 'loading') {
 		return (
-			<div className="vsclone-chat-history-state" role="status">
-				<div className="vsclone-chat-history-skeleton" aria-hidden="true">
+			<div className="vsclone-thread-rail-state" role="status">
+				<div className="vsclone-thread-rail-skeleton" aria-hidden="true">
 					{Array.from({ length: 7 }, (_, index) => (
-						<div key={index} className="vsclone-chat-history-skeleton-row">
-							<div className="vsclone-chat-history-skeleton-line" />
-							<div className="vsclone-chat-history-skeleton-line" />
-							<div className="vsclone-chat-history-skeleton-line" />
+						<div key={index} className="vsclone-thread-rail-skeleton-row">
+							<div className="vsclone-thread-rail-skeleton-line" />
+							<div className="vsclone-thread-rail-skeleton-line" />
+							<div className="vsclone-thread-rail-skeleton-line" />
 						</div>
 					))}
 				</div>
@@ -49,13 +49,13 @@ function renderRailState(viewState: VSCloneRailState, errorMessage: string | und
 
 	if (viewState === 'error') {
 		return (
-			<div className="vsclone-chat-history-state" role="alert">
-				<div className="vsclone-chat-history-state-icon error" aria-hidden="true">!</div>
-				<div className="vsclone-chat-history-state-title">{localize('vsclone.rail.error.title', 'Something went wrong')}</div>
-				<div className="vsclone-chat-history-state-description">
-					{errorMessage ?? localize('vsclone.rail.error.description', 'Failed to load chat history. Please check your connection and try again.')}
+			<div className="vsclone-thread-rail-state" role="alert">
+				<div className="vsclone-thread-rail-state-icon error" aria-hidden="true">!</div>
+				<div className="vsclone-thread-rail-state-title">{localize('vsclone.rail.error.title', 'Something went wrong')}</div>
+				<div className="vsclone-thread-rail-state-description">
+					{errorMessage ?? localize('vsclone.rail.error.description', 'Failed to load threads. Please check your connection and try again.')}
 				</div>
-				<button type="button" className="vsclone-chat-history-retry" onClick={() => onRetry()}>
+				<button type="button" className="vsclone-thread-rail-retry" onClick={() => onRetry()}>
 					{localize('vsclone.rail.error.retry', 'Try again')}
 				</button>
 			</div>
@@ -64,39 +64,39 @@ function renderRailState(viewState: VSCloneRailState, errorMessage: string | und
 
 	if (viewState === 'empty') {
 		return (
-			<div className="vsclone-chat-history-state" role="status">
-				<div className="vsclone-chat-history-state-icon" aria-hidden="true">[]</div>
-				<div className="vsclone-chat-history-state-title">{localize('vsclone.rail.empty.title', 'No conversations yet')}</div>
-				<div className="vsclone-chat-history-state-description">
-					{localize('vsclone.rail.empty.description', 'Start a new conversation to begin your chat history.')}
+			<div className="vsclone-thread-rail-state" role="status">
+				<div className="vsclone-thread-rail-state-icon" aria-hidden="true">[]</div>
+				<div className="vsclone-thread-rail-state-title">{localize('vsclone.rail.empty.title', 'No threads yet')}</div>
+				<div className="vsclone-thread-rail-state-description">
+					{localize('vsclone.rail.empty.description', 'Start a new conversation to create your first thread.')}
 				</div>
 			</div>
 		);
 	}
 
-	return <div className="vsclone-chat-history-state hidden" />;
+	return <div className="vsclone-thread-rail-state hidden" />;
 }
 
-export function VSCloneChatHistoryRailView(props: IVSCloneRailViewProps) {
+export function VSCloneThreadRailView(props: IVSCloneRailViewProps) {
 	return (
-		<div className="vsclone-chat-history-rail">
-			<div className="vsclone-chat-history-rail-header">
-				<div className="vsclone-chat-history-rail-header-row">
+		<div className="vsclone-thread-rail">
+			<div className="vsclone-thread-rail-header">
+				<div className="vsclone-thread-rail-header-row">
 					<button
 						type="button"
-						className="vsclone-chat-history-back"
+						className="vsclone-thread-rail-back"
 						title={localize('vsclone.rail.back.tooltip', 'Back to conversation')}
 						aria-label={localize('vsclone.rail.back.tooltip', 'Back to conversation')}
 						onClick={() => props.onBack()}
 					>
 						{'\u2190'}
 					</button>
-					<div className="vsclone-chat-history-rail-title">
-						{localize('vsclone.rail.title', 'Chat History').toUpperCase()}
+					<div className="vsclone-thread-rail-title">
+						{localize('vsclone.rail.title', 'Threads').toUpperCase()}
 					</div>
 					<button
 						type="button"
-						className="vsclone-chat-history-new-chat"
+						className="vsclone-thread-rail-new-chat"
 						onClick={() => props.onNewChat()}
 					>
 						{localize('vsclone.rail.newChat', 'New Chat')}
@@ -104,14 +104,14 @@ export function VSCloneChatHistoryRailView(props: IVSCloneRailViewProps) {
 				</div>
 				<input
 					ref={props.searchInputRef}
-					className="vsclone-chat-history-search"
+					className="vsclone-thread-rail-search"
 					type="search"
 					placeholder={localize('vsclone.rail.search.placeholder', 'Search threads...')}
-					aria-label={localize('vsclone.rail.search.ariaLabel', 'Search chat history')}
+					aria-label={localize('vsclone.rail.search.ariaLabel', 'Search threads')}
 					defaultValue={props.filterState.query}
 					onInput={(event) => props.onSearchInput((event.currentTarget as HTMLInputElement).value)}
 				/>
-				<div className="vsclone-chat-history-tabs">
+				<div className="vsclone-thread-rail-tabs">
 					{(['all', 'active', 'archived'] as const).map(tab => {
 						const selected = props.filterState.tab === tab;
 						const label = tab === 'all'
@@ -123,7 +123,7 @@ export function VSCloneChatHistoryRailView(props: IVSCloneRailViewProps) {
 							<button
 								key={tab}
 								type="button"
-								className={selected ? 'vsclone-chat-history-tab active' : 'vsclone-chat-history-tab'}
+								className={selected ? 'vsclone-thread-rail-tab active' : 'vsclone-thread-rail-tab'}
 								data-tab={tab}
 								aria-pressed={selected ? 'true' : 'false'}
 								onClick={() => props.onTabSelect(tab)}
@@ -134,9 +134,9 @@ export function VSCloneChatHistoryRailView(props: IVSCloneRailViewProps) {
 					})}
 				</div>
 			</div>
-			<div className="vsclone-chat-history-rail-body">
+			<div className="vsclone-thread-rail-body">
 				<div
-					className={props.viewState === 'ready' ? 'vsclone-chat-history-list' : 'vsclone-chat-history-list hidden'}
+					className={props.viewState === 'ready' ? 'vsclone-thread-rail-list' : 'vsclone-thread-rail-list hidden'}
 					role="list"
 					aria-label={localize('vsclone.rail.list.ariaLabel', 'Conversation threads')}
 				>
@@ -146,21 +146,21 @@ export function VSCloneChatHistoryRailView(props: IVSCloneRailViewProps) {
 							<button
 								key={row.threadId}
 								type="button"
-								className={selected ? 'vsclone-chat-history-row selected' : 'vsclone-chat-history-row'}
+								className={selected ? 'vsclone-thread-rail-row selected' : 'vsclone-thread-rail-row'}
 								data-thread-id={row.threadId}
 								aria-pressed={selected ? 'true' : 'false'}
 								aria-label={props.getRowAriaLabel(row)}
 								onClick={() => props.onRowSelect(row.threadId)}
 								onContextMenu={(event) => props.onRowContextMenu(row.threadId, event)}
 							>
-								<div className="vsclone-chat-history-row-top">
-									<div className="vsclone-chat-history-row-title">{row.title}</div>
-									<div className="vsclone-chat-history-row-timestamp">{row.updatedLabel}</div>
+								<div className="vsclone-thread-rail-row-top">
+									<div className="vsclone-thread-rail-row-title">{row.title}</div>
+									<div className="vsclone-thread-rail-row-timestamp">{row.updatedLabel}</div>
 								</div>
-								<div className="vsclone-chat-history-row-preview">{row.preview}</div>
-								<div className="vsclone-chat-history-row-metadata">
+								<div className="vsclone-thread-rail-row-preview">{row.preview}</div>
+								<div className="vsclone-thread-rail-row-metadata">
 									{localize('vsclone.rail.turnCount', '{0} turns', row.turnCount)}
-									{row.archived ? <span className="vsclone-chat-history-row-archived">{localize('vsclone.rail.archived.badge', 'Archived')}</span> : null}
+									{row.archived ? <span className="vsclone-thread-rail-row-archived">{localize('vsclone.rail.archived.badge', 'Archived')}</span> : null}
 								</div>
 							</button>
 						);
@@ -170,7 +170,7 @@ export function VSCloneChatHistoryRailView(props: IVSCloneRailViewProps) {
 			</div>
 			<div
 				ref={props.modalContainerRef}
-				className={props.pendingDelete ? 'vsclone-chat-history-delete-overlay visible' : 'vsclone-chat-history-delete-overlay'}
+				className={props.pendingDelete ? 'vsclone-thread-rail-delete-overlay visible' : 'vsclone-thread-rail-delete-overlay'}
 				aria-hidden={props.pendingDelete ? 'false' : 'true'}
 				onClick={(event) => {
 					if (event.target === event.currentTarget) {
@@ -179,26 +179,26 @@ export function VSCloneChatHistoryRailView(props: IVSCloneRailViewProps) {
 				}}
 			>
 				<div
-					className="vsclone-chat-history-delete-modal"
+					className="vsclone-thread-rail-delete-modal"
 					role="dialog"
 					aria-modal="true"
 					aria-labelledby={props.deleteTitleId}
 					aria-describedby={props.deleteDescriptionId}
 					onKeyDown={(event) => props.onDeleteModalKeyDown(event)}
 				>
-					<div id={props.deleteTitleId} className="vsclone-chat-history-delete-title">
+					<div id={props.deleteTitleId} className="vsclone-thread-rail-delete-title">
 						{localize('vsclone.rail.delete.title', 'Delete thread?')}
 					</div>
-					<div id={props.deleteDescriptionId} className="vsclone-chat-history-delete-description">
+					<div id={props.deleteDescriptionId} className="vsclone-thread-rail-delete-description">
 						{props.pendingDelete
 							? localize('vsclone.rail.delete.message', 'Are you sure you want to delete "{0}"? This action cannot be undone.', props.pendingDelete.threadTitle)
 							: ''}
 					</div>
-					<div className="vsclone-chat-history-delete-actions">
+					<div className="vsclone-thread-rail-delete-actions">
 						<button
 							ref={props.modalCancelButtonRef}
 							type="button"
-							className="vsclone-chat-history-delete-cancel"
+							className="vsclone-thread-rail-delete-cancel"
 							onClick={() => props.onCancelDelete()}
 						>
 							{localize('vsclone.rail.delete.cancel', 'Cancel')}
@@ -206,7 +206,7 @@ export function VSCloneChatHistoryRailView(props: IVSCloneRailViewProps) {
 						<button
 							ref={props.modalConfirmButtonRef}
 							type="button"
-							className="vsclone-chat-history-delete-confirm"
+							className="vsclone-thread-rail-delete-confirm"
 							onClick={() => props.onConfirmDelete()}
 						>
 							{localize('vsclone.rail.delete.confirm', 'Delete')}
@@ -219,12 +219,12 @@ export function VSCloneChatHistoryRailView(props: IVSCloneRailViewProps) {
 }
 
 function renderModelSwitcherBody(
-	state: IVSCloneModelCatalogState,
+	state: IVSCloneSettingsState,
 	sections: readonly IVSCloneModelSwitcherSection[],
 	selected: IVSCloneModelSelection | undefined,
 	onRefreshCatalog: () => void,
 	onManageProviders: () => void,
-	onSelectModel: (model: IVSCloneModelCatalogModelDescriptor) => void,
+	onSelectModel: (model: IVSCloneSettingsModelState) => void,
 ) {
 	if (state.status === 'loading') {
 		return (
@@ -745,11 +745,11 @@ export function VSCloneUnifiedConversationSurface(props: IVSCloneConversationSur
 				<button
 					type="button"
 					className="vsclone-thread-action-button"
-					title={localize('vsclone.thread.actions.history.tooltip', 'Show chat history')}
-					aria-label={localize('vsclone.thread.actions.history.tooltip', 'Show chat history')}
+					title={localize('vsclone.thread.actions.history.tooltip', 'Show threads')}
+					aria-label={localize('vsclone.thread.actions.history.tooltip', 'Show threads')}
 					onClick={() => props.onHistoryClick()}
 				>
-					{localize('vsclone.thread.actions.history', 'Chat History')}
+					{localize('vsclone.thread.actions.history', 'Threads')}
 				</button>
 				<button
 					type="button"

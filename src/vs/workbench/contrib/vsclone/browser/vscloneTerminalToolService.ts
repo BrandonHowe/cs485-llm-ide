@@ -13,11 +13,19 @@ import { TerminalCapability, type ITerminalCapabilityImplMap } from '../../../..
 import { TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { type ICreateTerminalOptions, type ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
-import { VSCloneTerminalResolveReason } from '../common/vscloneToolRuntimeTypes.js';
 
 const MAX_TERMINAL_CHARS = 100_000;
 const MAX_TERMINAL_INACTIVE_TIME_SECONDS = 8;
 const MAX_TERMINAL_BG_COMMAND_TIME_SECONDS = 5;
+
+/**
+ * Terminal executions either finish with an exit code or time out while waiting for more output.
+ * The terminal tool service keeps that reason explicit so higher layers can distinguish a clean
+ * shell completion from an interrupted/backgrounded command.
+ */
+export type VSCloneTerminalResolveReason =
+	| { readonly type: 'timeout' }
+	| { readonly type: 'done'; readonly exitCode: number };
 
 export interface IVSCloneTerminalToolService {
 	readonly _serviceBrand: undefined;
@@ -301,11 +309,21 @@ export class VSCloneTerminalToolService extends Disposable implements IVSCloneTe
 
 	private async createTerminal(props: { cwd: string | null; config?: ICreateTerminalOptions['config']; hidden?: boolean }): Promise<ITerminalInstance> {
 		const cwd = this.resolveCwd(props.cwd);
+		// The terminal service accepts several config shapes with different title fields. Normalize the
+		// human-readable name up front so hidden VSClone terminals preserve a stable label regardless of
+		// whether they were created from a shell launch config, a detected profile, or an extension profile.
+		const explicitName = props.config && 'name' in props.config
+			? props.config.name
+			: props.config && 'profileName' in props.config
+				? props.config.profileName
+				: props.config && 'title' in props.config
+					? props.config.title
+					: undefined;
 		const options: ICreateTerminalOptions = {
 			cwd,
 			location: props.hidden ? undefined : TerminalLocation.Panel,
 			config: {
-				name: props.config?.name,
+				name: explicitName,
 				forceShellIntegration: true,
 				hideFromUser: props.hidden ? true : undefined,
 				...props.config,

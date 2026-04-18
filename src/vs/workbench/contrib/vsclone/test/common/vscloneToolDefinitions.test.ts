@@ -13,18 +13,18 @@ suite('VSCloneToolDefinitions', () => {
 	test('formats tool definitions for the system prompt', () => {
 		const promptSection = formatToolDefinitionsForPrompt('act');
 		assert.ok(promptSection.includes('## Available Tools'));
-		assert.ok(promptSection.includes('<tool_call>'));
+		assert.ok(promptSection.includes('native tool-calling interface'));
 		for (const tool of VSCLONE_TOOL_DEFINITIONS) {
 			assert.ok(promptSection.includes(`### ${tool.name}`));
 		}
 		assert.ok(promptSection.includes('attempt_completion'));
-		assert.ok(promptSection.includes('Thinking:'));
 		assert.ok(promptSection.includes('Only call read_file for paths you directly observed'));
-		assert.ok(promptSection.includes('If list_directory returns no entries, treat the directory as empty'));
-		assert.ok(promptSection.includes('After emitting a <tool_call> block, stop and wait for the tool result.'));
-		assert.ok(promptSection.includes('standalone line immediately followed by a single <tool_call> block'));
-		assert.ok(promptSection.includes('Never invent or emit <tool_result> blocks yourself.'));
-		assert.ok(promptSection.includes('For attempt_completion, put the entire user-facing summary inside <result>'));
+		assert.ok(promptSection.includes('The system prompt does not include a precomputed workspace tree'));
+		assert.ok(promptSection.includes('If ls_dir returns no entries, treat the directory as empty'));
+		assert.ok(promptSection.includes('Call one tool at a time and wait for its tool result before calling another tool.'));
+		assert.ok(promptSection.includes('Do not hand-write XML or pseudo-tool syntax.'));
+		assert.ok(promptSection.includes('Never invent tool results yourself.'));
+		assert.ok(promptSection.includes('For attempt_completion, put the final user-facing summary in the `result` argument'));
 	});
 
 	test('filters mutating tools from the prompt in plan mode', () => {

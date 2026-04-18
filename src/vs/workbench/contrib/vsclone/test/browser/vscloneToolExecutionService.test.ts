@@ -50,6 +50,7 @@ class TestLogService implements Pick<ILogService, 'info' | 'warn' | 'error'> {
 
 class ToolExecutionHarness {
 	readonly workspaceRoot = URI.file('/workspace');
+	workspaceFolders: Array<{ uri: URI; name?: string }> = [{ uri: this.workspaceRoot, name: 'workspace' }];
 	readonly logService = new TestLogService();
 	readonly openModels = new Map<string, { getValue(): string }>();
 	readonly markers = new Map<string, unknown[]>();
@@ -80,6 +81,13 @@ class ToolExecutionHarness {
 		failures: [],
 		fileChanges: [],
 	};
+
+	setWorkspaceFolders(...folders: URI[]): void {
+		this.workspaceFolders = folders.map(folder => ({
+			uri: folder,
+			name: folder.path.split('/').filter(Boolean).pop(),
+		}));
+	}
 
 	resolveHandler: (resource: URI) => Promise<IResolveStat> = async (resource) => ({
 		resource,
@@ -118,9 +126,11 @@ class ToolExecutionHarness {
 
 	readonly workspaceContextService = {
 		getWorkspace: () => ({
-			folders: [{ uri: this.workspaceRoot }],
+			folders: this.workspaceFolders,
 		}),
-		isInsideWorkspace: (resource: URI) => resource.path === this.workspaceRoot.path || resource.path.startsWith(`${this.workspaceRoot.path}/`),
+		isInsideWorkspace: (resource: URI) => this.workspaceFolders.some(folder =>
+			resource.path === folder.uri.path || resource.path.startsWith(`${folder.uri.path}/`),
+		),
 	} as unknown as IWorkspaceContextService;
 
 	readonly modelService = {
@@ -459,6 +469,55 @@ suite('VSCloneToolExecutionService', () => {
 		// The path-validation helper is part of the tool contract, so this assertion intentionally pins the exact copy.
 		// eslint-disable-next-line local/code-no-unexternalized-strings
 		assert.strictEqual(helpers.invalidPathMessage('../outside.ts'), "Invalid path '../outside.ts'. Paths must resolve inside the current workspace.");
+	});
+
+	test('TE-05b rejects ambiguous relative paths in multi-root workspaces and accepts workspace-prefixed ones', async () => {
+		const testHarness = new ToolExecutionHarness();
+		testHarness.setWorkspaceFolders(URI.file('/workspace/app-one'), URI.file('/workspace/app-two'));
+		testHarness.resolveHandler = async (resource) => createFileStat(resource.path);
+		testHarness.readFileHandler = async () => 'export const value = 1;';
+		const service = testHarness.createService();
+		const helpers = asInternals(service);
+		const ambiguousPath = 'src/file.ts';
+		const ambiguousDirectoryPath = 'src';
+		const ambiguousMessage = "Invalid path 'src/file.ts'. Relative paths are ambiguous in a multi-root workspace; prefix them with a workspace folder name or use an absolute path inside the workspace.";
+		const ambiguousDirectoryMessage = "Invalid path 'src'. Relative paths are ambiguous in a multi-root workspace; prefix them with a workspace folder name or use an absolute path inside the workspace.";
+
+		assert.strictEqual(helpers.resolveWorkspacePath(ambiguousPath), undefined);
+		assert.strictEqual(helpers.resolveWorkspacePath(ambiguousDirectoryPath), undefined);
+		assert.strictEqual(helpers.invalidPathMessage(ambiguousPath), ambiguousMessage);
+		assert.strictEqual(helpers.invalidPathMessage(ambiguousDirectoryPath), ambiguousDirectoryMessage);
+		assert.strictEqual(
+			helpers.resolveWorkspacePath('app-two/src/file.ts')?.uri.toString(),
+			'file:///workspace/app-two/src/file.ts',
+		);
+		const prefixedReadResult = await service.executeTool('read_file', { path: 'app-two/src/file.ts' });
+		assert.strictEqual(prefixedReadResult.success, true);
+		assert.ok(prefixedReadResult.output.includes('Contents of file:///workspace/app-two/src/file.ts:'));
+		assert.ok(prefixedReadResult.output.includes('export const value = 1;'));
+		assert.deepStrictEqual(testHarness.resolveCalls, ['file:///workspace/app-two/src/file.ts']);
+		assert.deepStrictEqual(testHarness.readFileCalls, ['file:///workspace/app-two/src/file.ts']);
+
+		const readResult = await service.executeTool('read_file', { path: ambiguousPath });
+		const listResult = await service.executeTool('list_directory', { path: ambiguousDirectoryPath });
+		const searchResult = await service.executeTool('search_files', { path: ambiguousDirectoryPath, pattern: 'value' });
+		const editResult = await service.executeTool('edit_file', {
+			path: ambiguousPath,
+			changes: '<<<<<<< SEARCH\nvalue\n=======\nnext\n>>>>>>> REPLACE',
+		});
+		const createResult = await service.executeTool('create_file', { path: ambiguousPath, content: 'text' });
+
+		assert.deepStrictEqual(readResult, { success: false, output: ambiguousMessage });
+		assert.deepStrictEqual(listResult, { success: false, output: ambiguousDirectoryMessage });
+		assert.deepStrictEqual(searchResult, { success: false, output: ambiguousDirectoryMessage });
+		assert.deepStrictEqual(editResult, { success: false, output: ambiguousMessage });
+		assert.deepStrictEqual(createResult, { success: false, output: ambiguousMessage });
+		assert.deepStrictEqual(testHarness.resolveCalls, ['file:///workspace/app-two/src/file.ts']);
+		assert.deepStrictEqual(testHarness.readFileCalls, ['file:///workspace/app-two/src/file.ts']);
+		assert.deepStrictEqual(testHarness.searchCalls, []);
+		assert.deepStrictEqual(testHarness.queryBuilderCalls, []);
+		assert.deepStrictEqual(testHarness.bulkEditCalls, []);
+		assert.deepStrictEqual(testHarness.rewriteFileCalls, []);
 	});
 
 	test('TE-06 rejects read-file calls without a path', async () => {

@@ -8,50 +8,56 @@ import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { VSCloneChatSessionService } from '../../browser/vscloneChatSessionService.js';
+import { VSCloneChatThreadService } from '../../browser/vscloneChatThreadService.js';
 import { IVSCloneContextGatheringService } from '../../browser/vscloneContextGatheringService.js';
 import { IVSCloneThreadRuntimeHandle, IVSCloneThreadRuntimeRunOptions, IVSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
-import {
-	IVSCloneChatHistoryService,
-	IVSCloneChatHistoryThread,
-	IVSCloneChatHistoryTurn,
-	IVSCloneChatTurnUpdate,
-	VSCloneChatHistoryScope,
-} from '../../common/backend/vscloneChatHistoryService.js';
 import { IVSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
 import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
-import { IVSClonePromptAssemblyService, IVSClonePromptContext } from '../../common/vsclonePromptAssemblyService.js';
-import { IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
+import { IVSCloneModelSelection } from '../../common/vscloneModelSelectionTypes.js';
+import type { IVSClonePromptContext } from '../../common/vsclonePrompts.js';
+import { IVSCloneSettingsService } from '../../common/vscloneSettingsService.js';
+import type { IVSCloneSettingsState } from '../../common/vscloneSettingsTypes.js';
 import { IVSCloneThreadRuntimeState } from '../../common/vscloneThreadRuntimeTypes.js';
+import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
 
-class TestHistoryService implements IVSCloneChatHistoryService {
+class StaticSettingsService implements IVSCloneSettingsService {
 	declare readonly _serviceBrand: undefined;
-	readonly onDidChange = Event.None;
-
-	constructor(private readonly turns: readonly IVSCloneChatHistoryTurn[]) { }
-
-	async initialize(): Promise<void> { }
-	getThreads(): readonly IVSCloneChatHistoryThread[] { return []; }
-	getTurns(): readonly IVSCloneChatHistoryTurn[] { return this.turns; }
-	applyTurnUpdate(_update: IVSCloneChatTurnUpdate): void { }
-	async archiveThread(_threadId: string, _archived: boolean): Promise<void> { }
-	async deleteThread(_threadId: string): Promise<void> { }
-	async clearAll(_scope: VSCloneChatHistoryScope): Promise<void> { }
-}
-
-class StaticSelectionService implements IVSCloneThreadModelSelectionService {
-	declare readonly _serviceBrand: undefined;
+	readonly onDidChangeState = Event.None;
 	readonly onDidChangeSelection = Event.None;
 
 	constructor(private readonly selection: IVSCloneModelSelection) { }
 
 	async initialize(): Promise<void> { }
-	getCurrentSelectionForThread(): IVSCloneModelSelection | undefined { return this.selection; }
-	async setSelectionForThread(): Promise<void> { }
+	async refreshState(): Promise<void> { }
+	getState(): IVSCloneSettingsState { throw new Error('State access is not needed in this integration test.'); }
+	getProviders() { return []; }
+	getModels() { return []; }
+	getModelsForFeature() { return []; }
+	getModel() { return undefined; }
+	getSelectableModels() { return []; }
+	getFeatureSelection() { return undefined; }
+	getFeatureDefaults() {
+		return {
+			Chat: { featureName: 'Chat' as const, location: 'chat' as const, selection: undefined },
+			Autocomplete: { featureName: 'Autocomplete' as const, location: 'editorInline' as const, selection: undefined },
+			Notebook: { featureName: 'Notebook' as const, location: 'notebook' as const, selection: undefined },
+			Terminal: { featureName: 'Terminal' as const, location: 'terminal' as const, selection: undefined },
+		};
+	}
+	getCurrentSelectionForFeatureName(): IVSCloneModelSelection | undefined { return this.selection; }
+	getCurrentSelectionForFeature(): IVSCloneModelSelection | undefined { return this.selection; }
+	getThreadSelectionSnapshot() { return undefined; }
+	async setSelectionForFeature(): Promise<void> { }
 	async switchToNextModel(): Promise<IVSCloneModelSelection | undefined> { return undefined; }
 	async resetSelectionForThread(): Promise<void> { }
 	hasSelectionForThread(): boolean { return true; }
+	getRecentModels() { return []; }
 	getRecentModelIdentifiers(): readonly string[] { return [this.selection.modelIdentifier]; }
+	getEligibilityRecords() { return []; }
+	async setProviderEnabled(): Promise<void> { }
+	getIneligibilityRecord() { return undefined; }
+	async markModelIneligible(): Promise<void> { }
+	async clearIneligibilityForVendor(): Promise<void> { }
 }
 
 class StaticPlanModeService implements IVSClonePlanModeService {
@@ -84,6 +90,11 @@ class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	cancelThread(): void { }
 	approveLatestToolRequest(): boolean { return false; }
 	rejectLatestToolRequest(): boolean { return false; }
+	getThreads(): readonly [] { return []; }
+	isDeletedThread(): boolean { return false; }
+	archiveThread(): boolean { return false; }
+	deleteThread(): boolean { return false; }
+	clearAll(): void { }
 	getState(threadId: string): IVSCloneThreadRuntimeState | undefined { return this.statesByThreadId.get(threadId); }
 	async rewindToCheckpoint(): Promise<boolean> { return false; }
 }
@@ -92,20 +103,7 @@ class StaticContextGatheringService implements IVSCloneContextGatheringService {
 	declare readonly _serviceBrand: undefined;
 
 	async gatherContext(): Promise<IVSClonePromptContext> {
-		return {
-			openFiles: [],
-			workspaceFolders: [],
-			directoryTree: '(empty)',
-			diagnostics: [],
-		};
-	}
-}
-
-class RecordingPromptAssemblyService implements IVSClonePromptAssemblyService {
-	declare readonly _serviceBrand: undefined;
-
-	assembleSystemMessage(_context: IVSClonePromptContext, _vendor: 'openai' | 'anthropic' | 'google', _mode: VSCloneChatMode): string {
-		return 'SYSTEM';
+		return {};
 	}
 }
 
@@ -124,25 +122,22 @@ function createSelection(): IVSCloneModelSelection {
 suite('VSCloneChatExecutionIntegration', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('submit should preserve previous assistant context from runtime after explicit legacy import', async () => {
+	test('submit should preserve previous assistant context from runtime', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const historyService = new TestHistoryService([]);
-		const selectionService = new StaticSelectionService(createSelection());
+		const settingsService = new StaticSettingsService(createSelection());
 		const threadRuntimeService = new RecordingThreadRuntimeService();
-		// Imported markdown-only legacy turns are normalized into assistant runtime messages before
-		// active submit. The session layer should reuse that runtime branch without rereading history.
+		// The session layer should read previous turns from runtime state without any history fallback.
 		threadRuntimeService.statesByThreadId.set('thread-1', {
 			threadId: 'thread-1',
 			catalog: {
 				threadId: 'thread-1',
-				title: 'Imported thread',
+				title: 'Existing thread',
 				createdAt: 1,
 				updatedAt: 2,
 				status: 'completed',
 				archived: false,
 				turnCount: 1,
-				lastTurnPreview: 'Assistant response from markdown',
-				importedFromHistory: true,
+				lastTurnPreview: 'Assistant response',
 			},
 			streamState: { kind: 'idle' },
 			messages: [
@@ -152,32 +147,28 @@ suite('VSCloneChatExecutionIntegration', () => {
 					mode: 'act',
 					createdAt: 1,
 					content: 'Initial prompt',
-					metadata: { importedFromHistory: true },
 				},
 				{
 					id: 'thread-1:turn-1:assistant',
 					role: 'assistant',
 					mode: 'act',
 					createdAt: 2,
-					content: 'Assistant response from markdown',
-					metadata: { importedFromHistory: true },
+					content: 'Assistant response',
 				},
 			],
 			checkpoints: [],
-			isRunning: false,
 			lastUpdatedAt: 2,
 		});
-		const sessionService = testDisposables.add(new VSCloneChatSessionService(
-			historyService,
-			selectionService,
+		const chatThreadService = testDisposables.add(new VSCloneChatThreadService(
+			settingsService,
 			new StaticPlanModeService(),
 			new NullLogService(),
 			threadRuntimeService,
 			new StaticContextGatheringService(),
-			new RecordingPromptAssemblyService(),
+			new TestVSCloneUnifiedChatBackendService(),
 		));
 
-		const result = await sessionService.submitPrompt('Follow up on the earlier answer', {
+		const result = await chatThreadService.sendMessage('Follow up on the earlier answer', {
 			threadId: 'thread-1',
 			sessionResource: 'vsclone://api/thread-1',
 		});
@@ -188,7 +179,8 @@ suite('VSCloneChatExecutionIntegration', () => {
 		});
 		assert.deepStrictEqual(threadRuntimeService.lastOptions?.previousTurns, [
 			{ role: 'user', content: 'Initial prompt' },
-			{ role: 'assistant', content: 'Assistant response from markdown' },
+			{ role: 'assistant', content: 'Assistant response' },
 		]);
+		assert.ok(threadRuntimeService.lastOptions?.systemMessage?.includes('## Available Tools'));
 	});
 });

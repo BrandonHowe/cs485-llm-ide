@@ -13,38 +13,30 @@ import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js'
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation } from '../../../common/views.js';
-import { registerVSCloneChatHistoryActions } from './vscloneChatHistoryActions.js';
+import { registerVSCloneThreadActions } from './vscloneThreadActions.js';
 import { registerVSCloneAutocompleteActions } from './vscloneAutocompleteActions.js';
 import { registerVSCloneModelSwitcherActions } from './vscloneModelSwitcherActions.js';
 import { registerVSCloneOAuthActions } from './vscloneOAuthActions.js';
 import { VSCloneOAuthService } from './vscloneOAuthService.js';
-import { IVSCloneEditCodeService, VSCloneEditCodeService } from './vscloneEditCodeService.js';
-import { IVSCloneChatApiService, VSCloneChatApiService } from './vscloneChatApiService.js';
-import { IVSCloneAgentLoopService, VSCloneAgentLoopService } from './vscloneAgentLoopService.js';
-import { IVSCloneChatSessionService, VSCloneChatSessionService } from './vscloneChatSessionService.js';
+import { VSCloneEditCodeService } from './vscloneEditCodeService.js';
+import { IVSCloneEditCodeService } from './vscloneEditCodeServiceInterface.js';
+import { IVSCloneChatThreadService, VSCloneChatThreadService } from './vscloneChatThreadService.js';
+import { IVSCloneConvertToLLMMessageService, VSCloneConvertToLLMMessageService } from './vscloneConvertToLLMMessageService.js';
 import { IVSCloneContextGatheringService, VSCloneContextGatheringService } from './vscloneContextGatheringService.js';
-import { IVSCloneEditApplicationService, VSCloneEditApplicationService } from './vscloneEditApplicationService.js';
 import { IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
 import { IVSCloneToolExecutionService, IVSCloneToolRuntimeService, VSCloneToolExecutionService, VSCloneToolRuntimeService } from './vscloneToolExecutionService.js';
 import { IVSCloneTerminalToolService, VSCloneTerminalToolService } from './vscloneTerminalToolService.js';
 import { VSCloneUnifiedChatViewPane } from './vscloneUnifiedChatViewPane.js';
 import { VSCloneViewContainerId, VSCloneViewId } from './vsclone.js';
-import { IVSCloneChatHistoryService, VSCloneChatHistoryEnabledSetting, VSCloneChatHistoryMaxThreadsSetting, VSCloneChatHistoryMaxTurnsPerThreadSetting, VSCloneChatHistoryPersistScopeSetting, VSCloneChatHistoryRailWidthSetting, VSCloneChatHistoryRedactSecretsSetting, VSCloneChatHistoryRetentionDaysSetting, VSCloneChatHistoryService } from '../common/backend/vscloneChatHistoryService.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
-import { IVSCloneModelCatalogService, VSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
-import { IVSCloneModelEligibilityService, VSCloneModelEligibilityService } from '../common/vscloneModelEligibilityService.js';
 import { IVSClonePlanModeService, VSClonePlanModeService } from '../common/vsclonePlanModeService.js';
-import { IVSClonePromptAssemblyService, VSClonePromptAssemblyService } from '../common/vsclonePromptAssemblyService.js';
+import { IVSCloneSettingsService, VSCloneSettingsService } from '../common/vscloneSettingsService.js';
 import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
-import { IVSCloneCompletionBackend } from '../common/vscloneCompletionTypes.js';
-import { IVSCloneCompletionPromptService, VSCloneCompletionPromptService } from '../common/vscloneCompletionPromptService.js';
-import { IVSCloneProviderPreferencesService, VSCloneProviderPreferencesService } from '../common/vscloneProviderPreferencesService.js';
 import { VSCloneAutocompleteService, VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from './vscloneAutocompleteService.js';
-import { IVSCloneCompletionApiService, VSCloneCompletionApiService } from './vscloneCompletionApiService.js';
-import { VSCloneCompletionBackendService } from './vscloneCompletionBackendService.js';
-import { IVSCloneCompletionContextService, VSCloneCompletionContextService } from './vscloneCompletionContextService.js';
+import { IVSCloneLLMMessageService, VSCloneLLMMessageService } from './vscloneLLMMessageService.js';
 import { IVSCloneThreadRuntimeService, VSCloneThreadRuntimeService } from './vscloneThreadRuntimeService.js';
 import { IVSCloneUnifiedChatBackendService, VSCloneUnifiedChatBackendService } from '../common/backend/vscloneUnifiedChatBackendService.js';
+import { VSCloneChatRailWidthSetting } from '../common/vscloneChatViewSettings.js';
 
 const vscloneContributionRegistrationKey = '__vscloneContributionRegistered__';
 type VSCloneContributionGlobalScope = typeof globalThis & {
@@ -80,20 +72,16 @@ function registerVSCloneContribution(): void {
 	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([viewDescriptor], vscloneViewContainer);
 
 	registerSingleton(IVSCloneUnifiedChatBackendService, VSCloneUnifiedChatBackendService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneChatHistoryService, VSCloneChatHistoryService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneProviderPreferencesService, VSCloneProviderPreferencesService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneModelEligibilityService, VSCloneModelEligibilityService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneModelCatalogService, VSCloneModelCatalogService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneSettingsService, VSCloneSettingsService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService, InstantiationType.Delayed);
 	registerSingleton(IVSClonePlanModeService, VSClonePlanModeService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneContextGatheringService, VSCloneContextGatheringService, InstantiationType.Delayed);
-	registerSingleton(IVSClonePromptAssemblyService, VSClonePromptAssemblyService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneConvertToLLMMessageService, VSCloneConvertToLLMMessageService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneEditCodeService, VSCloneEditCodeService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneEditApplicationService, VSCloneEditApplicationService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneProviderConfigurationBridge, VSCloneProviderConfigurationBridge, InstantiationType.Delayed);
-	registerSingleton(IVSCloneChatApiService, VSCloneChatApiService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneCompletionApiService, VSCloneCompletionApiService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneCompletionContextService, VSCloneCompletionContextService, InstantiationType.Delayed);
+	// Phase 1.1 is now part of the normal service graph so compile-time wiring fails fast instead of
+	// being hidden behind best-effort dynamic imports.
+	registerSingleton(IVSCloneLLMMessageService, VSCloneLLMMessageService, InstantiationType.Delayed);
 	// The tool execution/runtime pair intentionally split the old monolithic service into two
 	// decorators, but both classes still use standard DI metadata generated by TS decorators.
 	// The helper's constructor typing is stricter than the emitted metadata shape here, so we cast
@@ -101,14 +89,11 @@ function registerVSCloneContribution(): void {
 	registerSingleton(IVSCloneToolExecutionService, VSCloneToolExecutionService as never, InstantiationType.Delayed);
 	registerSingleton(IVSCloneToolRuntimeService, VSCloneToolRuntimeService as never, InstantiationType.Delayed);
 	registerSingleton(IVSCloneTerminalToolService, VSCloneTerminalToolService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneThreadRuntimeService, VSCloneThreadRuntimeService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneAgentLoopService, VSCloneAgentLoopService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneChatSessionService, VSCloneChatSessionService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneThreadRuntimeService, VSCloneThreadRuntimeService as never, InstantiationType.Delayed);
+	registerSingleton(IVSCloneChatThreadService, VSCloneChatThreadService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneOAuthService, VSCloneOAuthService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneCompletionPromptService, VSCloneCompletionPromptService, InstantiationType.Delayed);
-	registerSingleton(IVSCloneCompletionBackend, VSCloneCompletionBackendService, InstantiationType.Delayed);
 
-	registerVSCloneChatHistoryActions();
+	registerVSCloneThreadActions();
 	registerVSCloneAutocompleteActions();
 	registerVSCloneModelSwitcherActions();
 	registerVSCloneOAuthActions();
@@ -119,56 +104,12 @@ function registerVSCloneContribution(): void {
 		title: localize('vsclone.configuration.title', 'VSClone'),
 		type: 'object',
 		properties: {
-			[VSCloneChatHistoryEnabledSetting]: {
-				type: 'boolean',
-				default: true,
-				description: localize('vsclone.configuration.chatHistory.enabled', 'Enable VSClone chat history tracking.'),
-				scope: ConfigurationScope.WINDOW,
-			},
-			[VSCloneChatHistoryMaxThreadsSetting]: {
-				type: 'number',
-				default: 200,
-				minimum: 1,
-				description: localize('vsclone.configuration.chatHistory.maxThreads', 'Maximum number of VSClone chat threads to persist.'),
-				scope: ConfigurationScope.WINDOW,
-			},
-			[VSCloneChatHistoryMaxTurnsPerThreadSetting]: {
-				type: 'number',
-				default: 100,
-				minimum: 1,
-				description: localize('vsclone.configuration.chatHistory.maxTurnsPerThread', 'Maximum number of turns to persist per VSClone thread.'),
-				scope: ConfigurationScope.WINDOW,
-			},
-			[VSCloneChatHistoryRetentionDaysSetting]: {
-				type: 'number',
-				default: 30,
-				minimum: 1,
-				description: localize('vsclone.configuration.chatHistory.retentionDays', 'Number of days to retain VSClone chat history.'),
-				scope: ConfigurationScope.WINDOW,
-			},
-			[VSCloneChatHistoryRailWidthSetting]: {
+			[VSCloneChatRailWidthSetting]: {
 				type: 'number',
 				default: 320,
 				minimum: 220,
 				maximum: 520,
-				description: localize('vsclone.configuration.chatHistory.railWidth', 'Default width in pixels for the VSClone chat history rail.'),
-				scope: ConfigurationScope.WINDOW,
-			},
-			[VSCloneChatHistoryPersistScopeSetting]: {
-				type: 'string',
-				default: 'workspace',
-				enum: ['workspace', 'profile'],
-				enumDescriptions: [
-					localize('vsclone.configuration.chatHistory.persistScope.workspace', 'Store VSClone chat history in workspace storage.'),
-					localize('vsclone.configuration.chatHistory.persistScope.profile', 'Store VSClone chat history in profile-global storage.'),
-				],
-				description: localize('vsclone.configuration.chatHistory.persistScope', 'Persistence scope for VSClone chat history.'),
-				scope: ConfigurationScope.WINDOW,
-			},
-			[VSCloneChatHistoryRedactSecretsSetting]: {
-				type: 'boolean',
-				default: true,
-				description: localize('vsclone.configuration.chatHistory.redactSecrets', 'Redact simple secret-like text patterns before persisting VSClone chat history.'),
+				description: localize('vsclone.configuration.chat.railWidth', 'Default width in pixels for the VSClone chat rail.'),
 				scope: ConfigurationScope.WINDOW,
 			},
 			['vsclone.modelSwitcher.enabled']: {
@@ -192,6 +133,7 @@ function registerVSCloneContribution(): void {
 			},
 		},
 	});
+
 }
 
 const globalScope = globalThis as VSCloneContributionGlobalScope;

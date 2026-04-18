@@ -158,7 +158,7 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 			outgoing.write = sandbox.spy();
 			outgoing.end = sandbox.spy();
 
-			const requestStub = sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest').callsFake((options: any, callback: (response: any) => void) => {
+			const requestStub = sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest').callsFake(((options: any, callback: (response: any) => void) => {
 				assert.deepStrictEqual(options, {
 					hostname: 'example.com',
 					port: '8443',
@@ -179,7 +179,7 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 				});
 
 				return outgoing;
-			});
+			}) as typeof vscloneOAuthLoopbackRuntime.httpsRequest);
 
 			(responseEmitter as any).statusCode = 200;
 

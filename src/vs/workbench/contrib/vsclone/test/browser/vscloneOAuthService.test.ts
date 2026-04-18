@@ -43,6 +43,7 @@ interface IVSCloneOAuthServiceInternals {
 		extra?: { userDisplayName?: string; errorMessage?: string },
 	): void;
 	_recomputeDerivedState(): void;
+	_doRefresh(vendor: VSCloneModelVendor, tokenSet: IVSCloneOAuthTokenSet, authEpoch: number): Promise<void>;
 	_extractUserDisplayNameFromTokenSet(tokenSet: IVSCloneOAuthTokenSet): string | undefined;
 	readonly _tokenSets: Map<VSCloneModelVendor, IVSCloneOAuthTokenSet>;
 }
@@ -57,6 +58,24 @@ function createMainProcessService(): IMainProcessService {
 		_serviceBrand: undefined,
 		getChannel: (_channelName: string) => channel,
 		registerChannel: (_channelName: string) => undefined,
+	};
+}
+
+function createUnavailableMainProcessService() {
+	let getChannelCalls = 0;
+
+	return {
+		service: {
+			_serviceBrand: undefined,
+			getChannel: (_channelName: string) => {
+				getChannelCalls += 1;
+				// Throw instead of returning a stub so the service sees the same missing-desktop-bridge
+				// failure mode it would hit outside Electron.
+				throw new Error('OAuth transport channel is unavailable');
+			},
+			registerChannel: (_channelName: string) => undefined,
+		},
+		getChannelCalls: () => getChannelCalls,
 	};
 }
 
@@ -180,6 +199,7 @@ function createOAuthHarness(options?: {
 	inputResult?: string;
 	pickResult?: unknown;
 	channelHandlers?: Partial<Record<string, (payload: unknown) => unknown | Promise<unknown>>>;
+	mainProcessService?: ReturnType<typeof createRecordingMainProcessService> | ReturnType<typeof createUnavailableMainProcessService>;
 }, store?: Pick<DisposableStore, 'add'>) {
 	if (!store) {
 		throw new Error('Expected a suite-scoped disposable store');
@@ -190,7 +210,7 @@ function createOAuthHarness(options?: {
 	const quickInputService = createRecordingQuickInputService(options?.inputResult, options?.pickResult);
 	const notificationService = createRecordingNotificationService();
 	const { channel, calls } = createChannel(options?.channelHandlers);
-	const mainProcessService = createRecordingMainProcessService(channel);
+	const mainProcessService = options?.mainProcessService ?? createRecordingMainProcessService(channel);
 	const service = testDisposables.add(new VSCloneOAuthService(
 		secretStorageService,
 		new NullLogService(),
@@ -452,7 +472,7 @@ suite('VSCloneOAuthService', () => {
 				[VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL]: () => undefined,
 			},
 		}, store);
-		const manualConfig = {
+		const manualConfig: IVSCloneOAuthProviderConfig = {
 			...defaultOAuthProviderConfig.openai,
 			redirectStrategy: 'manual_paste',
 			redirectUriTemplate: 'http://localhost:1455/auth/callback',
@@ -500,6 +520,55 @@ suite('VSCloneOAuthService', () => {
 		});
 		assert.ok(stoppedSessionId);
 		assert.strictEqual(fallbackHarness.mainProcessService.getChannelCalls(), 1);
+	});
+
+	test('signIn reports a missing OAuth transport channel as a hard failure', async () => {
+		// Missing main-process transport is not the same as a loopback callback failure, so this
+		// regression test makes sure the service does not quietly fall back to manual paste here.
+		const harness = createOAuthHarness({
+			inputResult: 'fallback-code',
+			mainProcessService: createUnavailableMainProcessService(),
+		}, store);
+
+		await harness.service.signIn('openai');
+
+		assert.strictEqual(harness.service.state.providers.openai.status, 'error');
+		assert.strictEqual(
+			harness.service.state.providers.openai.errorMessage,
+			'OAuth requires the desktop VSClone bridge for browser launch and token exchange.'
+		);
+		assert.strictEqual(harness.notificationService.errors.length, 1);
+		assert.match(harness.notificationService.errors[0], /Failed to sign in to OpenAI:/);
+		assert.match(harness.notificationService.errors[0], /OAuth requires the desktop VSClone bridge for browser launch and token exchange\./);
+	});
+
+	test('refresh fails coherently when the OAuth transport channel is unavailable', async () => {
+		// Refresh uses the same main-process bridge as interactive sign-in, so transport loss should
+		// surface as a real OAuth failure instead of a null-assertion crash.
+		const harness = createOAuthHarness({
+			mainProcessService: createUnavailableMainProcessService(),
+		}, store);
+
+		await harness.service.initialize();
+		const internals = asOAuthServiceInternals(harness.service);
+		const tokenSet = createTokenSet({
+			expiresAt: Date.now() - 1_000,
+			refreshToken: 'refresh-1',
+		});
+		internals._tokenSets.set('openai', tokenSet);
+		internals._setProviderStatus('openai', 'signed_in');
+
+		await assert.rejects(
+			internals._doRefresh('openai', tokenSet, 0),
+			/OAuth requires the desktop VSClone bridge for browser launch and token exchange\./
+		);
+		assert.strictEqual(harness.service.state.providers.openai.status, 'error');
+		assert.strictEqual(
+			harness.service.state.providers.openai.errorMessage,
+			'OAuth requires the desktop VSClone bridge for browser launch and token exchange.'
+		);
+		assert.strictEqual(harness.notificationService.errors.length, 1);
+		assert.match(harness.notificationService.errors[0], /Failed to refresh OpenAI session:/);
 	});
 
 	test('refreshes near-expiry OpenAI tokens once and coalesces concurrent refreshes', async () => {

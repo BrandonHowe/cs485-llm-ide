@@ -5,7 +5,6 @@
 
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError } from '../../../../base/common/errors.js';
-import { joinPath } from '../../../../base/common/resources.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
@@ -19,12 +18,16 @@ import { QueryBuilder } from '../../../services/search/common/queryBuilder.js';
 import { isFileMatch, ISearchService, resultIsMatch } from '../../../services/search/common/search.js';
 import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
 import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
-import { type IVSCloneToolDefinition, VSCLONE_TOOL_DEFINITIONS } from '../common/vscloneToolDefinitions.js';
-import { type VSCloneToolApprovalType } from '../common/vscloneToolRuntimeTypes.js';
+import { type IVSCloneToolDefinition, type VSCloneToolApprovalType, VSCLONE_TOOL_DEFINITIONS } from '../common/vscloneToolDefinitions.js';
 import { formatToolResultWithDiff } from '../common/vscloneToolResultDiff.js';
-import { IVSCloneEditCodeService } from './vscloneEditCodeService.js';
-import type { IVSCloneEditCodeService as IVSCloneEditCodeServiceContract } from './vscloneEditCodeServiceInterface.js';
-import { resolveContentEdits, type IVSCloneParsedEdit, type IVSCloneResolvedContentEdit } from './vscloneEditApplicationService.js';
+import { isVSCloneAmbiguousWorkspaceRelativePath, resolveVSCloneWorkspacePath } from '../common/vscloneWorkspacePaths.js';
+import { resolveContentEdits } from './vscloneEditCodeService.js';
+import type {
+	IVSCloneEditCodeService as IVSCloneEditCodeServiceContract,
+	VSCloneParsedEdit as IVSCloneParsedEdit,
+	VSCloneResolvedContentEdit as IVSCloneResolvedContentEdit,
+} from './vscloneEditCodeServiceInterface.js';
+import { IVSCloneEditCodeService } from './vscloneEditCodeServiceInterface.js';
 import { IVSCloneTerminalToolService } from './vscloneTerminalToolService.js';
 
 const maxReadChars = 100000;
@@ -54,6 +57,19 @@ export interface IVSCloneToolRuntimeService {
 	getApprovalType(toolName: string): VSCloneToolApprovalType | undefined;
 }
 
+function normalizeToolName(toolName: string): string {
+	// Keep accepting the pre-port XML names so older transcripts and persisted approvals remain
+	// executable while new prompts only advertise the Void-style tool names.
+	switch (toolName) {
+		case 'list_directory':
+			return 'ls_dir';
+		case 'search_files':
+			return 'search_for_files';
+		default:
+			return toolName;
+	}
+}
+
 interface IParsedSearchReplaceBlock {
 	readonly searchText: string;
 	readonly replaceText: string;
@@ -74,7 +90,7 @@ export class VSCloneToolRuntimeService implements IVSCloneToolRuntimeService {
 	}
 
 	getToolDefinition(toolName: string): IVSCloneToolDefinition | undefined {
-		return VSCLONE_TOOL_DEFINITIONS.find(tool => tool.name === toolName);
+		return VSCLONE_TOOL_DEFINITIONS.find(tool => tool.name === normalizeToolName(toolName));
 	}
 
 	getApprovalType(toolName: string): VSCloneToolApprovalType | undefined {
@@ -100,35 +116,35 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 	}
 
 	async executeTool(toolName: string, params: Record<string, string>, mode: VSCloneChatMode = 'act', token: CancellationToken = CancellationToken.None): Promise<IVSCloneToolExecutionResult> {
-		const invocationLog = `[VSCloneToolExecution] Executing ${toolName} (${summarizeToolParams(params)})`;
+		const normalizedToolName = normalizeToolName(toolName);
+		const invocationLog = `[VSCloneToolExecution] Executing ${normalizedToolName} (${summarizeToolParams(params)})`;
 		this.logService.info(invocationLog);
-		console.info(invocationLog);
 		if (token.isCancellationRequested) {
 			return {
 				success: false,
-				output: `Tool ${toolName} was cancelled before it could finish.`,
+				output: `Tool ${normalizedToolName} was cancelled before it could finish.`,
 			};
 		}
 		try {
 			// Plan mode is enforced here as the last runtime gate so prompt drift or model disobedience
 			// cannot silently turn a read-only planning turn into a workspace mutation.
-			if (mode === 'plan' && !this.planModeService.isToolAllowed(mode, toolName)) {
+			if (mode === 'plan' && !this.planModeService.isToolAllowed(mode, normalizedToolName)) {
 				return {
 					success: false,
 					output: localize(
 						'vsclone.toolExecution.planModeUnavailable',
 						'Tool "{0}" is not available in plan mode. Switch to Act mode to make edits.',
-						toolName,
+						normalizedToolName,
 					),
 				};
 			}
 
-			switch (toolName) {
+			switch (normalizedToolName) {
 				case 'read_file':
 					return this.executeReadFile(params);
-				case 'list_directory':
+				case 'ls_dir':
 					return this.executeListDirectory(params);
-				case 'search_files':
+				case 'search_for_files':
 					return this.executeSearchFiles(params, token);
 				case 'edit_file':
 					return this.executeEditFile(params);
@@ -150,19 +166,18 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 				default:
 					return {
 						success: false,
-						output: `Unknown tool: ${toolName}`,
+						output: `Unknown tool: ${normalizedToolName}`,
 					};
 			}
 		} catch (error) {
 			if (error instanceof CancellationError || token.isCancellationRequested) {
 				return {
 					success: false,
-					output: `Tool ${toolName} was cancelled before it could finish.`,
+					output: `Tool ${normalizedToolName} was cancelled before it could finish.`,
 				};
 			}
 			const message = error instanceof Error ? error.message : String(error);
 			this.logService.error('[VSCloneToolExecution] Tool execution failed', error);
-			console.error('[VSCloneToolExecution] Tool execution failed', error);
 			return {
 				success: false,
 				output: message,
@@ -289,8 +304,8 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		});
 
 		// Local CTS is used to halt the search once the result cap is reached. The external token
-		// is forwarded so that the agent loop's cancel button (and tool-execution timeout) can also
-		// terminate an in-flight search instead of leaving the chat stuck.
+		// is forwarded so that the thread runtime's stop action (and tool-execution timeout) can
+		// also terminate an in-flight search instead of leaving the chat stuck.
 		const cts = new CancellationTokenSource();
 		const externalCancelListener = externalToken.onCancellationRequested(() => cts.cancel());
 		const lines: string[] = [];
@@ -639,19 +654,7 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 			return undefined;
 		}
 
-		let candidate: URI | undefined;
-		if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(normalizedPath)) {
-			try {
-				candidate = URI.parse(normalizedPath);
-			} catch {
-				candidate = undefined;
-			}
-		} else if (normalizedPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(normalizedPath)) {
-			candidate = URI.file(normalizedPath);
-		} else {
-			const relativePath = normalizedPath.replace(/^\.\//, '');
-			candidate = joinPath(workspaceFolders[0].uri, relativePath);
-		}
+		const candidate = resolveVSCloneWorkspacePath(workspaceFolders, normalizedPath);
 
 		if (!candidate || !this.workspaceContextService.isInsideWorkspace(candidate)) {
 			return undefined;
@@ -731,6 +734,9 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 	}
 
 	private invalidPathMessage(path: string): string {
+		if (isVSCloneAmbiguousWorkspaceRelativePath(this.workspaceContextService.getWorkspace().folders, path)) {
+			return `Invalid path '${path}'. Relative paths are ambiguous in a multi-root workspace; prefix them with a workspace folder name or use an absolute path inside the workspace.`;
+		}
 		return `Invalid path '${path}'. Paths must resolve inside the current workspace.`;
 	}
 

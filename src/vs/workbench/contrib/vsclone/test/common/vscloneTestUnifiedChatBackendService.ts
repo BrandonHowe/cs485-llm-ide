@@ -4,14 +4,33 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event } from '../../../../../base/common/event.js';
-import type { IVSCloneUnifiedChatBackendService } from '../../common/backend/vscloneUnifiedChatBackendService.js';
-import type { IVSCloneChatHistoryQuery, IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn, IVSCloneChatTurnUpdate, VSCloneChatHistoryScope } from '../../common/backend/vscloneChatHistoryService.js';
-import type { IVSCloneUnifiedChatSelectionState } from '../../common/vscloneModelSelectionTypes.js';
+import type { IVSCloneUnifiedChatBackendChangeEvent, IVSCloneUnifiedChatBackendService } from '../../common/backend/vscloneUnifiedChatBackendService.js';
+import type { IVSCloneModelSelection, IVSCloneThreadSelectionMap, IVSCloneUnifiedChatSelectionState } from '../../common/vscloneModelSelectionTypes.js';
 import type { IVSCloneUnifiedChatPlanModeState } from '../../common/vsclonePlanModeTypes.js';
+
+function isModelSelection(value: unknown): value is IVSCloneModelSelection {
+	const record = typeof value === 'object' && value !== null ? value as Partial<IVSCloneModelSelection> : undefined;
+	return !!record && typeof record.location === 'string' && typeof record.modelIdentifier === 'string';
+}
+
+function cloneThreadSelectionMap(value: unknown): IVSCloneThreadSelectionMap {
+	if (isModelSelection(value)) {
+		return {
+			[value.location]: { ...value, threadId: undefined },
+		};
+	}
+
+	const record = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
+	return Object.fromEntries(
+		Object.entries(record).map(([location, selection]) => [location, isModelSelection(selection) ? { ...selection, threadId: undefined } : undefined]),
+	) as IVSCloneThreadSelectionMap;
+}
 
 function cloneSelectionState(state: IVSCloneUnifiedChatSelectionState): IVSCloneUnifiedChatSelectionState {
 	return {
-		selectedByThread: Object.fromEntries(Object.entries(state.selectedByThread).map(([threadId, selection]) => [threadId, { ...selection, threadId: undefined }])),
+		selectedByThread: Object.fromEntries(
+			Object.entries(state.selectedByThread).map(([threadId, selections]) => [threadId, cloneThreadSelectionMap(selections)]),
+		),
 		selectedByLocation: Object.fromEntries(Object.entries(state.selectedByLocation).map(([location, selection]) => [location, selection ? { ...selection, threadId: undefined } : undefined])),
 		recentModelIdentifiers: [...state.recentModelIdentifiers],
 	};
@@ -20,9 +39,7 @@ function cloneSelectionState(state: IVSCloneUnifiedChatSelectionState): IVSClone
 export class TestVSCloneUnifiedChatBackendService implements IVSCloneUnifiedChatBackendService {
 	declare readonly _serviceBrand: undefined;
 
-	readonly onDidChange = Event.None;
-	readonly threads: IVSCloneChatHistoryThread[] = [];
-	readonly turnsByThread = new Map<string, readonly IVSCloneChatHistoryTurn[]>();
+	readonly onDidChange: Event<IVSCloneUnifiedChatBackendChangeEvent> = Event.None;
 	private planModeState: IVSCloneUnifiedChatPlanModeState = { modeByThread: {} };
 	private selectionState: IVSCloneUnifiedChatSelectionState = {
 		selectedByThread: {},
@@ -32,24 +49,12 @@ export class TestVSCloneUnifiedChatBackendService implements IVSCloneUnifiedChat
 
 	async initialize(): Promise<void> { }
 
-	getThreads(_query?: IVSCloneChatHistoryQuery): readonly IVSCloneChatHistoryThread[] {
-		return this.threads;
-	}
-
-	getTurns(threadId: string): readonly IVSCloneChatHistoryTurn[] {
-		return this.turnsByThread.get(threadId) ?? [];
-	}
-
-	applyTurnUpdate(_update: IVSCloneChatTurnUpdate): void { }
-
-	async archiveThread(_threadId: string, _archived: boolean): Promise<void> { }
-
 	async deleteThread(threadId: string): Promise<void> {
 		delete this.planModeState.modeByThread[threadId];
 		delete this.selectionState.selectedByThread[threadId];
 	}
 
-	async clearAll(_scope: VSCloneChatHistoryScope): Promise<void> {
+	async clearAll(): Promise<void> {
 		this.planModeState = { modeByThread: {} };
 		this.selectionState = {
 			selectedByThread: {},

@@ -7,9 +7,7 @@ import assert from 'assert';
 import { DisposableStore, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { VSCloneModelSwitcherWidget } from '../../browser/vscloneModelSwitcherWidget.js';
-import { VSCloneModelCatalogService } from '../../common/vscloneModelCatalogService.js';
-import { VSCloneModelEligibilityService } from '../../common/vscloneModelEligibilityService.js';
-import { VSCloneProviderPreferencesService } from '../../common/vscloneProviderPreferencesService.js';
+import { VSCloneSettingsService } from '../../common/vscloneSettingsService.js';
 import { VSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { TestVSCloneOAuthService } from '../common/vscloneTestOAuthService.js';
@@ -18,24 +16,17 @@ import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifi
 suite('VSCloneModelSwitcherWidget', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	async function waitForCatalogToSettle(catalogService: VSCloneModelCatalogService): Promise<void> {
-		for (let attempt = 0; attempt < 50; attempt++) {
-			if (catalogService.getState().status !== 'loading') {
-				return;
-			}
-			await new Promise<void>(resolve => setTimeout(resolve, 10));
-		}
-	}
-
 	async function createHarness(threadId = 'thread-1') {
 		const testDisposables = store.add(new DisposableStore());
 		const storageService = testDisposables.add(new TestStorageService());
-		const providerPreferencesService = testDisposables.add(new VSCloneProviderPreferencesService(storageService));
 		const oauthService = new TestVSCloneOAuthService();
-		const eligibilityService = testDisposables.add(new VSCloneModelEligibilityService(storageService));
-		const catalogService = testDisposables.add(new VSCloneModelCatalogService(providerPreferencesService, oauthService, eligibilityService));
 		const backendService = new TestVSCloneUnifiedChatBackendService();
-		const selectionService = testDisposables.add(new VSCloneThreadModelSelectionService(backendService, catalogService));
+		const settingsService = testDisposables.add(new VSCloneSettingsService(
+			storageService,
+			oauthService,
+			backendService,
+		));
+		const selectionService = testDisposables.add(new VSCloneThreadModelSelectionService(settingsService));
 
 		let manageProvidersCalls = 0;
 		const bridge = {
@@ -45,14 +36,12 @@ suite('VSCloneModelSwitcherWidget', () => {
 			},
 		};
 
-		await providerPreferencesService.initialize();
-		await catalogService.refreshCatalog();
+		await settingsService.initialize();
 		await selectionService.initialize();
 
 		const context = { threadId, location: 'chat' as const };
 		const widget = testDisposables.add(new VSCloneModelSwitcherWidget(
-			catalogService,
-			selectionService,
+			settingsService,
 			bridge,
 			() => context,
 		));
@@ -62,14 +51,14 @@ suite('VSCloneModelSwitcherWidget', () => {
 		testDisposables.add(toDisposable(() => container.remove()));
 		widget.render(container);
 
-		return { providerPreferencesService, oauthService, catalogService, selectionService, widget, container, context, getManageProvidersCalls: () => manageProvidersCalls };
+		return { oauthService, selectionService, settingsService, widget, container, context, getManageProvidersCalls: () => manageProvidersCalls };
 	}
 
 	test('renders closed button and grouped providers when open', async () => {
-		const { catalogService, selectionService, widget, container } = await createHarness();
-		const firstModel = catalogService.getSelectableModels()[0];
+		const { settingsService, widget, container } = await createHarness();
+		const firstModel = settingsService.getSelectableModels()[0];
 		assert.ok(firstModel);
-		await selectionService.setSelectionForThread('thread-1', {
+		await settingsService.setSelectionForFeature('thread-1', {
 			threadId: 'thread-1',
 			location: 'chat',
 			modelIdentifier: firstModel.identifier,
@@ -98,10 +87,10 @@ suite('VSCloneModelSwitcherWidget', () => {
 	});
 
 	test('shows the full Anthropic model label in the switcher button', async () => {
-		const { catalogService, selectionService, widget, container } = await createHarness();
-		const anthropicModel = catalogService.getModels('anthropic')[0];
+		const { settingsService, widget, container } = await createHarness();
+		const anthropicModel = settingsService.getModels('anthropic')[0];
 		assert.ok(anthropicModel);
-		await selectionService.setSelectionForThread('thread-1', {
+		await settingsService.setSelectionForFeature('thread-1', {
 			threadId: 'thread-1',
 			location: 'chat',
 			modelIdentifier: anthropicModel.identifier,
@@ -135,10 +124,10 @@ suite('VSCloneModelSwitcherWidget', () => {
 	});
 
 	test('model rows expose pressed state and locked-provider accessibility labels', async () => {
-		const { providerPreferencesService, catalogService, oauthService, selectionService, widget, container } = await createHarness();
-		const selectedModel = catalogService.getSelectableModels()[0];
+		const { oauthService, settingsService, widget, container } = await createHarness();
+		const selectedModel = settingsService.getSelectableModels()[0];
 		assert.ok(selectedModel);
-		await selectionService.setSelectionForThread('thread-1', {
+		await settingsService.setSelectionForFeature('thread-1', {
 			threadId: 'thread-1',
 			location: 'chat',
 			modelIdentifier: selectedModel.identifier,
@@ -148,10 +137,8 @@ suite('VSCloneModelSwitcherWidget', () => {
 			selectedAt: Date.now(),
 		});
 
-		await providerPreferencesService.setProviderEnabled('google', true);
 		oauthService.setReady('google', false);
-		await catalogService.refreshCatalog();
-		await waitForCatalogToSettle(catalogService);
+		await settingsService.refreshState();
 		widget.open();
 
 		const rows = Array.from(container.querySelectorAll('.vsclone-model-switcher-row')) as HTMLButtonElement[];
@@ -174,44 +161,42 @@ suite('VSCloneModelSwitcherWidget', () => {
 	});
 
 	test('shows loading then error state', async () => {
-		const { catalogService, widget, container } = await createHarness();
+		const { settingsService, widget, container } = await createHarness();
 
-		const pendingRefresh = catalogService.refreshCatalog();
+		const pendingRefresh = settingsService.refreshState();
 		widget.open();
 		assert.ok((container.textContent || '').includes('Loading models...'));
 		await pendingRefresh;
 
-		catalogService.setFailNextRefreshForTest();
-		await catalogService.refreshCatalog();
+		settingsService.setFailNextRefreshForTest();
+		await settingsService.refreshState();
 		widget.open();
 		assert.ok((container.textContent || '').includes('Error loading models'));
 		assert.ok((container.textContent || '').includes('Try again'));
 	});
 
 	test('shows empty and requires sign-in states', async () => {
-		const { providerPreferencesService, catalogService, oauthService, widget, container } = await createHarness();
+		const { oauthService, settingsService, widget, container } = await createHarness();
 
-		await providerPreferencesService.setProviderEnabled('openai', false);
-		await providerPreferencesService.setProviderEnabled('anthropic', false);
-		await providerPreferencesService.setProviderEnabled('google', false);
-		await catalogService.refreshCatalog();
-		await waitForCatalogToSettle(catalogService);
+		await settingsService.setProviderEnabled('openai', false);
+		await settingsService.setProviderEnabled('anthropic', false);
+		await settingsService.setProviderEnabled('google', false);
+		await settingsService.refreshState();
 		widget.open();
 		assert.ok((container.textContent || '').includes('No models available'));
 
-		await providerPreferencesService.setProviderEnabled('google', true);
+		await settingsService.setProviderEnabled('google', true);
 		oauthService.setReady('google', false);
-		await catalogService.refreshCatalog();
-		await waitForCatalogToSettle(catalogService);
+		await settingsService.refreshState();
 		widget.open();
 		assert.ok((container.textContent || '').includes('Sign in to use this provider'));
 	});
 
 	test('footer shows reset only for explicit thread selection', async () => {
 		const withThread = await createHarness('thread-1');
-		const withThreadModel = withThread.catalogService.getSelectableModels()[0];
+		const withThreadModel = withThread.settingsService.getSelectableModels()[0];
 		assert.ok(withThreadModel);
-		await withThread.selectionService.setSelectionForThread('thread-1', {
+		await withThread.settingsService.setSelectionForFeature('thread-1', {
 			threadId: 'thread-1',
 			location: 'chat',
 			modelIdentifier: withThreadModel.identifier,

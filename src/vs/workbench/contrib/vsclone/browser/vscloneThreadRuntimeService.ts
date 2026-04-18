@@ -8,17 +8,20 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
-import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
-import type { IVSCloneChatHistoryThread, IVSCloneChatHistoryTurn } from '../common/backend/vscloneChatHistoryService.js';
-import { VSCloneThreadRuntimeStore } from '../common/backend/vscloneThreadRuntimeStore.js';
-import type { IVSCloneApiConversationMessage } from '../common/vscloneChatApiAdapters.js';
-import { formatToolResult } from '../common/vscloneToolDefinitions.js';
+import { IVSCloneUnifiedChatBackendService } from '../common/backend/vscloneUnifiedChatBackendService.js';
+import type { IVSCloneChatTransportConversationMessage } from '../common/vscloneChatTransportTypes.js';
+import { IVSCloneLLMMessageRequestHandle, type IVSCloneLLMMessageToolCall } from '../common/vscloneLLMMessageTypes.js';
+import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
+import { IVSCloneSettingsService } from '../common/vscloneSettingsService.js';
+import { formatToolResult, type VSCloneToolApprovalType } from '../common/vscloneToolDefinitions.js';
+import { resolveVSCloneWorkspacePath } from '../common/vscloneWorkspacePaths.js';
 import {
 	IVSCloneThreadRuntimeAssistantEditApplication,
 	IVSCloneThreadRuntimeAssistantEditApplicationState,
@@ -29,17 +32,18 @@ import {
 	IVSCloneThreadRuntimeCheckpoint,
 	IVSCloneThreadRuntimeConversationMessageMetadata,
 	IVSCloneThreadRuntimeMessage,
-	IVSCloneThreadRuntimePausedApproval,
 	IVSCloneThreadRuntimeRunContext,
 	IVSCloneThreadRuntimeRunOptions,
 	IVSCloneThreadRuntimeSnapshot,
 	IVSCloneThreadRuntimeState,
+	type IVSCloneThreadRuntimeToolRequestMessage,
 	VSCloneThreadRuntimeAssistantEditSuggestionApplyMode,
 	VSCloneThreadToolApprovalDecision,
 } from '../common/vscloneThreadRuntimeTypes.js';
-import type { VSCloneToolApprovalType } from '../common/vscloneToolRuntimeTypes.js';
-import { IVSCloneAgentLoopHandle, IVSCloneAgentLoopOptions, IVSCloneAgentLoopService } from './vscloneAgentLoopService.js';
-import { parseSearchReplaceBlocks } from './vscloneEditApplicationService.js';
+import type { VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
+import { IVSCloneConvertToLLMMessageService } from './vscloneConvertToLLMMessageService.js';
+import { parseSearchReplaceBlocks } from './vscloneEditCodeService.js';
+import { IVSCloneLLMMessageService } from './vscloneLLMMessageService.js';
 import {
 	IVSCloneToolExecutionResult,
 	IVSCloneToolExecutionService,
@@ -50,6 +54,9 @@ export type { IVSCloneThreadRuntimeRunOptions } from '../common/vscloneThreadRun
 
 export const IVSCloneThreadRuntimeService = createDecorator<IVSCloneThreadRuntimeService>('vscloneThreadRuntimeService');
 const defaultPersistedToolExecutionTimeoutMs = 90_000;
+const maxAgentIterations = 25;
+const liveToolExecutionTimeoutMs = 90_000;
+const runtimeStorageKey = 'vsclone.threadRuntime.v2';
 
 export interface IVSCloneThreadRuntimeHandle {
 	readonly done: Promise<void>;
@@ -60,11 +67,10 @@ export interface IVSCloneThreadRuntimeService {
 	readonly _serviceBrand: undefined;
 	readonly onDidChangeState: Event<IVSCloneThreadRuntimeState>;
 	runThread(options: IVSCloneThreadRuntimeRunOptions): IVSCloneThreadRuntimeHandle;
-	ensureHydratedFromHistory(threadId: string, turns: readonly IVSCloneChatHistoryTurn[]): IVSCloneThreadRuntimeState | undefined;
-	ensureCatalogImportedFromHistory(thread: IVSCloneChatHistoryThread, turns?: readonly IVSCloneChatHistoryTurn[]): IVSCloneThreadRuntimeState;
 	recordRejectedTurn(options: {
 		threadId: string;
 		turnId: string;
+		sessionResource: string;
 		promptText: string;
 		mode: IVSCloneThreadRuntimeRunOptions['mode'];
 		reason: string;
@@ -98,19 +104,39 @@ interface IPendingApproval {
 }
 
 interface IActiveThreadExecution {
-	readonly handle: IVSCloneAgentLoopHandle;
+	readonly done: Promise<void>;
+	readonly cancel: () => void;
 	readonly pendingCheckpointByToolKey: Map<string, readonly IVSCloneThreadRuntimeSnapshot[]>;
 	readonly runContext: IVSCloneThreadRuntimeRunContext;
 	pendingApproval: IPendingApproval | undefined;
+	activeRequest: IVSCloneLLMMessageRequestHandle | undefined;
+	activeToolTokenSource: CancellationTokenSource | undefined;
+	cancelled: boolean;
+	finished: boolean;
 }
 
-type IThreadRuntimeStore = Pick<VSCloneThreadRuntimeStore, 'loadAll' | 'loadDeletedThreadIds' | 'saveState' | 'deleteState' | 'markDeletedThread' | 'clearAll' | 'dispose'>;
 type IThreadRuntimeStateDraft = Omit<IVSCloneThreadRuntimeState, 'catalog'> & { readonly catalog?: IVSCloneThreadRuntimeCatalogEntry };
+
+interface IVSClonePersistedThreadRuntimePayload {
+	readonly schemaVersion: 2;
+	readonly workspaceId: string;
+	readonly updatedAt: number;
+	readonly states: readonly IVSCloneThreadRuntimeState[];
+	readonly deletedThreadIds: readonly string[];
+}
+
+interface ILoopIterationResult {
+	readonly responseText: string;
+	readonly responseTranscriptText: string;
+	readonly toolCall?: IVSCloneLLMMessageToolCall;
+	readonly errorMessage?: string;
+	readonly aborted: boolean;
+}
 
 /**
  * This service owns the live VSClone thread model: user/assistant/tool/checkpoint messages,
- * active branch state, and durable paused approvals. History can still exist for migration and
- * archive paths, but runtime state is the canonical conversation record.
+ * active branch state, and durable paused approvals. Runtime state is the only canonical
+ * conversation record; threads exist here or they do not exist at all.
  */
 export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneThreadRuntimeService {
 	declare readonly _serviceBrand: undefined;
@@ -118,36 +144,28 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	private readonly _onDidChangeState = this._register(new Emitter<IVSCloneThreadRuntimeState>());
 	readonly onDidChangeState = this._onDidChangeState.event;
 
-	private readonly store: IThreadRuntimeStore;
 	private readonly states = new Map<string, IVSCloneThreadRuntimeState>();
 	private readonly deletedThreadIds = new Set<string>();
 	private readonly activeExecutions = new Map<string, IActiveThreadExecution>();
 
 	constructor(
-		@IVSCloneAgentLoopService private readonly agentLoopService: IVSCloneAgentLoopService,
+		@IVSCloneOAuthService private readonly oauthService: IVSCloneOAuthService,
+		@IVSCloneLLMMessageService private readonly llmMessageService: IVSCloneLLMMessageService,
+		@IVSCloneConvertToLLMMessageService private readonly convertToLLMMessageService: IVSCloneConvertToLLMMessageService,
+		@IVSCloneSettingsService private readonly settingsService: IVSCloneSettingsService,
 		@IVSCloneToolRuntimeService private readonly toolRuntimeService: IVSCloneToolRuntimeService,
 		@IVSCloneToolExecutionService private readonly toolExecutionService: IVSCloneToolExecutionService = {
 			_serviceBrand: undefined,
 			executeTool: async () => ({ success: false, output: 'Tool execution service is unavailable.' }),
 		},
+		@IVSCloneUnifiedChatBackendService private readonly unifiedChatBackendService: IVSCloneUnifiedChatBackendService,
 		@IFileService private readonly fileService: IFileService,
+		@IStorageService private readonly storageService: IStorageService,
 		@ILogService private readonly logService: ILogService,
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
-		@IInstantiationService instantiationService?: IInstantiationService,
 		private readonly persistedToolExecutionTimeoutMs: number = defaultPersistedToolExecutionTimeoutMs,
 	) {
 		super();
-		this.store = instantiationService
-			? this._register(instantiationService.createInstance(VSCloneThreadRuntimeStore))
-			: {
-				loadAll: () => [],
-				loadDeletedThreadIds: () => [],
-				saveState: () => undefined,
-				deleteState: () => undefined,
-				markDeletedThread: () => undefined,
-				clearAll: () => undefined,
-				dispose: () => undefined,
-			};
 		this.restorePersistedStates();
 	}
 
@@ -168,7 +186,10 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			catalog: {
 				threadId: options.threadId,
 				sessionResource: options.sessionResource,
-				title: this.truncateCatalogText(options.promptText, 120) || options.threadId,
+				// Thread titles should remain anchored to the first submitted user prompt. Resumed tool
+				// continuations and later follow-ups intentionally keep the existing title instead of
+				// letting background loop traffic rename the conversation.
+				title: baseState?.catalog.title ?? (this.truncateCatalogText(options.promptText, 120) || options.threadId),
 				activeModelIdentifier: options.modelIdentifier,
 				createdAt: baseState?.catalog.createdAt ?? Date.now(),
 				updatedAt: Date.now(),
@@ -176,7 +197,6 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				archived: baseState?.catalog.archived ?? false,
 				turnCount: baseState?.catalog.turnCount ?? 0,
 				lastTurnPreview: baseState?.catalog.lastTurnPreview ?? '',
-				importedFromHistory: baseState?.catalog.importedFromHistory,
 			},
 			turnId: options.turnId,
 			mode: options.mode,
@@ -186,8 +206,6 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			checkpoints: baseState?.checkpoints ?? [],
 			currentCheckpointId: baseState?.currentCheckpointId,
 			branchHeadMessageId: nextMessages.at(-1)?.id ?? baseState?.branchHeadMessageId,
-			pausedApproval: undefined,
-			isRunning: true,
 			lastUpdatedAt: Date.now(),
 		});
 
@@ -204,141 +222,50 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			imageAttachments: options.imageAttachments,
 		};
 		const pendingCheckpointByToolKey = new Map<string, readonly IVSCloneThreadRuntimeSnapshot[]>();
-		const loopOptions: IVSCloneAgentLoopOptions = {
-			...options,
-			observer: {
-				onResponseDelta: delta => this.recordAssistantDelta(options.threadId, delta),
-				onResponseReplace: responseText => this.replaceAssistantResponse(options.threadId, responseText),
-				onToolRequested: (toolName, params) => this.recordToolRequested(options.threadId, toolName, params, pendingCheckpointByToolKey, runContext),
-				onToolResult: (toolName, params, result) => {
-					this.recordToolResult(options.threadId, toolName, params, result, pendingCheckpointByToolKey);
-				},
-				onComplete: () => this.finishThread(options.threadId, { kind: 'idle' }),
-				onError: message => {
-					this.replaceAssistantResponse(options.threadId, message || 'Unknown API error');
-					this.finishThread(options.threadId, { kind: 'idle' });
-				},
-				onCancel: () => this.finishThread(options.threadId, { kind: 'idle' }),
+		const done = new DeferredPromise<void>();
+		const execution: IActiveThreadExecution = {
+			done: done.p,
+			cancel: () => {
+				if (execution.cancelled || execution.finished) {
+					return;
+				}
+				execution.cancelled = true;
+				// The runtime owns both the streaming request and the currently running tool. Cancelling
+				// both here keeps the single thread-level stop action aligned with the execution branch.
+				execution.activeRequest?.cancel();
+				execution.activeToolTokenSource?.cancel();
 			},
+			pendingCheckpointByToolKey,
+			runContext,
+			pendingApproval: undefined,
+			activeRequest: undefined,
+			activeToolTokenSource: undefined,
+			cancelled: false,
+			finished: false,
 		};
-
-		const handle = this.agentLoopService.runAgentLoop(loopOptions);
-		this.activeExecutions.set(options.threadId, { handle, pendingCheckpointByToolKey, pendingApproval: undefined, runContext });
-		void handle.done.finally(() => {
-			this.activeExecutions.delete(options.threadId);
+		this.activeExecutions.set(options.threadId, execution);
+		void this.runLoop(options, execution).catch(error => {
+			const message = error instanceof Error ? error.message : String(error);
+			this.applyLoopError(options.threadId, options.turnId, execution, message);
+		}).finally(() => {
+			execution.finished = true;
+			done.complete();
+			if (this.activeExecutions.get(options.threadId) === execution) {
+				this.activeExecutions.delete(options.threadId);
+			}
 			this.finishThread(options.threadId, { kind: 'idle' });
 		});
 
 		return {
-			done: handle.done,
+			done: execution.done,
 			cancel: () => this.cancelThread(options.threadId),
 		};
-	}
-
-	ensureHydratedFromHistory(threadId: string, turns: readonly IVSCloneChatHistoryTurn[]): IVSCloneThreadRuntimeState | undefined {
-		const existing = this.states.get(threadId);
-		if (existing) {
-			return existing;
-		}
-		if (turns.length === 0) {
-			return undefined;
-		}
-
-		const messages: IVSCloneThreadRuntimeMessage[] = [];
-		for (const turn of turns) {
-			messages.push(this.createMessage({
-				role: 'user',
-				mode: turn.executionMode ?? 'act',
-				// Legacy transcript data can still seed runtime, but after hydration the runtime message
-				// itself is the durable source of truth. Persisting the import marker per message avoids
-				// having to consult history again after reload just to recover that provenance.
-				metadata: { importedFromHistory: true },
-				createdAt: turn.startedAt,
-				content: turn.promptText,
-				imageAttachments: turn.promptImages,
-			}));
-			const responseText = turn.responsePlainText || turn.responseMarkdown;
-			if (responseText) {
-				messages.push(this.createMessage({
-					role: 'assistant',
-					mode: turn.executionMode ?? 'act',
-					metadata: { importedFromHistory: true },
-					createdAt: turn.completedAt ?? turn.lastEventAt ?? turn.startedAt,
-					content: responseText,
-				}));
-			}
-		}
-
-		const latestTurn = turns.at(-1);
-		if (!latestTurn) {
-			return undefined;
-		}
-
-		const hydratedState: IVSCloneThreadRuntimeState = {
-			threadId,
-			catalog: this.createCatalogFromHistoryTurns(threadId, turns, messages),
-			turnId: latestTurn.turnId,
-			// Older history payloads predate per-turn execution mode. Hydration falls back the thread
-			// mode to `act` as well so restored runtime state never carries an undefined default mode
-			// after importing those legacy turns.
-			mode: latestTurn.executionMode ?? 'act',
-			streamState: { kind: 'idle' },
-			messages,
-			assistantEditApplications: [],
-			checkpoints: [],
-			currentCheckpointId: undefined,
-			branchHeadMessageId: messages.at(-1)?.id,
-			pausedApproval: undefined,
-			// Hydrating legacy turns is an import step, not a resumable execution handoff. The
-			// runtime becomes authoritative after hydration, so old pending/streaming turns are
-			// normalized to idle instead of pretending they can still continue.
-			isRunning: false,
-			lastUpdatedAt: latestTurn.lastEventAt ?? latestTurn.completedAt ?? latestTurn.startedAt,
-		};
-		this.setState(threadId, hydratedState);
-		return hydratedState;
-	}
-
-	ensureCatalogImportedFromHistory(
-		thread: IVSCloneChatHistoryThread,
-		turns: readonly IVSCloneChatHistoryTurn[] = [],
-	): IVSCloneThreadRuntimeState {
-		const existing = this.states.get(thread.threadId);
-		if (existing && !this.shouldUpgradeSyntheticHistoryCatalog(existing)) {
-			return existing;
-		}
-
-		const hydrated = existing ?? (turns.length > 0
-			? this.ensureHydratedFromHistory(thread.threadId, turns)
-			: undefined);
-		const baseState: IThreadRuntimeStateDraft = hydrated ?? {
-			threadId: thread.threadId,
-			turnId: undefined,
-			mode: 'act',
-			streamState: { kind: 'idle' },
-			messages: [],
-			assistantEditApplications: [],
-			checkpoints: [],
-			currentCheckpointId: undefined,
-			branchHeadMessageId: undefined,
-			pausedApproval: undefined,
-			isRunning: false,
-			lastUpdatedAt: thread.updatedAt,
-		};
-		this.setState(thread.threadId, {
-			...baseState,
-			// Turn-only hydration can create a provisional imported catalog before the rail knows the
-			// full history-thread metadata. Upgrade exactly that synthetic shape once, then keep the
-			// runtime catalog authoritative for later reads instead of replaying history over it.
-			catalog: this.createCatalogFromHistoryThread(thread, baseState.messages),
-			lastUpdatedAt: thread.updatedAt,
-		});
-		return this.states.get(thread.threadId)!;
 	}
 
 	recordRejectedTurn(options: {
 		threadId: string;
 		turnId: string;
+		sessionResource: string;
 		promptText: string;
 		mode: IVSCloneThreadRuntimeRunOptions['mode'];
 		reason: string;
@@ -360,6 +287,18 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		});
 		this.setState(options.threadId, {
 			threadId: options.threadId,
+			catalog: {
+				threadId: options.threadId,
+				sessionResource: options.sessionResource,
+				title: this.truncateCatalogText(options.promptText, 120) || options.threadId,
+				activeModelIdentifier: baseState?.catalog.activeModelIdentifier,
+				createdAt: baseState?.catalog.createdAt ?? Date.now(),
+				updatedAt: Date.now(),
+				status: 'failed',
+				archived: baseState?.catalog.archived ?? false,
+				turnCount: baseState?.catalog.turnCount ?? 0,
+				lastTurnPreview: options.reason,
+			},
 			turnId: options.turnId,
 			mode: options.mode,
 			streamState: { kind: 'idle' },
@@ -368,8 +307,6 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			checkpoints: baseState?.checkpoints ?? [],
 			currentCheckpointId: baseState?.currentCheckpointId,
 			branchHeadMessageId: assistantMessage.id,
-			pausedApproval: undefined,
-			isRunning: false,
 			lastUpdatedAt: Date.now(),
 		});
 	}
@@ -380,7 +317,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			return;
 		}
 
-		execution.handle.cancel();
+		execution.cancel();
 		if (execution.pendingApproval) {
 			void this.rejectLatestToolRequest(threadId, 'Tool request was cancelled before execution.');
 		}
@@ -403,14 +340,13 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			this.updateState(threadId, state => ({
 				...state,
 				streamState: { kind: 'tool', toolName: pendingApproval.toolName },
-				pausedApproval: undefined,
 			}));
 			pendingApproval.deferred.complete({ kind: 'approved' });
 			return true;
 		}
 
-		const pausedApproval = this.states.get(threadId)?.pausedApproval;
-		if (!pausedApproval) {
+		const pendingToolRequest = this.getAwaitingUserToolRequest(threadId);
+		if (!pendingToolRequest) {
 			return false;
 		}
 
@@ -418,17 +354,15 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			role: 'tool',
 			createdAt: Date.now(),
 			type: 'running_now',
-			toolName: pausedApproval.toolName,
-			approvalType: pausedApproval.approvalType,
-			params: pausedApproval.params,
+			toolName: pendingToolRequest.toolName,
+			approvalType: pendingToolRequest.approvalType,
+			params: pendingToolRequest.params,
 		});
 		this.updateState(threadId, state => ({
 			...state,
-			streamState: { kind: 'tool', toolName: pausedApproval.toolName },
-			pausedApproval: undefined,
-			isRunning: true,
+			streamState: { kind: 'tool', toolName: pendingToolRequest.toolName },
 		}));
-		void this.executePersistedApproval(threadId, pausedApproval);
+		void this.executePersistedApproval(threadId, pendingToolRequest);
 		return true;
 	}
 
@@ -452,14 +386,13 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			this.updateState(threadId, state => ({
 				...state,
 				streamState: { kind: 'idle' },
-				pausedApproval: undefined,
 			}));
 			pendingApproval.deferred.complete({ kind: 'rejected', reason });
 			return true;
 		}
 
-		const pausedApproval = this.states.get(threadId)?.pausedApproval;
-		if (!pausedApproval) {
+		const pendingToolRequest = this.getAwaitingUserToolRequest(threadId);
+		if (!pendingToolRequest) {
 			return false;
 		}
 
@@ -467,18 +400,20 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			role: 'tool',
 			createdAt: Date.now(),
 			type: 'rejected',
-			toolName: pausedApproval.toolName,
-			approvalType: pausedApproval.approvalType,
-			params: pausedApproval.params,
+			toolName: pendingToolRequest.toolName,
+			approvalType: pendingToolRequest.approvalType,
+			params: pendingToolRequest.params,
 			output: reason,
 			success: false,
 		});
 		this.updateState(threadId, state => ({
 			...state,
 			streamState: { kind: 'idle' },
-			pausedApproval: undefined,
-			isRunning: false,
 		}));
+		// Reload-safe rejections should continue through the same follow-up loop the live runtime
+		// uses. The rejected tool message is already persisted above, so resume from runtime state
+		// instead of terminating the restored thread at the approval boundary.
+		this.resumeThreadFromPersistedToolDecision(threadId, pendingToolRequest, 'rejection');
 		return true;
 	}
 
@@ -526,7 +461,13 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		this.activeExecutions.delete(threadId);
 		this.states.delete(threadId);
 		this.deletedThreadIds.add(threadId);
-		this.store.markDeletedThread(threadId);
+		this.storePersistedState();
+		// Runtime state now defines thread existence, so it also owns clearing the small persisted
+		// sidecar maps layered on top of threads. Doing that here prevents delete callers in the pane
+		// and command actions from drifting and leaving stale model/plan entries behind.
+		void this.unifiedChatBackendService.deleteThread(threadId).catch(error => {
+			this.logService.error('[VSCloneThreadRuntime] Failed to delete unified chat sidecar state for thread.', error);
+		});
 		this._onDidChangeState.fire({
 			...state,
 			catalog: {
@@ -538,13 +479,25 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	}
 
 	clearAll(): void {
+		const removedStates = [...this.states.values()];
 		for (const threadId of [...this.activeExecutions.keys()]) {
 			this.cancelThread(threadId);
 		}
 		this.activeExecutions.clear();
 		this.states.clear();
 		this.deletedThreadIds.clear();
-		this.store.clearAll();
+		this.storePersistedState();
+		// Workspace-wide clears must drop the thread sidecars too or a later restore will resurrect
+		// model selections and plan-mode state for threads that no longer exist in runtime storage.
+		void this.unifiedChatBackendService.clearAll().catch(error => {
+			this.logService.error('[VSCloneThreadRuntime] Failed to clear unified chat sidecar state.', error);
+		});
+		for (const state of removedStates) {
+			this._onDidChangeState.fire({
+				...state,
+				lastUpdatedAt: Date.now(),
+			});
+		}
 	}
 
 	getState(threadId: string): IVSCloneThreadRuntimeState | undefined {
@@ -614,26 +567,13 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			return;
 		}
 
-		// Some older imported runtime payloads only persisted `importedFromHistory`, not the derived
-		// manual edit suggestion. Materialize that runtime-owned suggestion before storing apply
-		// state so the compatibility fallback can survive refresh and reload instead of living only
-		// in the pane's transient pending set.
-		const existingSuggestion = this.getAssistantMessageEditSuggestion(assistantMessage);
-		const normalizedAssistantMessage = existingSuggestion
-			? assistantMessage
-			: this.normalizeRuntimeConversationMessage(
-				assistantMessage,
-				current.mode,
-			) as Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>;
-		const suggestion = existingSuggestion ?? this.getAssistantMessageEditSuggestion(normalizedAssistantMessage);
+		const suggestion = this.getAssistantMessageEditSuggestion(assistantMessage);
 		if (!suggestion) {
 			// Apply state is only valid for assistant messages that runtime already marked as
 			// applicable. Dropping writes here keeps the durable state aligned with the same runtime
 			// availability signal the pane should render from.
 			return;
 		}
-		const nextMessages = [...current.messages];
-		nextMessages[assistantMessageIndex] = normalizedAssistantMessage;
 
 		const nextApplications = [...(current.assistantEditApplications ?? [])];
 		const existingIndex = nextApplications.findIndex(entry => entry.messageId === messageId);
@@ -650,7 +590,6 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 
 		this.setState(threadId, {
 			...current,
-			messages: nextMessages,
 			assistantEditApplications: nextApplications,
 			lastUpdatedAt: Date.now(),
 		});
@@ -716,8 +655,6 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			checkpoints: state.checkpoints.slice(0, checkpointIndex + 1),
 			currentCheckpointId: checkpointId,
 			branchHeadMessageId: truncatedMessages.at(-1)?.id,
-			pausedApproval: undefined,
-			isRunning: false,
 			streamState: { kind: 'idle' },
 			lastUpdatedAt: Date.now(),
 		});
@@ -725,39 +662,115 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	}
 
 	private restorePersistedStates(): void {
-		for (const threadId of this.store.loadDeletedThreadIds()) {
+		const persisted = this.readPersistedState();
+		if (!persisted) {
+			return;
+		}
+
+		for (const threadId of persisted.deletedThreadIds) {
 			this.deletedThreadIds.add(threadId);
 		}
-		for (const persisted of this.store.loadAll()) {
-			const normalized = this.normalizeRestoredState(persisted);
+		for (const state of persisted.states) {
+			const normalized = this.normalizeRestoredState(state);
 			this.states.set(normalized.threadId, normalized);
 		}
 	}
 
-	private async executePersistedApproval(threadId: string, pausedApproval: IVSCloneThreadRuntimePausedApproval): Promise<void> {
+	/**
+	 * Phase 1.3 intentionally collapses the old per-thread serializer/store pair into one runtime-
+	 * owned workspace payload. Persisting one blob makes the thread owner the only place that knows
+	 * how chat history is stored, and the version bump explicitly drops old thread data instead of
+	 * carrying migration code forward.
+	 */
+	private readPersistedState(): IVSClonePersistedThreadRuntimePayload | undefined {
+		const raw = this.storageService.get(runtimeStorageKey, StorageScope.WORKSPACE);
+		if (!raw) {
+			return undefined;
+		}
+
+		try {
+			const currentWorkspaceId = this.workspaceContextService.getWorkspace().id;
+			const parsed = JSON.parse(raw, (_key, value) => {
+				if (value && typeof value === 'object' && value.$mid === 1) {
+					return URI.revive(value);
+				}
+				return value;
+			}) as Partial<IVSClonePersistedThreadRuntimePayload>;
+			if (parsed.schemaVersion !== 2 || !Array.isArray(parsed.states) || !Array.isArray(parsed.deletedThreadIds)) {
+				throw new Error('Malformed VSClone runtime storage payload.');
+			}
+			if (typeof parsed.workspaceId === 'string' && parsed.workspaceId.length > 0 && parsed.workspaceId !== currentWorkspaceId) {
+				this.logService.warn('[VSCloneThreadRuntime] Dropping persisted runtime state from a different workspace.', {
+					storedWorkspaceId: parsed.workspaceId,
+					currentWorkspaceId,
+				});
+				this.storageService.remove(runtimeStorageKey, StorageScope.WORKSPACE);
+				return undefined;
+			}
+			return {
+				schemaVersion: 2,
+				workspaceId: typeof parsed.workspaceId === 'string' ? parsed.workspaceId : currentWorkspaceId,
+				updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+				states: parsed.states as readonly IVSCloneThreadRuntimeState[],
+				deletedThreadIds: parsed.deletedThreadIds as readonly string[],
+			};
+		} catch (error) {
+			this.logService.warn('[VSCloneThreadRuntime] Failed to read persisted runtime state; dropping stored threads.', error);
+			this.storageService.remove(runtimeStorageKey, StorageScope.WORKSPACE);
+			return undefined;
+		}
+	}
+
+	private storePersistedState(): void {
+		if (this.states.size === 0 && this.deletedThreadIds.size === 0) {
+			this.storageService.remove(runtimeStorageKey, StorageScope.WORKSPACE);
+			return;
+		}
+
+		const payload: IVSClonePersistedThreadRuntimePayload = {
+			schemaVersion: 2,
+			workspaceId: this.workspaceContextService.getWorkspace().id,
+			updatedAt: Date.now(),
+			states: [...this.states.values()],
+			deletedThreadIds: [...this.deletedThreadIds.values()].sort((left, right) => left.localeCompare(right)),
+		};
+		this.storageService.store(
+			runtimeStorageKey,
+			JSON.stringify(payload),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE,
+		);
+	}
+
+	private async executePersistedApproval(threadId: string, pendingToolRequest: IVSCloneThreadRuntimeToolRequestMessage): Promise<void> {
 		const pendingCheckpointByToolKey = new Map<string, readonly IVSCloneThreadRuntimeSnapshot[]>();
-		pendingCheckpointByToolKey.set(this.getToolInvocationKey(pausedApproval.toolName, pausedApproval.params), pausedApproval.snapshots);
+		pendingCheckpointByToolKey.set(
+			this.getToolInvocationKey(pendingToolRequest.toolName, pendingToolRequest.params),
+			pendingToolRequest.snapshots,
+		);
 		const toolTokenSource = new CancellationTokenSource();
 		let cancelledByUser = false;
 		this.activeExecutions.set(threadId, {
-			handle: {
-				done: Promise.resolve(),
-				cancel: () => {
-					cancelledByUser = true;
-					toolTokenSource.cancel();
-				},
+			done: Promise.resolve(),
+			cancel: () => {
+				cancelledByUser = true;
+				toolTokenSource.cancel();
 			},
 			pendingCheckpointByToolKey,
-			runContext: pausedApproval.run,
+			runContext: pendingToolRequest.run,
 			pendingApproval: undefined,
+			activeRequest: undefined,
+			activeToolTokenSource: toolTokenSource,
+			cancelled: false,
+			finished: false,
 		});
 
 		let result: IVSCloneToolExecutionResult;
 		try {
 			result = await this.executePersistedToolWithSafety(
-				pausedApproval.toolName,
-				pausedApproval.params,
-				pausedApproval.run.mode,
+				pendingToolRequest.toolName,
+				pendingToolRequest.params,
+				pendingToolRequest.run.mode,
 				toolTokenSource,
 			);
 		} catch (error) {
@@ -767,8 +780,8 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 
 		const toolResultMessage = this.recordToolResult(
 			threadId,
-			pausedApproval.toolName,
-			pausedApproval.params,
+			pendingToolRequest.toolName,
+			pendingToolRequest.params,
 			result,
 			pendingCheckpointByToolKey,
 		);
@@ -783,27 +796,340 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			return;
 		}
 
-		// Reload-safe approvals must continue from the persisted branch rather than stopping after
-		// the approved tool finishes. Replaying the tool_result as the next user message restores the
-		// same agent-loop shape the live runtime would have produced without a reload boundary.
-		const resumeHandle = this.runThread({
-			...pausedApproval.run,
-			threadId,
-			promptText: formatToolResult(pausedApproval.toolName, {
-				success: result.success,
-				output: result.output,
-			}),
-			previousTurns: this.toAgentLoopConversationMessagesFromRuntime(threadId, toolResultMessage.id),
-			recordPromptMessage: false,
-		});
-		void resumeHandle.done.catch(error => {
-			this.logService.error('[VSCloneThreadRuntime] Failed to resume thread after persisted approval.', error);
-		});
+		this.resumeThreadFromPersistedToolDecision(threadId, pendingToolRequest, 'approval');
+	}
+
+	/**
+	 * Phase 1.2 moves the live execution loop into the runtime owner so the thread service/running
+	 * state/checkpoint logic no longer round-trips through a separate agent-loop facade.
+	 */
+	private async runLoop(options: IVSCloneThreadRuntimeRunOptions, execution: IActiveThreadExecution): Promise<void> {
+		this.logTrace('info', `Starting runtime loop for thread ${options.threadId} (turn ${options.turnId})`);
+		const messages: IVSCloneChatTransportConversationMessage[] = [...(options.previousTurns ?? [])];
+		if (options.promptText || (options.imageAttachments?.length ?? 0) > 0) {
+			messages.push({
+				role: 'user',
+				content: options.promptText,
+				imageAttachments: options.imageAttachments,
+			});
+		}
+		let assistantResponseText = '';
+		for (let iteration = 1; iteration <= maxAgentIterations; iteration++) {
+			this.logTrace('debug', `Runtime iteration ${iteration} for thread ${options.threadId}`);
+			if (execution.cancelled) {
+				this.applyLoopCancel(options.threadId, options.turnId, execution);
+				return;
+			}
+
+			const responsePrefix = assistantResponseText;
+			const iterationResult = await this.runModelIteration(options, messages, execution);
+			assistantResponseText = `${responsePrefix}${iterationResult.responseTranscriptText}`;
+			if (iterationResult.errorMessage) {
+				this.applyLoopError(options.threadId, options.turnId, execution, iterationResult.errorMessage);
+				return;
+			}
+			if (execution.cancelled || iterationResult.aborted) {
+				this.applyLoopCancel(options.threadId, options.turnId, execution);
+				return;
+			}
+
+			const visibleAssistantText = normalizeAssistantTranscriptText(iterationResult.responseText);
+			if (visibleAssistantText !== iterationResult.responseText) {
+				assistantResponseText = this.replaceCurrentIterationTranscript(
+					options.threadId,
+					responsePrefix,
+					visibleAssistantText,
+				);
+			}
+
+			const toolCall = iterationResult.toolCall;
+			if (!toolCall) {
+				this.applyLoopComplete(options.threadId, options.turnId, execution);
+				return;
+			}
+
+			if (execution.cancelled) {
+				this.applyLoopCancel(options.threadId, options.turnId, execution);
+				return;
+			}
+
+			this.ensureAssistantResponse(options.threadId, visibleAssistantText, options.mode);
+
+			let approvalDecision: VSCloneThreadToolApprovalDecision;
+			try {
+				approvalDecision = await this.recordToolRequested(
+					options.threadId,
+					toolCall.name,
+					toolCall.rawParams,
+					execution.pendingCheckpointByToolKey,
+					execution.runContext,
+				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				this.applyLoopError(options.threadId, options.turnId, execution, `Tool approval failed for ${toolCall.name}: ${message}`);
+				return;
+			}
+			if (execution.cancelled) {
+				this.applyLoopCancel(options.threadId, options.turnId, execution);
+				return;
+			}
+
+			this.logTrace('info', `[Tool Attempt] ${toolCall.name}`);
+			let formattedToolResult: string;
+			if (approvalDecision.kind === 'rejected') {
+				// `rejectLatestToolRequest()` already records the terminal rejected tool message in the
+				// durable runtime transcript. Re-recording a synthetic failed result here would create a
+				// second terminal outcome (`rejected` plus `tool_error`) for the same invocation.
+				const rejectedResult = {
+					success: false,
+					output: approvalDecision.reason ?? 'Tool request was rejected.',
+				};
+				formattedToolResult = formatToolResult(toolCall.name, rejectedResult);
+				this.logTrace('warn', `[Tool Result] ${toolCall.name} rejected`);
+			} else {
+				const toolResult = await this.executeToolWithCancellation(toolCall.name, toolCall.rawParams, options.mode, execution);
+				this.recordToolResult(
+					options.threadId,
+					toolCall.name,
+					toolCall.rawParams,
+					toolResult,
+					execution.pendingCheckpointByToolKey,
+				);
+				formattedToolResult = formatToolResult(toolCall.name, toolResult);
+				this.logTrace(toolResult.success ? 'info' : 'warn', `[Tool Result] ${toolCall.name} ${toolResult.success ? 'succeeded' : 'failed'}`);
+			}
+
+			if (execution.cancelled) {
+				this.applyLoopCancel(options.threadId, options.turnId, execution);
+				return;
+			}
+
+			messages.push({ role: 'assistant', content: visibleAssistantText });
+			messages.push({
+				role: 'tool',
+				id: toolCall.id,
+				name: toolCall.name,
+				rawParams: toolCall.rawParams,
+				content: formattedToolResult,
+			});
+
+			if (toolCall.name === 'attempt_completion') {
+				this.applyLoopComplete(options.threadId, options.turnId, execution);
+				return;
+			}
+		}
+
+		this.applyLoopError(options.threadId, options.turnId, execution, `Agent loop exceeded the safety limit of ${maxAgentIterations} iterations.`);
+	}
+
+	private async executeToolWithCancellation(
+		toolName: string,
+		params: Record<string, string>,
+		mode: VSCloneChatMode,
+		execution: IActiveThreadExecution,
+	): Promise<IVSCloneToolExecutionResult> {
+		const tokenSource = new CancellationTokenSource();
+		execution.activeToolTokenSource = tokenSource;
+		try {
+			const toolExecution = this.toolExecutionService.executeTool(toolName, params, mode, tokenSource.token);
+			const result = await raceTimeout(toolExecution, liveToolExecutionTimeoutMs, () => {
+				this.logTrace('warn', `Tool ${toolName} exceeded ${liveToolExecutionTimeoutMs}ms; cancelling and continuing.`);
+				tokenSource.cancel();
+			});
+			if (result) {
+				return result;
+			}
+			return {
+				success: false,
+				output: `Tool ${toolName} did not finish within ${Math.round(liveToolExecutionTimeoutMs / 1000)} seconds and was cancelled.`,
+			};
+		} finally {
+			if (execution.activeToolTokenSource === tokenSource) {
+				execution.activeToolTokenSource = undefined;
+			}
+			tokenSource.dispose();
+		}
+	}
+
+	private async runModelIteration(
+		options: IVSCloneThreadRuntimeRunOptions,
+		messages: readonly IVSCloneChatTransportConversationMessage[],
+		execution: IActiveThreadExecution,
+	): Promise<ILoopIterationResult> {
+		const currentTurn = messages.at(-1);
+		if (!currentTurn) {
+			return {
+				responseText: '',
+				responseTranscriptText: '',
+				errorMessage: 'Agent loop requires at least one conversation message before each model call.',
+				aborted: false,
+			};
+		}
+
+		let responseText = '';
+		let responseTranscriptText = '';
+		let toolCall: IVSCloneLLMMessageToolCall | undefined;
+		let errorMessage: string | undefined;
+		let aborted = false;
+
+		try {
+			const headers = await this.oauthService.getApiHeaders(options.vendor);
+			if (execution.cancelled) {
+				return {
+					responseText,
+					responseTranscriptText,
+					toolCall,
+					aborted: true,
+				};
+			}
+			if (!headers) {
+				return {
+					responseText,
+					responseTranscriptText,
+					toolCall,
+					errorMessage: `Not signed in to ${options.vendor}`,
+					aborted: false,
+				};
+			}
+
+			const request = this.llmMessageService.sendChatRequest({
+				kind: 'chat',
+				auth: {
+					vendor: options.vendor,
+					headers,
+				},
+				prepared: this.convertToLLMMessageService.prepareChatRequest({
+					threadId: options.threadId,
+					turnId: options.turnId,
+					sequence: options.sequence,
+					sessionResource: options.sessionResource,
+					mode: options.mode,
+					vendor: options.vendor,
+					modelId: options.modelId,
+					modelIdentifier: options.modelIdentifier,
+					reasoningEffort: options.reasoningEffort,
+					previousTurns: messages.slice(0, -1),
+					currentTurn,
+					systemMessage: options.systemMessage,
+				}),
+			}, {
+				onText: payload => {
+					if (!payload.text) {
+						return;
+					}
+
+					responseText += payload.text;
+					responseTranscriptText = this.appendAssistantDeltaToRuntime(options.threadId, responseTranscriptText, payload.text);
+				},
+				onError: payload => {
+					errorMessage = payload.message;
+					this.recordEligibilityFailureIfAny(options.vendor, options.modelIdentifier, payload.message);
+				},
+				onFinalMessage: payload => {
+					// Final payloads are authoritative even when a provider buffers text until the end
+					// or only returns a native tool call with no text deltas. Syncing the runtime-owned
+					// assistant message here avoids silently dropping zero-text tool turns.
+					responseText = payload.fullText;
+					responseTranscriptText = this.replaceCurrentIterationTranscript(
+						options.threadId,
+						'',
+						payload.fullText,
+					);
+					toolCall = payload.toolCall;
+				},
+				onAbort: () => {
+					aborted = true;
+				},
+			});
+
+			execution.activeRequest = request;
+			await request.done;
+			if (execution.activeRequest === request) {
+				execution.activeRequest = undefined;
+			}
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : String(error);
+		}
+
+		return {
+			responseText,
+			responseTranscriptText,
+			toolCall,
+			errorMessage,
+			aborted,
+		};
+	}
+
+	private appendAssistantDeltaToRuntime(threadId: string, responseText: string, delta: string): string {
+		if (!delta) {
+			return responseText;
+		}
+		this.recordAssistantDelta(threadId, delta);
+		return responseText + delta;
+	}
+
+	private replaceCurrentIterationTranscript(threadId: string, responsePrefix: string, sanitizedIterationText: string): string {
+		const replacementText = `${responsePrefix}${sanitizedIterationText}`;
+		this.replaceAssistantResponse(threadId, replacementText);
+		return replacementText;
+	}
+
+	private applyLoopComplete(threadId: string, turnId: string, execution: IActiveThreadExecution): void {
+		if (execution.finished) {
+			return;
+		}
+		execution.finished = true;
+		this.logTrace('info', `Runtime loop completed for thread ${threadId} (turn ${turnId})`);
+	}
+
+	private applyLoopError(threadId: string, turnId: string, execution: IActiveThreadExecution, message: string): void {
+		if (execution.finished) {
+			return;
+		}
+		execution.finished = true;
+		this.logTrace('error', `Runtime loop failed for thread ${threadId} (turn ${turnId}): ${message}`);
+		this.replaceAssistantResponse(threadId, message);
+	}
+
+	private applyLoopCancel(threadId: string, turnId: string, execution: IActiveThreadExecution): void {
+		if (execution.finished) {
+			return;
+		}
+		execution.finished = true;
+		this.logTrace('info', `Runtime loop cancelled for thread ${threadId} (turn ${turnId})`);
+	}
+
+	private recordEligibilityFailureIfAny(vendor: IVSCloneThreadRuntimeRunOptions['vendor'], modelIdentifier: string, errorMessage: string): void {
+		const reason = detectEligibilityFailureReason(vendor, errorMessage);
+		if (!reason) {
+			return;
+		}
+
+		this.logTrace('info', `Marking ${modelIdentifier} ineligible for this account: ${reason}`);
+		void this.settingsService.markModelIneligible(modelIdentifier, reason);
+	}
+
+	private logTrace(level: 'debug' | 'info' | 'warn' | 'error', message: string): void {
+		const formatted = `[VSCloneThreadRuntime] ${message}`;
+		switch (level) {
+			case 'debug':
+				this.logService.debug(formatted);
+				break;
+			case 'info':
+				this.logService.info(formatted);
+				break;
+			case 'warn':
+				this.logService.warn(formatted);
+				break;
+			case 'error':
+				this.logService.error(formatted);
+				break;
+		}
 	}
 
 	/**
 	 * Reload-safe approvals still need the same timeout and explicit cancellation hook as the live
-	 * agent loop. Otherwise a hung tool after reload would strand the restored thread forever.
+	 * runtime loop. Otherwise a hung tool after reload would strand the restored thread forever.
 	 */
 	private async executePersistedToolWithSafety(
 		toolName: string,
@@ -838,21 +1164,25 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		runContext: IVSCloneThreadRuntimeRunContext,
 	): Promise<VSCloneThreadToolApprovalDecision> {
 		const approvalType = this.toolRuntimeService.getApprovalType(toolName);
-		this.appendMessage(threadId, {
+		const requestedAt = Date.now();
+		const toolRequestMessage = this.appendMessage(threadId, {
 			role: 'tool',
-			createdAt: Date.now(),
+			createdAt: requestedAt,
 			type: 'tool_request',
 			toolName,
 			approvalType,
 			params,
-		});
+			requestedAt,
+			snapshots: [],
+			run: runContext,
+		}) as IVSCloneThreadRuntimeToolRequestMessage | undefined;
 
-		if (approvalType) {
+		if (approvalType && toolRequestMessage) {
 			const execution = this.activeExecutions.get(threadId);
 			if (execution) {
 				const pendingApproval: IPendingApproval = {
 					deferred: new DeferredPromise<VSCloneThreadToolApprovalDecision>(),
-					requestedAt: Date.now(),
+					requestedAt: toolRequestMessage.requestedAt,
 					toolName,
 					params,
 					approvalType,
@@ -862,34 +1192,15 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				this.updateState(threadId, state => ({
 					...state,
 					streamState: { kind: 'awaiting_user', toolName, approvalType },
-					// Persist the approval immediately so reload can still resume the
-					// branch while checkpoint capture is in flight. Snapshots are filled
-					// in later if they arrive before the user approves or rejects.
-					pausedApproval: {
-						requestedAt: pendingApproval.requestedAt,
-						toolName,
-						params,
-						approvalType,
-						snapshots: [],
-						run: runContext,
-					},
 				}));
 				const snapshotPromise = this.captureCheckpointSnapshots(toolName, params).then(snapshots => {
 					if (snapshots.length > 0 && pendingApproval.status !== 'rejected') {
 						pendingCheckpointByToolKey.set(this.getToolInvocationKey(toolName, params), snapshots);
 					}
 					if (pendingApproval.status === 'pending') {
-						this.updateState(threadId, state => ({
-							...state,
-							pausedApproval: {
-								requestedAt: pendingApproval.requestedAt,
-								toolName,
-								params,
-								approvalType,
-								snapshots,
-								run: runContext,
-							},
-						}));
+						// Snapshot capture is asynchronous, so update the original request message in
+						// place instead of reviving a parallel paused-approval state just to persist it.
+						this.updateToolRequestSnapshots(threadId, toolRequestMessage.id, snapshots);
 					}
 					return snapshots;
 				}, error => {
@@ -960,7 +1271,6 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		this.updateState(threadId, state => ({
 			...state,
 			streamState: { kind: 'llm' },
-			pausedApproval: undefined,
 		}));
 		return toolMessage;
 	}
@@ -1087,6 +1397,41 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		});
 	}
 
+	private ensureAssistantResponse(
+		threadId: string,
+		responseText: string,
+		mode: IVSCloneThreadRuntimeRunOptions['mode'],
+	): void {
+		const normalized = normalizeAssistantTranscriptText(responseText);
+		if (normalized.length > 0) {
+			this.replaceAssistantResponse(threadId, normalized);
+			return;
+		}
+
+		const current = this.states.get(threadId);
+		if (!current) {
+			return;
+		}
+		const lastMessage = current.messages.at(-1);
+		if (lastMessage?.role === 'assistant') {
+			return;
+		}
+
+		const assistantMessage = this.createMessage({
+			role: 'assistant',
+			mode: mode ?? current.mode ?? 'act',
+			createdAt: Date.now(),
+			content: '',
+		});
+		this.setState(threadId, {
+			...current,
+			messages: [...current.messages, assistantMessage],
+			branchHeadMessageId: assistantMessage.id,
+			streamState: { kind: 'llm' },
+			lastUpdatedAt: Date.now(),
+		});
+	}
+
 	private appendCheckpoint(threadId: string, checkpoint: IVSCloneThreadRuntimeCheckpoint): void {
 		const checkpointMessage = this.createMessage({
 			role: 'checkpoint',
@@ -1106,7 +1451,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		if (!this.states.has(threadId)) {
 			return undefined;
 		}
-		const runtimeMessage = this.createMessage(message);
+		const runtimeMessage = this.createMessage(message as Omit<IVSCloneThreadRuntimeMessage, 'id'>);
 		this.updateState(threadId, current => ({
 			...current,
 			messages: [...current.messages, runtimeMessage],
@@ -1118,9 +1463,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	private finishThread(threadId: string, streamState: IVSCloneThreadRuntimeState['streamState']): void {
 		this.updateState(threadId, current => ({
 			...current,
-			isRunning: false,
 			streamState,
-			pausedApproval: current.pausedApproval,
 		}));
 	}
 
@@ -1161,7 +1504,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		};
 		this.states.set(threadId, normalized);
 		this.deletedThreadIds.delete(threadId);
-		this.store.saveState(normalized);
+		this.storePersistedState();
 		this._onDidChangeState.fire(normalized);
 	}
 
@@ -1169,24 +1512,66 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	private createMessage(message: Omit<Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>, 'id'>): Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>;
 	private createMessage(message: Omit<Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }>, 'id'>): Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }>;
 	private createMessage(message: Omit<Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'checkpoint' }>, 'id'>): Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'checkpoint' }>;
+	private createMessage(message: Omit<IVSCloneThreadRuntimeMessage, 'id'>): IVSCloneThreadRuntimeMessage;
 	private createMessage(message: Omit<IVSCloneThreadRuntimeMessage, 'id'>): IVSCloneThreadRuntimeMessage {
-		const createdMessage: IVSCloneThreadRuntimeMessage = { id: generateUuid(), ...message };
-		if (createdMessage.role !== 'user' && createdMessage.role !== 'assistant') {
-			return createdMessage;
+		// Spreading an Omit<Union, 'id'> loses discriminant narrowing, so build each variant by role
+		// and cast each branch back into its concrete union member.
+		const id = generateUuid();
+		const withId = { id, ...message } as IVSCloneThreadRuntimeMessage;
+		if (withId.role === 'assistant') {
+			// Assistant messages pick up durable edit-apply metadata at creation time so the pane can
+			// later trust runtime state directly instead of re-parsing transcript text.
+			return this.normalizeRuntimeConversationMessage(withId, withId.mode);
 		}
-		// Conversation messages pick up their durable apply/import metadata at creation time so the
-		// pane can later trust runtime state directly instead of re-parsing transcript text.
-		return this.normalizeRuntimeConversationMessage(createdMessage, createdMessage.mode);
+		return withId;
+	}
+
+	private updateToolRequestSnapshots(
+		threadId: string,
+		toolRequestMessageId: string,
+		snapshots: readonly IVSCloneThreadRuntimeSnapshot[],
+	): void {
+		this.updateState(threadId, current => ({
+			...current,
+			messages: current.messages.map(message => {
+				if (message.id !== toolRequestMessageId || message.role !== 'tool' || message.type !== 'tool_request') {
+					return message;
+				}
+				return {
+					...message,
+					snapshots,
+				};
+			}),
+		}));
+	}
+
+	private getAwaitingUserToolRequest(threadId: string): IVSCloneThreadRuntimeToolRequestMessage | undefined {
+		const state = this.states.get(threadId);
+		return state ? this.getAwaitingUserToolRequestFromState(state) : undefined;
+	}
+
+	private getAwaitingUserToolRequestFromState(
+		state: Pick<IVSCloneThreadRuntimeState, 'messages' | 'streamState'>,
+	): IVSCloneThreadRuntimeToolRequestMessage | undefined {
+		if (state.streamState.kind !== 'awaiting_user') {
+			return undefined;
+		}
+
+		for (let index = state.messages.length - 1; index >= 0; index--) {
+			const message = state.messages[index];
+			if (message.role === 'tool' && message.type === 'tool_request') {
+				return message;
+			}
+		}
+		return undefined;
 	}
 
 	private normalizeRestoredState(state: IVSCloneThreadRuntimeState): IVSCloneThreadRuntimeState {
-		const shouldBackfillImportedHistoryMetadata = this.shouldBackfillImportedHistoryMetadata(state.messages);
 		const messages = state.messages.map(message => this.normalizeRestoredConversationMessage(
 			message,
 			state.mode,
-			shouldBackfillImportedHistoryMetadata,
 		));
-		const messageIds = new Set(state.messages.map(message => message.id));
+		const messageIds = new Set(messages.map(message => message.id));
 		const currentCheckpointId = state.currentCheckpointId && state.checkpoints.some(checkpoint => checkpoint.id === state.currentCheckpointId)
 			? state.currentCheckpointId
 			: state.checkpoints.at(-1)?.id;
@@ -1198,52 +1583,36 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			messages,
 			'fail',
 		);
-
-		return state.pausedApproval
+		const normalizedStateBase: Omit<IVSCloneThreadRuntimeState, 'catalog' | 'streamState'> = {
+			threadId: state.threadId,
+			turnId: state.turnId,
+			mode: state.mode,
+			messages,
+			assistantEditApplications,
+			checkpoints: state.checkpoints,
+			currentCheckpointId,
+			branchHeadMessageId,
+			lastUpdatedAt: state.lastUpdatedAt,
+		};
+		const pendingToolRequest = this.getAwaitingUserToolRequestFromState({
+			...normalizedStateBase,
+			streamState: state.streamState,
+		});
+		const streamState = pendingToolRequest
 			? {
-				...state,
-				messages,
-				currentCheckpointId,
-				branchHeadMessageId,
-				assistantEditApplications,
-				streamState: {
-					kind: 'awaiting_user',
-					toolName: state.pausedApproval.toolName,
-					approvalType: state.pausedApproval.approvalType,
-				},
-				catalog: this.normalizeCatalogEntry(state.threadId, {
-					...state,
-					messages,
-					currentCheckpointId,
-					branchHeadMessageId,
-					assistantEditApplications,
-					streamState: {
-						kind: 'awaiting_user',
-						toolName: state.pausedApproval.toolName,
-						approvalType: state.pausedApproval.approvalType,
-					},
-					isRunning: false,
-				}),
-				isRunning: false,
+				kind: 'awaiting_user' as const,
+				toolName: pendingToolRequest.toolName,
+				approvalType: pendingToolRequest.approvalType,
 			}
-			: {
-				...state,
-				messages,
-				currentCheckpointId,
-				branchHeadMessageId,
-				assistantEditApplications,
-				streamState: { kind: 'idle' },
-				catalog: this.normalizeCatalogEntry(state.threadId, {
-					...state,
-					messages,
-					currentCheckpointId,
-					branchHeadMessageId,
-					assistantEditApplications,
-					streamState: { kind: 'idle' },
-					isRunning: false,
-				}),
-				isRunning: false,
-			};
+			: { kind: 'idle' as const };
+		return {
+			...normalizedStateBase,
+			streamState,
+			catalog: this.normalizeCatalogEntry(state.threadId, {
+				...normalizedStateBase,
+				streamState,
+			}),
+		};
 	}
 
 	/**
@@ -1310,54 +1679,26 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	}
 
 	private hasPendingUserDecision(state: IVSCloneThreadRuntimeState): boolean {
-		return state.pausedApproval !== undefined || state.streamState.kind === 'awaiting_user';
+		return state.streamState.kind === 'awaiting_user';
 	}
 
 	private normalizeRestoredConversationMessage(
 		message: IVSCloneThreadRuntimeMessage,
 		threadMode: IVSCloneThreadRuntimeState['mode'],
-		shouldBackfillImportedHistoryMetadata: boolean,
 	): IVSCloneThreadRuntimeMessage {
-		if (message.role === 'user' || message.role === 'assistant') {
-			const metadata = this.getNormalizedConversationMessageMetadata(
-				message,
-				threadMode,
-				shouldBackfillImportedHistoryMetadata,
-				true,
-			);
-			const { metadata: _staleMetadata, ...messageWithoutMetadata } = message;
+		if (message.role === 'user') {
+			return { ...message, mode: message.mode ?? threadMode ?? 'act' };
+		}
+		if (message.role === 'assistant') {
+			const editSuggestion = this.getAssistantEditSuggestion(message, threadMode, undefined);
+			const { metadata: _staleMetadata, ...rest } = message;
 			return {
-				...messageWithoutMetadata,
+				...rest,
 				mode: message.mode ?? threadMode ?? 'act',
-				// The import marker is durable runtime metadata. Older payloads may not have it, but
-				// once present it should survive restore exactly so active runtime consumers do not
-				// need pane-local bookkeeping to distinguish hydrated history from live messages.
-				// Pre-metadata runtime payloads are treated as imported on restore as a deliberate
-				// safety bias: it is better to require manual apply for an old live-looking thread
-				// than to auto-apply edits from a historical thread that lost its provenance marker.
-				...(metadata ? { metadata } : {}),
+				...(editSuggestion ? { metadata: { editSuggestion } } : {}),
 			};
 		}
 		return message;
-	}
-
-	private shouldBackfillImportedHistoryMetadata(
-		messages: readonly IVSCloneThreadRuntimeMessage[],
-	): boolean {
-		// Older persisted runtime payloads had no conversation metadata at all. If none of the
-		// conversation messages carry an explicit marker yet, restore backfills them as imported so
-		// reopened legacy threads stay manual-only instead of suddenly becoming auto-apply eligible.
-		let sawConversationMessage = false;
-		for (const message of messages) {
-			if (message.role !== 'user' && message.role !== 'assistant') {
-				continue;
-			}
-			sawConversationMessage = true;
-			if (message.metadata) {
-				return false;
-			}
-		}
-		return sawConversationMessage;
 	}
 
 	private normalizeRuntimeConversationMessage(
@@ -1365,72 +1706,48 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		threadMode: IVSCloneThreadRuntimeState['mode'],
 		previousMessage?: IVSCloneThreadRuntimeMessage,
 	): IVSCloneThreadRuntimeMessage {
-		if (message.role !== 'user' && message.role !== 'assistant') {
+		if (message.role === 'user') {
+			return { ...message, mode: message.mode ?? threadMode ?? 'act' };
+		}
+		if (message.role !== 'assistant') {
 			return message;
 		}
 
-		// Generic state updates should not silently erase a restored assistant edit suggestion just
-		// because the assistant bubble now shows summary text. Only recompute when the assistant
-		// message itself changed; otherwise preserve the durable runtime metadata from the prior state.
-		const preserveExplicitEditSuggestion = message.role === 'assistant'
-			&& previousMessage?.role === 'assistant'
-			&& previousMessage.id === message.id
-			&& previousMessage.content === message.content
-			&& (previousMessage.mode ?? threadMode ?? 'act') === (message.mode ?? threadMode ?? 'act')
-			&& previousMessage.metadata?.editSuggestion !== undefined;
-		const metadata = this.getNormalizedConversationMessageMetadata(
-			message,
-			threadMode,
-			false,
-			preserveExplicitEditSuggestion,
-			previousMessage,
-		);
-		const { metadata: _staleMetadata, ...messageWithoutMetadata } = message;
+		const editSuggestion = this.getAssistantEditSuggestion(message, threadMode, previousMessage);
+		const { metadata: _staleMetadata, ...rest } = message;
 		return {
-			...messageWithoutMetadata,
+			...rest,
 			mode: message.mode ?? threadMode ?? 'act',
-			...(metadata ? { metadata } : {}),
+			...(editSuggestion ? { metadata: { editSuggestion } } : {}),
 		};
 	}
 
 	/**
-	 * Runtime owns the assistant-apply affordance now. We still derive SEARCH/REPLACE eligibility
-	 * from assistant content while the model emits inline patches, but that derivation is resolved
-	 * once into durable runtime metadata so the pane can render/apply from the stored signal.
+	 * Runtime owns the assistant-apply affordance. SEARCH/REPLACE eligibility is derived from
+	 * assistant content once and stored in durable metadata so the pane can render/apply from the
+	 * stored signal instead of re-parsing transcript text. If a prior message on the same branch
+	 * already carried an explicit suggestion, preserve it so streaming/summary updates do not erase
+	 * eligibility the runtime had already committed to.
 	 */
-	private getNormalizedConversationMessageMetadata(
-		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'user' | 'assistant' }>,
+	private getAssistantEditSuggestion(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
 		threadMode: IVSCloneThreadRuntimeState['mode'],
-		shouldBackfillImportedHistoryMetadata: boolean,
-		preserveExplicitEditSuggestion: boolean,
-		previousMessage?: IVSCloneThreadRuntimeMessage,
-	): IVSCloneThreadRuntimeConversationMessageMetadata | undefined {
-		const importedFromHistory = message.metadata?.importedFromHistory === true || shouldBackfillImportedHistoryMetadata;
-		if (message.role === 'user') {
-			return importedFromHistory ? { importedFromHistory: true } : undefined;
+		previousMessage: IVSCloneThreadRuntimeMessage | undefined,
+	): IVSCloneThreadRuntimeAssistantEditSuggestion | undefined {
+		const shouldPreserveExplicit = previousMessage?.role === 'assistant'
+			&& previousMessage.id === message.id
+			&& previousMessage.content === message.content
+			&& (previousMessage.mode ?? threadMode ?? 'act') === (message.mode ?? threadMode ?? 'act')
+			&& previousMessage.metadata?.editSuggestion !== undefined;
+		if (shouldPreserveExplicit) {
+			return message.metadata?.editSuggestion ?? previousMessage.metadata?.editSuggestion;
 		}
-
-		const explicitEditSuggestion = preserveExplicitEditSuggestion
-			? (
-				message.metadata?.editSuggestion
-				?? (previousMessage?.role === 'assistant' ? previousMessage.metadata?.editSuggestion : undefined)
-			)
-			: undefined;
-		const editSuggestion = explicitEditSuggestion ?? this.toAssistantEditSuggestion(
-			this.getAssistantEditSuggestionApplyMode(
-				message.content,
-				message.mode ?? threadMode ?? 'act',
-				importedFromHistory,
-			),
+		if (message.metadata?.editSuggestion) {
+			return message.metadata.editSuggestion;
+		}
+		return this.toAssistantEditSuggestion(
+			this.getAssistantEditSuggestionApplyMode(message.content, message.mode ?? threadMode ?? 'act'),
 		);
-		if (!importedFromHistory && !editSuggestion) {
-			return undefined;
-		}
-
-		return {
-			...(importedFromHistory ? { importedFromHistory: true } : {}),
-			...(editSuggestion ? { editSuggestion } : {}),
-		};
 	}
 
 	private toAssistantEditSuggestion(
@@ -1447,7 +1764,6 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	private getAssistantEditSuggestionApplyMode(
 		content: string,
 		mode: IVSCloneThreadRuntimeRunOptions['mode'],
-		importedFromHistory: boolean,
 	): VSCloneThreadRuntimeAssistantEditSuggestionApplyMode | undefined {
 		if (mode === 'plan') {
 			return undefined;
@@ -1455,7 +1771,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		if (parseSearchReplaceBlocks(content).length === 0) {
 			return undefined;
 		}
-		return importedFromHistory ? 'manual' : 'auto';
+		return 'auto';
 	}
 
 	private normalizeCatalogEntry(
@@ -1472,16 +1788,19 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		const latestConversationMessage = [...state.messages].reverse().find((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'user' | 'assistant' }> =>
 			message.role === 'user' || message.role === 'assistant',
 		);
-		// Titles should be stable once a thread exists, but when older payloads or empty imports do
-		// not have a catalog yet we still need a deterministic fallback sourced from the first real
-		// conversation message rather than a truthy/falsey precedence bug.
-		const titleSource = fallbackCatalog?.title
-			|| firstConversationMessage?.content
-			|| threadId;
-		const previewSource = latestConversationMessage?.content
-			|| fallbackCatalog?.lastTurnPreview
-			|| (lastMessage?.role === 'tool' ? lastMessage.output : '')
-			|| titleSource;
+			// Titles should be stable once a thread exists, but pre-catalog payloads still need a
+			// deterministic fallback sourced from the first real conversation message rather than a
+			// truthy/falsey precedence bug.
+			const lastToolOutput = lastMessage?.role === 'tool' && 'output' in lastMessage
+				? lastMessage.output
+				: undefined;
+			const titleSource = fallbackCatalog?.title
+				|| firstConversationMessage?.content
+				|| threadId;
+			const previewSource = latestConversationMessage?.content
+				|| fallbackCatalog?.lastTurnPreview
+				|| lastToolOutput
+				|| titleSource;
 		const archived = state.catalog?.archived ?? previous?.catalog.archived ?? false;
 		return {
 			threadId,
@@ -1500,84 +1819,18 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			archived,
 			turnCount: this.getRuntimeTurnCount(state.messages, fallbackCatalog?.turnCount ?? 0),
 			lastTurnPreview: this.truncateCatalogText(previewSource, 280),
-			importedFromHistory: state.catalog?.importedFromHistory ?? previous?.catalog.importedFromHistory,
 		};
-	}
-
-	private createCatalogFromHistoryThread(
-		thread: IVSCloneChatHistoryThread,
-		messages: readonly IVSCloneThreadRuntimeMessage[],
-	): IVSCloneThreadRuntimeCatalogEntry {
-		return {
-			threadId: thread.threadId,
-			sessionResource: thread.sessionResource,
-			title: thread.title,
-			activeModelIdentifier: thread.activeModelIdentifier,
-			createdAt: thread.createdAt,
-			updatedAt: thread.updatedAt,
-			status: thread.archived ? 'archived' : thread.status,
-			archived: thread.archived,
-			turnCount: messages.filter(message => message.role === 'user').length || thread.turnCount,
-			lastTurnPreview: this.truncateCatalogText(
-				[...(messages.filter((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' | 'user' }> =>
-					message.role === 'assistant' || message.role === 'user',
-				))].reverse()[0]?.content || thread.lastTurnPreview,
-				280,
-			),
-			importedFromHistory: true,
-		};
-	}
-
-	private createCatalogFromHistoryTurns(
-		threadId: string,
-		turns: readonly IVSCloneChatHistoryTurn[],
-		messages: readonly IVSCloneThreadRuntimeMessage[],
-	): IVSCloneThreadRuntimeCatalogEntry {
-		const firstTurn = turns[0];
-		const latestTurn = turns.at(-1);
-		const status = latestTurn?.status === 'failed' || latestTurn?.status === 'cancelled'
-			? 'failed'
-			: 'completed';
-		return {
-			threadId,
-			// Turn-only migration does not know the original session resource. Preserve that as unknown
-			// so a later explicit history-thread import can upgrade the synthetic catalog safely.
-			sessionResource: undefined,
-			title: this.truncateCatalogText(firstTurn?.promptText, 120) || threadId,
-			activeModelIdentifier: latestTurn?.modelIdentifier,
-			createdAt: firstTurn?.startedAt ?? latestTurn?.startedAt ?? Date.now(),
-			updatedAt: latestTurn?.lastEventAt ?? latestTurn?.completedAt ?? latestTurn?.startedAt ?? Date.now(),
-			status,
-			archived: false,
-			turnCount: turns.length,
-			lastTurnPreview: this.truncateCatalogText(
-				[...(messages.filter((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' | 'user' }> =>
-					message.role === 'assistant' || message.role === 'user',
-				))].reverse()[0]?.content || latestTurn?.responsePlainText || latestTurn?.promptText,
-				280,
-			),
-			importedFromHistory: true,
-		};
-	}
-
-	private shouldUpgradeSyntheticHistoryCatalog(state: IVSCloneThreadRuntimeState): boolean {
-		// The only catalog that should be replaced from a history-thread import is the provisional
-		// synthetic one that still lacks the real session resource. That covers both turn-only imports
-		// and restored pre-catalog runtime payloads. Once runtime already knows a session resource,
-		// later history reads are compatibility input only and must not overwrite runtime-owned
-		// metadata.
-		return !state.catalog.sessionResource;
 	}
 
 	private deriveCatalogStatus(
-		state: Pick<IVSCloneThreadRuntimeState, 'messages' | 'streamState' | 'pausedApproval' | 'isRunning'>,
+		state: Pick<IVSCloneThreadRuntimeState, 'messages' | 'streamState'>,
 		archived: boolean,
 		fallbackStatus: IVSCloneThreadRuntimeCatalogEntry['status'] | undefined,
 	): IVSCloneThreadRuntimeCatalogEntry['status'] {
 		if (archived) {
 			return 'archived';
 		}
-		if (state.isRunning || state.pausedApproval || state.streamState.kind !== 'idle') {
+		if (state.streamState.kind !== 'idle') {
 			return 'active';
 		}
 		const latestToolMessage = [...state.messages].reverse().find((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }> => message.role === 'tool');
@@ -1625,13 +1878,15 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		return haystack.includes(normalizedText);
 	}
 
-	private toAgentLoopConversationMessagesFromRuntime(threadId: string, excludedToolResultMessageId?: string): IVSCloneApiConversationMessage[] {
+	private toAgentLoopConversationMessagesFromRuntime(threadId: string, excludedToolResultMessageId?: string): IVSCloneChatTransportConversationMessage[] {
 		const state = this.states.get(threadId);
 		if (!state) {
 			return [];
 		}
 
-		const messages: IVSCloneApiConversationMessage[] = [];
+		// The runtime is the canonical conversation record, so resumed approvals and follow-up sends
+		// project directly from runtime state here instead of depending on a separate common helper.
+		const messages: IVSCloneChatTransportConversationMessage[] = [];
 		for (const message of state.messages) {
 			switch (message.role) {
 				case 'user':
@@ -1650,12 +1905,15 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					messages.push({ role: 'assistant', content: message.content });
 					break;
 				case 'tool':
-					// The agent loop feeds structured tool results back as the next user turn. Using
-					// the same mapping here lets a restored approval resume from the active branch
-					// without depending on any legacy transcript reconstruction.
-					if (message.id !== excludedToolResultMessageId && (message.type === 'success' || message.type === 'tool_error' || message.type === 'rejected')) {
+					if (message.id === excludedToolResultMessageId) {
+						break;
+					}
+					if (message.type === 'success' || message.type === 'tool_error' || message.type === 'rejected') {
 						messages.push({
-							role: 'user',
+							role: 'tool',
+							id: message.id,
+							name: message.toolName,
+							rawParams: message.params,
 							content: formatToolResult(message.toolName, {
 								success: message.success === true,
 								output: message.output ?? '',
@@ -1667,33 +1925,35 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					break;
 			}
 		}
+
 		return messages;
 	}
 
+	private resumeThreadFromPersistedToolDecision(
+		threadId: string,
+		pendingToolRequest: IVSCloneThreadRuntimeToolRequestMessage,
+		decision: 'approval' | 'rejection',
+	): void {
+		// Persisted tool decisions must resume from the runtime transcript so reload-time approvals
+		// and rejections produce the same assistant follow-up the live loop would have emitted.
+		const resumeHandle = this.runThread({
+			...pendingToolRequest.run,
+			threadId,
+			promptText: '',
+			previousTurns: this.toAgentLoopConversationMessagesFromRuntime(threadId),
+			recordPromptMessage: false,
+		});
+		void resumeHandle.done.catch(error => {
+			this.logService.error(`[VSCloneThreadRuntime] Failed to resume thread after persisted ${decision}.`, error);
+		});
+	}
+
 	private resolveWorkspacePath(rawPath: string | undefined): URI | undefined {
-		const normalizedPath = rawPath?.replace(/\\/g, '/').trim();
-		if (!normalizedPath) {
-			return undefined;
-		}
-
 		const workspaceFolders = this.workspaceContextService.getWorkspace().folders;
-		if (workspaceFolders.length === 0) {
-			return undefined;
-		}
-
-		if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(normalizedPath)) {
-			try {
-				return URI.parse(normalizedPath);
-			} catch {
-				return undefined;
-			}
-		}
-
-		if (normalizedPath.startsWith('/')) {
-			return URI.file(normalizedPath);
-		}
-
-		return joinPath(workspaceFolders[0].uri, normalizedPath);
+		const resolved = resolveVSCloneWorkspacePath(workspaceFolders, rawPath);
+		return resolved && this.workspaceContextService.isInsideWorkspace(resolved)
+			? resolved
+			: undefined;
 	}
 
 	private getToolInvocationKey(toolName: string, params: Record<string, string>): string {
@@ -1705,4 +1965,21 @@ function dirnameUri(resource: URI): URI {
 	const lastSlash = resource.path.lastIndexOf('/');
 	const nextPath = lastSlash <= 0 ? '/' : resource.path.slice(0, lastSlash);
 	return resource.with({ path: nextPath });
+}
+
+function normalizeAssistantTranscriptText(value: string): string {
+	return value
+		.replace(/[ \t]+\n/g, '\n')
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
+}
+
+function detectEligibilityFailureReason(
+	vendor: IVSCloneThreadRuntimeRunOptions['vendor'],
+	errorMessage: string,
+): string | undefined {
+	if (vendor === 'openai' && /is not supported when using Codex with a ChatGPT account/i.test(errorMessage)) {
+		return 'Your ChatGPT account is not entitled to use this model with Codex.';
+	}
+	return undefined;
 }

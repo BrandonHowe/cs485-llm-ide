@@ -4,27 +4,27 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../base/common/uri.js';
-import type { IVSCloneApiConversationMessage } from './vscloneChatApiAdapters.js';
+import type { IVSCloneChatTransportConversationMessage } from './vscloneChatTransportTypes.js';
 import type { IVSCloneImageAttachment } from './vscloneImageAttachmentTypes.js';
-import type { VSCloneReasoningEffortLevel } from './vscloneModelCatalogService.js';
+import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
-import type { VSCloneToolApprovalType } from './vscloneToolRuntimeTypes.js';
+import type { VSCloneToolApprovalType } from './vscloneToolDefinitions.js';
 
 export type VSCloneThreadRuntimeCatalogStatus = 'active' | 'completed' | 'failed' | 'archived';
 export type VSCloneThreadRuntimeCatalogTab = 'all' | 'active' | 'archived';
 
 /**
- * The runtime catalog replaces legacy thread-list ownership for active threads. It persists the
- * rail-facing metadata alongside the thread state so archive/delete/clear can operate without a
- * second thread registry staying in sync.
+ * Rail-facing metadata for a runtime thread. The runtime catalog is stored alongside the thread
+ * state so archive/delete/clear operate on a single source of truth instead of cross-syncing a
+ * separate thread registry.
  */
 export interface IVSCloneThreadRuntimeCatalogEntry {
 	readonly threadId: string;
 	/**
-	 * Older runtime payloads and turn-only history hydration may not know the originating session
-	 * resource. Keep that unknown state explicit instead of fabricating a synthetic value that later
-	 * looks authoritative to thread reuse and migration code.
+	 * A thread created before the session resource became part of the catalog may persist without
+	 * one. Keep that unknown state explicit so thread reuse code never treats a missing value as
+	 * authoritative.
 	 */
 	readonly sessionResource?: string;
 	readonly title: string;
@@ -35,7 +35,6 @@ export interface IVSCloneThreadRuntimeCatalogEntry {
 	readonly archived: boolean;
 	readonly turnCount: number;
 	readonly lastTurnPreview: string;
-	readonly importedFromHistory?: boolean;
 }
 
 export interface IVSCloneThreadRuntimeCatalogQuery {
@@ -80,10 +79,9 @@ export interface IVSCloneThreadRuntimeCheckpoint {
 }
 
 /**
- * Assistant edit application now lives in runtime state instead of a pane-local storage blob.
- * The runtime owns branch truncation and reload normalization, so the apply summary has to use
- * URI-based data that survives serialization and can be pruned when its assistant message drops
- * off the active branch.
+ * Assistant edit application lives in runtime state so that branch truncation, reload, and pane
+ * rendering see the same durable result. The apply summary uses URI-based data that survives
+ * serialization and is pruned automatically when its assistant message drops off the active branch.
  */
 export interface IVSCloneThreadRuntimeEditFileChange {
 	readonly uri: URI;
@@ -163,15 +161,6 @@ export interface IVSCloneThreadRuntimeRunContext {
 	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 }
 
-export interface IVSCloneThreadRuntimePausedApproval {
-	readonly requestedAt: number;
-	readonly toolName: string;
-	readonly params: Record<string, string>;
-	readonly approvalType?: VSCloneToolApprovalType;
-	readonly snapshots: readonly IVSCloneThreadRuntimeSnapshot[];
-	readonly run: IVSCloneThreadRuntimeRunContext;
-}
-
 export type VSCloneThreadToolMessageType =
 	| 'tool_request'
 	| 'running_now'
@@ -180,15 +169,52 @@ export type VSCloneThreadToolMessageType =
 	| 'rejected';
 
 /**
- * History hydration is now an explicit one-time import into runtime state. Persisting that
- * provenance on each imported conversation message lets restored runtime threads keep the same
- * semantics without consulting legacy history again after reload. Assistant edit applicability is
- * persisted alongside that provenance so the pane can render/apply from runtime-owned metadata
- * instead of inferring eligibility from rendered transcript text.
+ * Assistant edit applicability is persisted alongside the message so the pane can render/apply
+ * from runtime-owned metadata instead of inferring eligibility from rendered transcript text.
  */
 export interface IVSCloneThreadRuntimeConversationMessageMetadata {
-	readonly importedFromHistory?: boolean;
 	readonly editSuggestion?: IVSCloneThreadRuntimeAssistantEditSuggestion;
+}
+
+/**
+ * Approval-required tools now persist their resumable execution payload directly on the
+ * `tool_request` message instead of duplicating that state in a parallel `pausedApproval` field.
+ * That keeps restore/resume anchored to the message stream, which is the only canonical runtime
+ * transcript after the Void-shaped loop port.
+ */
+export interface IVSCloneThreadRuntimeToolRequestMessage {
+	readonly id: string;
+	readonly role: 'tool';
+	readonly createdAt: number;
+	readonly type: 'tool_request';
+	readonly toolName: string;
+	readonly approvalType?: VSCloneToolApprovalType;
+	readonly params: Record<string, string>;
+	readonly requestedAt: number;
+	readonly snapshots: readonly IVSCloneThreadRuntimeSnapshot[];
+	readonly run: IVSCloneThreadRuntimeRunContext;
+}
+
+export interface IVSCloneThreadRuntimeToolProgressMessage {
+	readonly id: string;
+	readonly role: 'tool';
+	readonly createdAt: number;
+	readonly type: 'running_now';
+	readonly toolName: string;
+	readonly approvalType?: VSCloneToolApprovalType;
+	readonly params: Record<string, string>;
+}
+
+export interface IVSCloneThreadRuntimeToolResultMessage {
+	readonly id: string;
+	readonly role: 'tool';
+	readonly createdAt: number;
+	readonly type: Exclude<VSCloneThreadToolMessageType, 'tool_request' | 'running_now'>;
+	readonly toolName: string;
+	readonly approvalType?: VSCloneToolApprovalType;
+	readonly params: Record<string, string>;
+	readonly output?: string;
+	readonly success?: boolean;
 }
 
 export type IVSCloneThreadRuntimeMessage =
@@ -196,7 +222,6 @@ export type IVSCloneThreadRuntimeMessage =
 		readonly id: string;
 		readonly role: 'user';
 		readonly mode: VSCloneChatMode;
-		readonly metadata?: IVSCloneThreadRuntimeConversationMessageMetadata;
 		readonly createdAt: number;
 		readonly content: string;
 		readonly imageAttachments?: readonly IVSCloneImageAttachment[];
@@ -209,17 +234,9 @@ export type IVSCloneThreadRuntimeMessage =
 		readonly createdAt: number;
 		readonly content: string;
 	}
-	| {
-		readonly id: string;
-		readonly role: 'tool';
-		readonly createdAt: number;
-		readonly type: VSCloneThreadToolMessageType;
-		readonly toolName: string;
-		readonly approvalType?: VSCloneToolApprovalType;
-		readonly params: Record<string, string>;
-		readonly output?: string;
-		readonly success?: boolean;
-	}
+	| IVSCloneThreadRuntimeToolRequestMessage
+	| IVSCloneThreadRuntimeToolProgressMessage
+	| IVSCloneThreadRuntimeToolResultMessage
 	| {
 		readonly id: string;
 		readonly role: 'checkpoint';
@@ -238,8 +255,6 @@ export interface IVSCloneThreadRuntimeState {
 	readonly checkpoints: readonly IVSCloneThreadRuntimeCheckpoint[];
 	readonly currentCheckpointId?: string;
 	readonly branchHeadMessageId?: string;
-	readonly pausedApproval?: IVSCloneThreadRuntimePausedApproval;
-	readonly isRunning: boolean;
 	readonly lastUpdatedAt: number;
 }
 
@@ -254,7 +269,7 @@ export interface IVSCloneThreadRuntimeRunOptions {
 	readonly modelId: string;
 	readonly modelIdentifier: string;
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
-	readonly previousTurns?: readonly IVSCloneApiConversationMessage[];
+	readonly previousTurns?: readonly IVSCloneChatTransportConversationMessage[];
 	readonly systemMessage?: string;
 	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 	readonly recordPromptMessage?: boolean;

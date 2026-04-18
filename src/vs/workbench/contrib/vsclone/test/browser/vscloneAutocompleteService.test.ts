@@ -4,8 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { CancellationTokenSource } from '../../../../../base/common/cancellation.js';
-import { Event } from '../../../../../base/common/event.js';
+import { CancellationToken, CancellationTokenSource } from '../../../../../base/common/cancellation.js';
 import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { LRUCache } from '../../../../../base/common/map.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -16,16 +15,19 @@ import { InlineCompletion, InlineCompletions } from '../../../../../editor/commo
 import { ILanguageFeaturesService } from '../../../../../editor/common/services/languageFeatures.js';
 import { ITextModel } from '../../../../../editor/common/model.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
-import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { MockContextKeyService } from '../../../../../platform/keybinding/test/common/mockKeybindingService.js';
-import {
-	VSCloneAutocompleteDebounceMsSetting,
-	VSCloneAutocompleteService,
-	VSCloneInlineSuggestionVisibleContextKey,
-} from '../../browser/vscloneAutocompleteService.js';
-import { IVSCloneThreadModelSelectionService } from '../../common/backend/vscloneThreadModelSelectionService.js';
-import { IVSCloneCompletionBackend, IVSCloneCompletionRequest } from '../../common/vscloneCompletionTypes.js';
-import { IVSCloneCompletionContextService } from '../../browser/vscloneCompletionContextService.js';
+import { NullLogService } from '../../../../../platform/log/common/log.js';
+import { VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteService, VSCloneInlineSuggestionVisibleContextKey } from '../../browser/vscloneAutocompleteService.js';
+import { IVSCloneConvertToLLMMessageService } from '../../browser/vscloneConvertToLLMMessageService.js';
+import { IVSCloneLLMMessageService } from '../../browser/vscloneLLMMessageService.js';
+import type { IVSCloneChatTransportRequestOptions } from '../../common/vscloneChatTransportTypes.js';
+import { VSCloneSettingsService } from '../../common/vscloneSettingsService.js';
+import type { IVSCloneCompletionPromptEnvelope } from '../../common/vscloneCompletionTypes.js';
+import type { IVSCloneLLMMessageObserver, IVSCloneLLMMessageRequest } from '../../common/vscloneLLMMessageTypes.js';
+import type { IVSCloneModelSelection } from '../../common/vscloneModelSelectionTypes.js';
+import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
+import { TestVSCloneOAuthService } from '../common/vscloneTestOAuthService.js';
+import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
 
 interface IAutocompleteServiceInternals {
 	getDebounceMs(): number;
@@ -35,14 +37,70 @@ interface IAutocompleteServiceInternals {
 	getCachedCompletion(resource: URI, prefix: string, suffix: string): string | undefined;
 	addToCache(resource: URI, prefix: string, insertText: string): void;
 	evictExpiredEntries(cache: LRUCache<string, { readonly timestamp: number }>, now: number): void;
-	beginBackendRequest(resource: URI, parentToken: CancellationTokenSource['token']): { readonly token: CancellationTokenSource['token']; dispose(): void };
+	beginBackendRequest(resource: URI, parentToken: CancellationToken): { readonly token: CancellationToken; dispose(): void };
 	endBackendRequest(resource: URI, requestId: number): void;
-	debounce(resource: URI, context: { readonly linePrefix: string; readonly lineSuffix: string }, mode: 'single-line-redo-suffix' | 'single-line-fill-middle' | 'multi-line' | 'do-not-predict', token: CancellationTokenSource['token']): Promise<boolean>;
+	debounce(resource: URI, context: { readonly linePrefix: string; readonly lineSuffix: string }, mode: 'single-line-redo-suffix' | 'single-line-fill-middle' | 'multi-line' | 'do-not-predict', token: CancellationToken): Promise<boolean>;
+}
+
+class TestConvertToLLMMessageService implements IVSCloneConvertToLLMMessageService {
+	declare readonly _serviceBrand: undefined;
+
+	prepareChatRequest(_options: IVSCloneChatTransportRequestOptions): never {
+		throw new Error('Chat conversion is not used in autocomplete tests.');
+	}
+
+	prepareFIMRequest(
+		selection: Pick<IVSCloneModelSelection, 'vendor' | 'modelId' | 'modelIdentifier' | 'reasoningEffort'>,
+		envelope: Pick<IVSCloneCompletionPromptEnvelope, 'prefix' | 'suffix' | 'maxTokens' | 'temperature' | 'stopTokens' | 'systemMessage' | 'promptText'>,
+	) {
+		return {
+			vendor: selection.vendor,
+			modelId: selection.modelId,
+			modelIdentifier: selection.modelIdentifier,
+			reasoningEffort: selection.reasoningEffort,
+			prompt: { ...envelope },
+		};
+	}
+}
+
+class RecordingLLMMessageService implements IVSCloneLLMMessageService {
+	declare readonly _serviceBrand: undefined;
+	readonly requests: IVSCloneLLMMessageRequest[] = [];
+
+	constructor(private readonly resolveText: (request: IVSCloneLLMMessageRequest) => string = () => 'completion') { }
+
+	sendRequest(request: IVSCloneLLMMessageRequest, observer: IVSCloneLLMMessageObserver = {}) {
+		this.requests.push(request);
+		queueMicrotask(() => {
+			observer.onFinalMessage?.({
+				fullText: this.resolveText(request),
+				fullReasoning: '',
+				toolCall: undefined,
+				anthropicReasoning: null,
+			});
+		});
+
+		return {
+			requestId: `request-${this.requests.length}`,
+			done: Promise.resolve(),
+			cancel: () => {
+				observer.onAbort?.();
+			},
+		};
+	}
+
+	sendChatRequest(): never {
+		throw new Error('Chat requests are not used in autocomplete tests.');
+	}
+
+	abort(): void { }
 }
 
 interface IAutocompleteServiceSetup {
 	service: VSCloneAutocompleteService;
+	settingsService: VSCloneSettingsService;
 	contextKeyService: MockContextKeyService;
+	llmMessageService: RecordingLLMMessageService;
 }
 
 function createLanguageFeaturesService(onRegister?: (selector: unknown, provider: unknown) => void): ILanguageFeaturesService {
@@ -56,15 +114,31 @@ function createLanguageFeaturesService(onRegister?: (selector: unknown, provider
 	} as unknown as ILanguageFeaturesService;
 }
 
-function createTextModel(content: string, resource = URI.file('/workspace/test.ts'), languageId = 'typescript'): ITextModel {
+function createEditorService(resources: readonly URI[] = []) {
+	return {
+		editors: resources.map(resource => ({ resource })),
+	};
+}
+
+function createModelService(models: ReadonlyMap<string, ITextModel>) {
+	return {
+		getModel(resource: URI) {
+			return models.get(resource.toString()) ?? null;
+		},
+	};
+}
+
+function createTextModel(content: string, resource = URI.file('/workspace/test.ts'), languageId = 'typescript', versionId = 1): ITextModel {
 	const lines = content.split('\n');
 
 	return {
 		uri: resource,
 		getLanguageId: () => languageId,
-		getVersionId: () => 1,
+		getVersionId: () => versionId,
 		getLineCount: () => lines.length,
 		getLineMaxColumn: (lineNumber: number) => (lines[lineNumber - 1] ?? '').length + 1,
+		getValueLength: () => content.length,
+		getValue: () => content,
 		getValueInRange: (range: Range) => {
 			const startLine = range.startLineNumber - 1;
 			const endLine = range.endLineNumber - 1;
@@ -82,52 +156,49 @@ function createTextModel(content: string, resource = URI.file('/workspace/test.t
 	} as unknown as ITextModel;
 }
 
-function createAutocompleteService(
+async function createAutocompleteService(
 	options: {
 		configuration?: Record<string, unknown>;
-		complete?: IVSCloneCompletionBackend['complete'];
-		gatherContext?: IVSCloneCompletionContextService['gatherContext'];
 		onRegister?: (selector: unknown, provider: unknown) => void;
+		resolveText?: (request: IVSCloneLLMMessageRequest) => string;
+		editorResources?: readonly URI[];
+		modelsByResource?: ReadonlyMap<string, ITextModel>;
 	} = {},
-): IAutocompleteServiceSetup {
+): Promise<IAutocompleteServiceSetup> {
+	const oauthService = new TestVSCloneOAuthService();
+	const settingsService = new VSCloneSettingsService(
+		new TestStorageService(),
+		oauthService,
+		new TestVSCloneUnifiedChatBackendService(),
+	);
+	await settingsService.initialize();
+
+	const llmMessageService = new RecordingLLMMessageService(options.resolveText);
 	const contextKeyService = new MockContextKeyService();
 	const service = new VSCloneAutocompleteService(
-		{
-			_serviceBrand: undefined,
-			complete: options.complete ?? (async () => undefined),
-		} as IVSCloneCompletionBackend,
-		{
-			_serviceBrand: undefined,
-			gatherContext: options.gatherContext ?? (() => []),
-		} as IVSCloneCompletionContextService,
+		settingsService,
+		new TestConvertToLLMMessageService(),
+		llmMessageService,
+		oauthService,
+		createEditorService(options.editorResources) as never,
+		createModelService(options.modelsByResource ?? new Map()) as never,
 		createLanguageFeaturesService(options.onRegister),
 		new TestConfigurationService(options.configuration ?? Object.create(null)),
 		contextKeyService,
 		new NullLogService(),
-		{
-			_serviceBrand: undefined,
-			onDidChangeSelection: Event.None,
-			initialize: async () => undefined,
-			getCurrentSelectionForThread: () => undefined,
-			setSelectionForThread: async () => undefined,
-			switchToNextModel: async () => undefined,
-			resetSelectionForThread: async () => undefined,
-			hasSelectionForThread: () => false,
-			getRecentModelIdentifiers: () => [],
-		} as IVSCloneThreadModelSelectionService,
 	);
 
-	return { service, contextKeyService };
+	return { service, settingsService, contextKeyService, llmMessageService };
 }
 
 suite('VSCloneAutocompleteService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('registers itself as an inline completions provider and binds the visibility key', () => {
+	test('registers itself as an inline completions provider and binds the visibility key', async () => {
 		const testDisposables = store.add(new DisposableStore());
 		let registeredSelector: unknown;
 		let registeredProvider: unknown;
-		const { service, contextKeyService } = createAutocompleteService({
+		const { service, contextKeyService } = await createAutocompleteService({
 			onRegister: (selector, provider) => {
 				registeredSelector = selector;
 				registeredProvider = provider;
@@ -140,9 +211,9 @@ suite('VSCloneAutocompleteService', () => {
 		assert.strictEqual(contextKeyService.getContextKeyValue(VSCloneInlineSuggestionVisibleContextKey.key), false);
 	});
 
-	test('sets the VSClone visibility context key while a shown completion list is alive', () => {
+	test('sets the VSClone visibility context key while a shown completion list is alive', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service, contextKeyService } = createAutocompleteService();
+		const { service, contextKeyService } = await createAutocompleteService();
 		testDisposables.add(service);
 		const item = { insertText: 'completion' } as InlineCompletion;
 		const completions = { items: [item] } as InlineCompletions;
@@ -154,28 +225,9 @@ suite('VSCloneAutocompleteService', () => {
 		assert.strictEqual(contextKeyService.getContextKeyValue(VSCloneInlineSuggestionVisibleContextKey.key), false);
 	});
 
-	test('keeps the visibility context key set until the last shown completion list is disposed', () => {
+	test('disposes active requests, clears cache state, and resets the visibility key', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service, contextKeyService } = createAutocompleteService();
-		testDisposables.add(service);
-		const firstItem = { insertText: 'first' } as InlineCompletion;
-		const secondItem = { insertText: 'second' } as InlineCompletion;
-		const firstCompletions = { items: [firstItem] } as InlineCompletions;
-		const secondCompletions = { items: [secondItem] } as InlineCompletions;
-
-		service.handleItemDidShow(firstCompletions, firstItem);
-		service.handleItemDidShow(secondCompletions, secondItem);
-		service.disposeInlineCompletions(firstCompletions);
-
-		assert.strictEqual(contextKeyService.getContextKeyValue(VSCloneInlineSuggestionVisibleContextKey.key), true);
-
-		service.disposeInlineCompletions(secondCompletions);
-		assert.strictEqual(contextKeyService.getContextKeyValue(VSCloneInlineSuggestionVisibleContextKey.key), false);
-	});
-
-	test('disposes backend requests, clears cache state, and resets the visibility key', () => {
-		const testDisposables = store.add(new DisposableStore());
-		const { service, contextKeyService } = createAutocompleteService();
+		const { service, contextKeyService } = await createAutocompleteService();
 		testDisposables.add(service);
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const resource = URI.file('/workspace/sample.ts');
@@ -192,15 +244,15 @@ suite('VSCloneAutocompleteService', () => {
 		assert.strictEqual(contextKeyService.getContextKeyValue(VSCloneInlineSuggestionVisibleContextKey.key), false);
 	});
 
-	test('classifies prediction modes, debounce windows, and replacement ranges', () => {
+	test('classifies prediction modes, debounce windows, and replacement ranges', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const defaultSetup = createAutocompleteService();
+		const defaultSetup = await createAutocompleteService();
 		testDisposables.add(defaultSetup.service);
-		const configuredSetup = createAutocompleteService({
+		const configuredSetup = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 125 },
 		});
 		testDisposables.add(configuredSetup.service);
-		const negativeSetup = createAutocompleteService({
+		const negativeSetup = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: -25 },
 		});
 		testDisposables.add(negativeSetup.service);
@@ -225,9 +277,9 @@ suite('VSCloneAutocompleteService', () => {
 		assert.deepStrictEqual(defaultService.getReplaceRange(model, new Position(1, 3), 'single-line-fill-middle'), new Range(1, 3, 1, 3));
 	});
 
-	test('reuses cached completions and trims overlapping suffixes', () => {
+	test('reuses cached completions and trims overlapping suffixes', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service } = createAutocompleteService();
+		const { service } = await createAutocompleteService();
 		testDisposables.add(service);
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const resource = URI.file('/workspace/sample.ts');
@@ -235,8 +287,6 @@ suite('VSCloneAutocompleteService', () => {
 		internals.addToCache(resource, '  abc  ', 'defghi');
 		internals.addToCache(resource, 'abcde', 'fghi');
 
-		// The longest cached prefix must win so the test can distinguish prefix-selection from
-		// simple string prefix matching.
 		assert.strictEqual(internals.getCachedCompletion(resource, 'abcdef', ''), 'ghi');
 
 		internals.addToCache(resource, 'foo', 'bar)');
@@ -247,9 +297,9 @@ suite('VSCloneAutocompleteService', () => {
 		assert.strictEqual(internals.getCachedCompletion(resource, '   ', ''), undefined);
 	});
 
-	test('evicts only cache entries older than the 30 second boundary', () => {
+	test('evicts only cache entries older than the 30 second boundary', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service } = createAutocompleteService();
+		const { service } = await createAutocompleteService();
 		testDisposables.add(service);
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const cache = new LRUCache<string, { readonly timestamp: number }>(5);
@@ -267,7 +317,7 @@ suite('VSCloneAutocompleteService', () => {
 
 	test('honors debounce cancellation and request supersession', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service } = createAutocompleteService({
+		const { service } = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 1 },
 		});
 		testDisposables.add(service);
@@ -294,9 +344,9 @@ suite('VSCloneAutocompleteService', () => {
 		}
 	});
 
-	test('tracks backend request lifetimes and parent cancellation', () => {
+	test('tracks backend request lifetimes and parent cancellation', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service } = createAutocompleteService();
+		const { service } = await createAutocompleteService();
 		testDisposables.add(service);
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const resource = URI.file('/workspace/sample.ts');
@@ -348,15 +398,10 @@ suite('VSCloneAutocompleteService', () => {
 		}
 	});
 
-	test('returns cached inline completions immediately and bypasses the backend', async () => {
+	test('returns cached inline completions immediately and bypasses the transport', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		let backendCalled = false;
-		const { service } = createAutocompleteService({
+		const { service, llmMessageService } = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 0 },
-			complete: async () => {
-				backendCalled = true;
-				return 'ignored';
-			},
 		});
 		testDisposables.add(service);
 		const internals = service as unknown as IAutocompleteServiceInternals;
@@ -364,47 +409,41 @@ suite('VSCloneAutocompleteService', () => {
 		const model = createTextModel('fooBa', resource);
 
 		internals.addToCache(resource, 'foo', 'BarBaz()');
-		const completions = await service.provideInlineCompletions(model, new Position(1, 6), {} as never, new CancellationTokenSource().token);
+		const completions = await service.provideInlineCompletions(model, new Position(1, 6), {} as never, CancellationToken.None);
 
-		assert.strictEqual(backendCalled, false);
+		assert.strictEqual(llmMessageService.requests.length, 0);
 		assert.strictEqual(completions?.items.length, 1);
 		assert.strictEqual(completions?.items[0].insertText, 'rBaz()');
 		assert.deepStrictEqual(completions?.items[0].range, new Range(1, 6, 1, 6));
 	});
 
-	test('requests multi-line completions with cross-file context and caches the result', async () => {
+	test('builds multi-line requests with open-tab context and caches the result', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		let backendRequest: IVSCloneCompletionRequest | undefined;
-		let gatherContextArgs: unknown[] | undefined;
-		const { service } = createAutocompleteService({
+		const helperResource = URI.file('/workspace/helper.ts');
+		const helperModel = createTextModel('export const helper = true;', helperResource, 'typescript', 2);
+		const modelsByResource = new Map([[helperResource.toString(), helperModel]]);
+		const { service, llmMessageService } = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 0 },
-			complete: async request => {
-				backendRequest = request;
-				return 'const value = 1;\nreturn value;';
-			},
-			gatherContext: (...args) => {
-				gatherContextArgs = args;
-				return [
-					{ filePath: '/workspace/helper.ts', languageId: 'typescript', content: 'export const helper = true;' },
-					{ filePath: '/workspace/other.ts', languageId: 'typescript', content: 'export const other = true;' },
-				];
-			},
+			editorResources: [helperResource],
+			modelsByResource,
+			resolveText: () => 'const value = 1;\nreturn value;',
 		});
 		testDisposables.add(service);
 		const model = createTextModel('function f() {\n    \n}', URI.file('/workspace/sample.ts'));
 
-		const completions = await service.provideInlineCompletions(model, new Position(2, 5), {} as never, new CancellationTokenSource().token);
+		const completions = await service.provideInlineCompletions(model, new Position(2, 5), {} as never, CancellationToken.None);
+		const request = llmMessageService.requests[0] as Extract<IVSCloneLLMMessageRequest, { kind: 'fim' }>;
 
-		assert.ok(gatherContextArgs);
-		assert.strictEqual((gatherContextArgs![0] as URI).toString(), URI.file('/workspace/sample.ts').toString());
-		assert.deepStrictEqual(gatherContextArgs!.slice(1), ['typescript', 2, 1_000]);
-		assert.strictEqual(backendRequest?.predictionType, 'multi-line');
-		assert.strictEqual(backendRequest?.maxTokens, 160);
-		assert.deepStrictEqual(backendRequest?.crossFileContext, [
-			{ filePath: '/workspace/helper.ts', languageId: 'typescript', content: 'export const helper = true;' },
-			{ filePath: '/workspace/other.ts', languageId: 'typescript', content: 'export const other = true;' },
-		]);
+		assert.strictEqual(request.kind, 'fim');
+		assert.strictEqual(request.prepared.prompt.maxTokens, 160);
+		assert.ok(request.prepared.prompt.promptText.includes('Related files:'));
+		assert.ok(request.prepared.prompt.promptText.includes('/workspace/helper.ts'));
+		assert.ok(request.prepared.prompt.promptText.includes('export const helper = true;'));
 		assert.strictEqual(completions?.items[0].insertText, 'const value = 1;\nreturn value;');
 		assert.deepStrictEqual(completions?.items[0].range, new Range(2, 5, 2, 5));
+
+		const second = await service.provideInlineCompletions(model, new Position(2, 5), {} as never, CancellationToken.None);
+		assert.strictEqual(second?.items[0].insertText, 'const value = 1;\nreturn value;');
+		assert.strictEqual(llmMessageService.requests.length, 1);
 	});
 });

@@ -6,9 +6,10 @@
 import { addDisposableListener, EventType, getWindow } from '../../../../base/browser/dom.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
-import { IVSCloneModelCatalogModelDescriptor, IVSCloneModelCatalogService } from '../common/vscloneModelCatalogService.js';
-import { IVSCloneChatLocation, IVSCloneModelSelection, IVSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
+import type { IVSCloneChatLocation, IVSCloneModelSelection } from '../common/vscloneModelSelectionTypes.js';
 import { IVSCloneProviderConfigurationBridge } from './vscloneProviderConfigurationBridge.js';
+import { IVSCloneSettingsModelState } from '../common/vscloneSettingsTypes.js';
+import { IVSCloneSettingsService } from '../common/vscloneSettingsService.js';
 import { mountVSCloneModelSwitcher } from './preact/out/model-switcher/index.js';
 import type { IVSCloneMountedView, IVSCloneModelSwitcherSection, IVSCloneModelSwitcherViewProps } from './vscloneViewContracts.js';
 
@@ -31,15 +32,13 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 	private mountedView: IVSCloneMountedView<IVSCloneModelSwitcherViewProps> | undefined;
 
 	constructor(
-		private readonly catalogService: IVSCloneModelCatalogService,
-		private readonly selectionService: IVSCloneThreadModelSelectionService,
+		private readonly settingsService: IVSCloneSettingsService,
 		private readonly providerBridge: IVSCloneProviderConfigurationBridge,
 		private readonly getContext: () => IVSCloneModelSwitcherContext,
 	) {
 		super();
 
-		this._register(this.catalogService.onDidChangeCatalog(() => this.refresh()));
-		this._register(this.selectionService.onDidChangeSelection(() => this.refresh()));
+		this._register(this.settingsService.onDidChangeState(() => this.refresh()));
 	}
 
 	render(container: HTMLElement): void {
@@ -86,9 +85,9 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		this.isOpen = true;
 		this.renderView();
 
-		const state = this.catalogService.getState();
+		const state = this.settingsService.getState();
 		if (state.status === 'idle') {
-			void this.catalogService.refreshCatalog();
+			void this.settingsService.refreshState();
 		}
 	}
 
@@ -108,7 +107,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 	}
 
 	async refreshCatalog(): Promise<void> {
-		await this.catalogService.refreshCatalog();
+		await this.settingsService.refreshState();
 	}
 
 	async manageProviders(): Promise<void> {
@@ -120,17 +119,17 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		if (!context.threadId) {
 			return;
 		}
-		await this.selectionService.resetSelectionForThread(context.threadId);
+		await this.settingsService.resetSelectionForThread(context.threadId);
 	}
 
 	async switchToNextModel(): Promise<void> {
 		const context = this.getContext();
-		await this.selectionService.switchToNextModel(context.threadId, context.location);
+		await this.settingsService.switchToNextModel(context.threadId, context.location);
 	}
 
 	getCurrentSelection(): IVSCloneModelSelection | undefined {
 		const context = this.getContext();
-		return this.selectionService.getCurrentSelectionForThread(context.threadId, context.location);
+		return this.settingsService.getCurrentSelectionForFeature(context.threadId, context.location);
 	}
 
 	private renderView(): void {
@@ -142,7 +141,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 	}
 
 	private createViewProps(): IVSCloneModelSwitcherViewProps {
-		const state = this.catalogService.getState();
+		const state = this.settingsService.getState();
 		const selected = this.getCurrentSelection();
 		const sections = this.createSections(state.models);
 		const selection = this.getCurrentSelection();
@@ -151,7 +150,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 			? localize('vsclone.modelSwitcher.aria.currentModel', 'Model: {0}', selection.modelName)
 			: localize('vsclone.modelSwitcher.aria.selectModel', 'Select model');
 		const context = this.getContext();
-		const showResetAction = !!context.threadId && this.selectionService.hasSelectionForThread(context.threadId);
+		const showResetAction = !!context.threadId && this.settingsService.hasSelectionForThread(context.threadId);
 
 		return {
 			isOpen: this.isOpen,
@@ -172,27 +171,27 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 					this.open();
 				}
 			},
-			onRefreshCatalog: () => { void this.catalogService.refreshCatalog(); },
+			onRefreshCatalog: () => { void this.settingsService.refreshState(); },
 			onManageProviders: () => { void this.providerBridge.openManageProvidersPicker(); },
 			onResetSelection: () => {
 				if (!context.threadId) {
 					return;
 				}
-				void this.selectionService.resetSelectionForThread(context.threadId);
+				void this.settingsService.resetSelectionForThread(context.threadId);
 			},
 			onSelectModel: model => this.selectModel(model, selected),
 		};
 	}
 
-	private createSections(models: readonly IVSCloneModelCatalogModelDescriptor[]): readonly IVSCloneModelSwitcherSection[] {
-		const state = this.catalogService.getState();
+	private createSections(models: readonly IVSCloneSettingsModelState[]): readonly IVSCloneModelSwitcherSection[] {
+		const state = this.settingsService.getState();
 		const selected = this.getCurrentSelection();
 		const sections: IVSCloneModelSwitcherSection[] = [];
 		const modelByIdentifier = new Map(models.map(model => [model.identifier, model]));
-		const recentModels = this.selectionService
+		const recentModels = this.settingsService
 			.getRecentModelIdentifiers(3)
 			.map(identifier => modelByIdentifier.get(identifier))
-			.filter((model): model is IVSCloneModelCatalogModelDescriptor => !!model);
+			.filter((model): model is IVSCloneSettingsModelState => !!model);
 
 		if (recentModels.length > 0) {
 			sections.push({
@@ -229,7 +228,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		return sections;
 	}
 
-	private selectModel(model: IVSCloneModelCatalogModelDescriptor, selected: IVSCloneModelSelection | undefined): void {
+	private selectModel(model: IVSCloneSettingsModelState, selected: IVSCloneModelSelection | undefined): void {
 		if (!model.isSelectable) {
 			void this.providerBridge.openManageProvidersPicker();
 			return;
@@ -250,7 +249,7 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 			reasoningEffort: preservedReasoningEffort,
 			selectedAt: Date.now(),
 		};
-		void this.selectionService.setSelectionForThread(context.threadId, nextSelection);
+		void this.settingsService.setSelectionForFeature(context.threadId, nextSelection);
 		this.close({ restoreButtonFocus: true });
 	}
 }

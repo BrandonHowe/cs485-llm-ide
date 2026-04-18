@@ -16,11 +16,11 @@ import { Extensions as ConfigurationExtensions, IConfigurationRegistry, Configur
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewsRegistry, ViewContainerLocation } from '../../../../common/views.js';
 import { VSCloneViewContainerId, VSCloneViewId } from '../../browser/vsclone.js';
 import { VSCloneUnifiedChatViewPane } from '../../browser/vscloneUnifiedChatViewPane.js';
-import { VSCloneChatHistoryCommandIds } from '../../browser/vscloneChatHistoryActions.js';
+import { VSCloneThreadCommandIds } from '../../browser/vscloneThreadActions.js';
 import { VSCloneModelSwitcherCommandIds } from '../../browser/vscloneModelSwitcherActions.js';
 import { VSCloneOAuthCommandIds } from '../../browser/vscloneOAuthActions.js';
-import { VSCloneChatHistoryEnabledSetting, VSCloneChatHistoryMaxThreadsSetting, VSCloneChatHistoryMaxTurnsPerThreadSetting, VSCloneChatHistoryPersistScopeSetting, VSCloneChatHistoryRailWidthSetting, VSCloneChatHistoryRedactSecretsSetting, VSCloneChatHistoryRetentionDaysSetting } from '../../common/backend/vscloneChatHistoryService.js';
 import { VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from '../../browser/vscloneAutocompleteService.js';
+import { VSCloneChatRailWidthSetting } from '../../common/vscloneChatViewSettings.js';
 
 function assertCommandRegistered(commandId: string): void {
 	assert.ok(CommandsRegistry.getCommand(commandId), `expected command ${commandId} to be registered`);
@@ -69,39 +69,11 @@ suite('VSCloneContribution', () => {
 		assert.strictEqual(configurationNode?.type, 'object');
 
 		const properties = configurationRegistry.getConfigurationProperties();
-		assert.strictEqual(properties[VSCloneChatHistoryEnabledSetting]?.type, 'boolean');
-		assert.strictEqual(properties[VSCloneChatHistoryEnabledSetting]?.default, true);
-		assert.strictEqual(properties[VSCloneChatHistoryEnabledSetting]?.scope, ConfigurationScope.WINDOW);
-
-		assert.strictEqual(properties[VSCloneChatHistoryMaxThreadsSetting]?.type, 'number');
-		assert.strictEqual(properties[VSCloneChatHistoryMaxThreadsSetting]?.default, 200);
-		assert.strictEqual(properties[VSCloneChatHistoryMaxThreadsSetting]?.minimum, 1);
-		assert.strictEqual(properties[VSCloneChatHistoryMaxThreadsSetting]?.scope, ConfigurationScope.WINDOW);
-
-		assert.strictEqual(properties[VSCloneChatHistoryMaxTurnsPerThreadSetting]?.type, 'number');
-		assert.strictEqual(properties[VSCloneChatHistoryMaxTurnsPerThreadSetting]?.default, 100);
-		assert.strictEqual(properties[VSCloneChatHistoryMaxTurnsPerThreadSetting]?.minimum, 1);
-		assert.strictEqual(properties[VSCloneChatHistoryMaxTurnsPerThreadSetting]?.scope, ConfigurationScope.WINDOW);
-
-		assert.strictEqual(properties[VSCloneChatHistoryRetentionDaysSetting]?.type, 'number');
-		assert.strictEqual(properties[VSCloneChatHistoryRetentionDaysSetting]?.default, 30);
-		assert.strictEqual(properties[VSCloneChatHistoryRetentionDaysSetting]?.minimum, 1);
-		assert.strictEqual(properties[VSCloneChatHistoryRetentionDaysSetting]?.scope, ConfigurationScope.WINDOW);
-
-		assert.strictEqual(properties[VSCloneChatHistoryRailWidthSetting]?.type, 'number');
-		assert.strictEqual(properties[VSCloneChatHistoryRailWidthSetting]?.default, 320);
-		assert.strictEqual(properties[VSCloneChatHistoryRailWidthSetting]?.minimum, 220);
-		assert.strictEqual(properties[VSCloneChatHistoryRailWidthSetting]?.maximum, 520);
-		assert.strictEqual(properties[VSCloneChatHistoryRailWidthSetting]?.scope, ConfigurationScope.WINDOW);
-
-		assert.strictEqual(properties[VSCloneChatHistoryPersistScopeSetting]?.type, 'string');
-		assert.strictEqual(properties[VSCloneChatHistoryPersistScopeSetting]?.default, 'workspace');
-		assert.deepStrictEqual(properties[VSCloneChatHistoryPersistScopeSetting]?.enum, ['workspace', 'profile']);
-		assert.strictEqual(properties[VSCloneChatHistoryPersistScopeSetting]?.scope, ConfigurationScope.WINDOW);
-
-		assert.strictEqual(properties[VSCloneChatHistoryRedactSecretsSetting]?.type, 'boolean');
-		assert.strictEqual(properties[VSCloneChatHistoryRedactSecretsSetting]?.default, true);
-		assert.strictEqual(properties[VSCloneChatHistoryRedactSecretsSetting]?.scope, ConfigurationScope.WINDOW);
+		assert.strictEqual(properties[VSCloneChatRailWidthSetting]?.type, 'number');
+		assert.strictEqual(properties[VSCloneChatRailWidthSetting]?.default, 320);
+		assert.strictEqual(properties[VSCloneChatRailWidthSetting]?.minimum, 220);
+		assert.strictEqual(properties[VSCloneChatRailWidthSetting]?.maximum, 520);
+		assert.strictEqual(properties[VSCloneChatRailWidthSetting]?.scope, ConfigurationScope.WINDOW);
 
 		assert.strictEqual(properties['vsclone.modelSwitcher.enabled']?.type, 'boolean');
 		assert.strictEqual(properties['vsclone.modelSwitcher.enabled']?.default, true);
@@ -120,12 +92,12 @@ suite('VSCloneContribution', () => {
 	test('registers representative action side effects and the Tab keybinding', () => {
 		// The dedicated action suites own exact command metadata. This contribution test only
 		// verifies that the module wires each action family into the global registries at all.
-		assertCommandRegistered(VSCloneChatHistoryCommandIds.open);
+		assertCommandRegistered(VSCloneThreadCommandIds.open);
 		assertCommandRegistered(VSCloneModelSwitcherCommandIds.openPicker);
 		assertCommandRegistered(VSCloneOAuthCommandIds.signIn);
 		assertCommandRegistered('vsclone.autocomplete.acceptInlineCompletionOnTab');
 
-		assert.ok(hasCommandPaletteEntry(VSCloneChatHistoryCommandIds.open));
+		assert.ok(hasCommandPaletteEntry(VSCloneThreadCommandIds.open));
 		assert.ok(hasCommandPaletteEntry(VSCloneModelSwitcherCommandIds.openPicker));
 		assert.ok(hasCommandPaletteEntry(VSCloneOAuthCommandIds.signIn));
 		assert.strictEqual(hasCommandPaletteEntry('vsclone.autocomplete.acceptInlineCompletionOnTab'), false);

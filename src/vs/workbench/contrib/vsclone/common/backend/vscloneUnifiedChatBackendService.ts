@@ -3,63 +3,38 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Delayer } from '../../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
-import { localize } from '../../../../../nls.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { createDecorator, IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
-import {
-	VSCloneChatHistoryEnabledSetting,
-	VSCloneChatHistoryMaxThreadsSetting,
-	VSCloneChatHistoryMaxTurnsPerThreadSetting,
-	VSCloneChatHistoryPersistScopeSetting,
-	VSCloneChatHistoryRedactSecretsSetting,
-	VSCloneChatHistoryRetentionDaysSetting,
-} from '../vscloneChatHistorySettings.js';
-import { VSCloneChatHistoryModel } from './vscloneChatHistoryModel.js';
-import { VSCloneChatHistoryStore } from './vscloneChatHistoryStore.js';
-import {
-	type IVSCloneChatHistoryChangeEvent,
-	type IVSCloneChatHistoryQuery,
-	type IVSCloneChatHistoryThread,
-	type IVSCloneChatHistoryTurn,
-	type IVSCloneChatTurnUpdate,
-	type VSCloneChatHistoryScope,
-} from '../vscloneChatHistoryTypes.js';
-import { reduceThreadTurns } from './vscloneChatHistoryStateMachine.js';
-import type { IVSCloneUnifiedChatSelectionState } from '../vscloneModelSelectionTypes.js';
+import type { IVSCloneModelSelection, IVSCloneThreadSelectionMap, IVSCloneUnifiedChatSelectionState } from '../vscloneModelSelectionTypes.js';
 import type { IVSCloneUnifiedChatPlanModeState } from '../vsclonePlanModeTypes.js';
+import { VSCloneUnifiedChatStateStore } from './vscloneUnifiedChatStateStore.js';
 
 export const IVSCloneUnifiedChatBackendService = createDecorator<IVSCloneUnifiedChatBackendService>('vscloneUnifiedChatBackendService');
 
+/**
+ * Fires when persisted selection or plan-mode state changes, gets initialized, or fails to persist.
+ * Consumers treat `error` as "the backend state may be empty, surface an appropriate UX" and the
+ * other reasons as "reload selection/plan caches from this service."
+ */
+export interface IVSCloneUnifiedChatBackendChangeEvent {
+	readonly reason: 'initialize' | 'update' | 'clear' | 'error';
+	readonly error?: Error;
+}
+
 export interface IVSCloneUnifiedChatBackendService {
 	readonly _serviceBrand: undefined;
-	readonly onDidChange: Event<IVSCloneChatHistoryChangeEvent>;
+	readonly onDidChange: Event<IVSCloneUnifiedChatBackendChangeEvent>;
 	initialize(): Promise<void>;
-	getThreads(query?: IVSCloneChatHistoryQuery): readonly IVSCloneChatHistoryThread[];
-	getTurns(threadId: string): readonly IVSCloneChatHistoryTurn[];
-	applyTurnUpdate(update: IVSCloneChatTurnUpdate): void;
-	archiveThread(threadId: string, archived: boolean): Promise<void>;
 	deleteThread(threadId: string): Promise<void>;
-	clearAll(scope: VSCloneChatHistoryScope): Promise<void>;
+	clearAll(): Promise<void>;
 	getSelectionState(): IVSCloneUnifiedChatSelectionState;
 	replaceSelectionState(state: IVSCloneUnifiedChatSelectionState): Promise<void>;
 	getPlanModeState(): IVSCloneUnifiedChatPlanModeState;
 	replacePlanModeState(state: IVSCloneUnifiedChatPlanModeState): Promise<void>;
-}
-
-function normalizeScope(scope: string | undefined): VSCloneChatHistoryScope {
-	return scope === 'profile' ? 'profile' : 'workspace';
-}
-
-function toError(error: unknown): Error {
-	if (error instanceof Error) {
-		return error;
-	}
-	return new Error(String(error));
 }
 
 function createEmptySelectionState(): IVSCloneUnifiedChatSelectionState {
@@ -76,9 +51,29 @@ function createEmptyPlanModeState(): IVSCloneUnifiedChatPlanModeState {
 	};
 }
 
+function isModelSelection(value: unknown): value is IVSCloneModelSelection {
+	const record = typeof value === 'object' && value !== null ? value as Partial<IVSCloneModelSelection> : undefined;
+	return !!record && typeof record.location === 'string' && typeof record.modelIdentifier === 'string';
+}
+
+function cloneThreadSelectionMap(value: unknown): IVSCloneThreadSelectionMap {
+	if (isModelSelection(value)) {
+		return {
+			[value.location]: { ...value, threadId: undefined },
+		};
+	}
+
+	const record = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
+	return Object.fromEntries(
+		Object.entries(record).map(([location, selection]) => [location, isModelSelection(selection) ? { ...selection, threadId: undefined } : undefined]),
+	) as IVSCloneThreadSelectionMap;
+}
+
 function cloneSelectionState(state: IVSCloneUnifiedChatSelectionState): IVSCloneUnifiedChatSelectionState {
 	return {
-		selectedByThread: Object.fromEntries(Object.entries(state.selectedByThread).map(([threadId, selection]) => [threadId, { ...selection, threadId: undefined }])),
+		selectedByThread: Object.fromEntries(
+			Object.entries(state.selectedByThread).map(([threadId, selections]) => [threadId, cloneThreadSelectionMap(selections)]),
+		),
 		selectedByLocation: Object.fromEntries(Object.entries(state.selectedByLocation).map(([location, selection]) => [location, selection ? { ...selection, threadId: undefined } : undefined])),
 		recentModelIdentifiers: [...state.recentModelIdentifiers],
 	};
@@ -91,61 +86,36 @@ function clonePlanModeState(state: IVSCloneUnifiedChatPlanModeState): IVSCloneUn
 }
 
 /**
- * This service is the single owner of durable VSClone conversation state. History and model
- * selection facades both delegate here so the selected model used for execution cannot drift away
- * from the thread snapshot restored in the UI.
+ * After the runtime-first rewrite, runtime state owns conversation persistence. This service only
+ * persists the small selection and plan-mode maps layered on top of runtime state, since those
+ * maps are durable UI preferences per thread that outlive any single runtime message.
  */
 export class VSCloneUnifiedChatBackendService extends Disposable implements IVSCloneUnifiedChatBackendService {
 	declare readonly _serviceBrand: undefined;
 
-	private readonly model = new VSCloneChatHistoryModel();
-	private readonly store: VSCloneChatHistoryStore;
-	private readonly persistDelayer = this._register(new Delayer<void>(300));
+	private readonly store: VSCloneUnifiedChatStateStore;
 
-	private readonly _onDidChange = this._register(new Emitter<IVSCloneChatHistoryChangeEvent>());
+	private readonly _onDidChange = this._register(new Emitter<IVSCloneUnifiedChatBackendChangeEvent>());
 	readonly onDidChange = this._onDidChange.event;
 
+	private selectionState = createEmptySelectionState();
+	private planModeState = createEmptyPlanModeState();
 	private initialized = false;
-	private disabled = false;
 	private initializing: Promise<void> | undefined;
 
 	constructor(
 		@IInstantiationService instantiationService: IInstantiationService,
-		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IConfigurationService _configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
-		@INotificationService private readonly notificationService: INotificationService,
+		@INotificationService _notificationService: INotificationService,
 	) {
 		super();
 
-		this.store = this._register(instantiationService.createInstance(VSCloneChatHistoryStore));
-	}
-
-	private get enabled(): boolean {
-		return this.configurationService.getValue<boolean>(VSCloneChatHistoryEnabledSetting) ?? true;
-	}
-
-	private get persistScope(): VSCloneChatHistoryScope {
-		return normalizeScope(this.configurationService.getValue<string>(VSCloneChatHistoryPersistScopeSetting));
-	}
-
-	private get maxThreads(): number {
-		return Math.max(1, this.configurationService.getValue<number>(VSCloneChatHistoryMaxThreadsSetting) ?? 200);
-	}
-
-	private get maxTurnsPerThread(): number {
-		return Math.max(1, this.configurationService.getValue<number>(VSCloneChatHistoryMaxTurnsPerThreadSetting) ?? 100);
-	}
-
-	private get retentionDays(): number {
-		return Math.max(1, this.configurationService.getValue<number>(VSCloneChatHistoryRetentionDaysSetting) ?? 30);
-	}
-
-	private get redactSecrets(): boolean {
-		return this.configurationService.getValue<boolean>(VSCloneChatHistoryRedactSecretsSetting) ?? true;
+		this.store = this._register(instantiationService.createInstance(VSCloneUnifiedChatStateStore));
 	}
 
 	async initialize(): Promise<void> {
-		if (this.initialized || this.disabled || !this.enabled) {
+		if (this.initialized) {
 			return;
 		}
 
@@ -160,190 +130,71 @@ export class VSCloneUnifiedChatBackendService extends Disposable implements IVSC
 		return this.initializing;
 	}
 
-	getThreads(query: IVSCloneChatHistoryQuery = {}): readonly IVSCloneChatHistoryThread[] {
-		if (!this.initialized || this.disabled || !this.enabled) {
-			return [];
-		}
-
-		const normalizedQuery: IVSCloneChatHistoryQuery = {
-			...query,
-			limit: Math.min(query.limit ?? this.maxThreads, this.maxThreads),
-		};
-
-		return this.model.getThreads(normalizedQuery);
-	}
-
-	getTurns(threadId: string): readonly IVSCloneChatHistoryTurn[] {
-		if (!this.initialized || this.disabled || !this.enabled) {
-			return [];
-		}
-
-		return this.model.getTurns(threadId);
-	}
-
-	applyTurnUpdate(update: IVSCloneChatTurnUpdate): void {
-		if (!this.enabled || !this.initialized || this.disabled) {
-			return;
-		}
-
-		const previous = this.model.getThreadState(update.threadId);
-		const transition = reduceThreadTurns(previous.thread, previous.turns, update, {
-			sessionResource: update.sessionResource,
-			maxTurnsPerThread: this.maxTurnsPerThread,
-		});
-
-		this.model.setThreadState(transition.thread, transition.turns);
-
-		const retention = this.model.applyRetention(this.maxThreads, this.retentionDays, Date.now());
-		const changedThreadIds = [update.threadId, ...retention.deletedThreadIds.filter(id => id !== update.threadId)];
-
-		this._onDidChange.fire({
-			reason: 'turnUpdate',
-			scope: this.persistScope,
-			threadIds: changedThreadIds,
-		});
-
-		if (update.phase === 'stream') {
-			this.schedulePersist();
-		} else {
-			void this.persistNow();
-		}
-	}
-
-	async archiveThread(threadId: string, archived: boolean): Promise<void> {
-		if (!this.enabled || !this.initialized || this.disabled) {
-			return;
-		}
-
-		const thread = this.model.archiveThread(threadId, archived);
-		if (!thread) {
-			return;
-		}
-
-		this._onDidChange.fire({ reason: 'archive', scope: this.persistScope, threadIds: [threadId] });
-		await this.persistNow();
-	}
-
 	async deleteThread(threadId: string): Promise<void> {
-		if (!this.enabled || !this.initialized || this.disabled) {
-			return;
-		}
-
-		const deleted = this.model.deleteThread(threadId);
-		if (!deleted) {
-			return;
-		}
-
-		this._onDidChange.fire({ reason: 'delete', scope: this.persistScope, threadIds: [threadId] });
-		await this.persistNow();
+		await this.initialize();
+		delete this.selectionState.selectedByThread[threadId];
+		delete this.planModeState.modeByThread[threadId];
+		this.persistNow();
 	}
 
-	async clearAll(scope: VSCloneChatHistoryScope): Promise<void> {
-		const normalizedScope = normalizeScope(scope);
-
-		if (normalizedScope === this.persistScope && this.initialized) {
-			this.model.clear();
-			this._onDidChange.fire({ reason: 'clear', scope: normalizedScope, threadIds: [] });
-		}
-
-		await this.store.clear(normalizedScope);
+	async clearAll(): Promise<void> {
+		await this.initialize();
+		this.selectionState = createEmptySelectionState();
+		this.planModeState = createEmptyPlanModeState();
+		this.persistNow('clear');
 	}
 
 	getSelectionState(): IVSCloneUnifiedChatSelectionState {
-		if (!this.initialized || this.disabled || !this.enabled) {
-			return createEmptySelectionState();
-		}
-
-		return cloneSelectionState(this.model.getSelectionState());
+		return cloneSelectionState(this.selectionState);
 	}
 
 	getPlanModeState(): IVSCloneUnifiedChatPlanModeState {
-		if (!this.initialized || this.disabled || !this.enabled) {
-			return createEmptyPlanModeState();
-		}
-
-		return clonePlanModeState(this.model.getPlanModeState());
+		return clonePlanModeState(this.planModeState);
 	}
 
 	async replaceSelectionState(state: IVSCloneUnifiedChatSelectionState): Promise<void> {
-		if (!this.enabled || this.disabled) {
-			return;
-		}
-
 		await this.initialize();
-		if (!this.initialized || this.disabled) {
-			return;
-		}
-
-		this.model.replaceSelectionState(cloneSelectionState(state));
-		await this.persistNow();
+		this.selectionState = cloneSelectionState(state);
+		this.persistNow();
 	}
 
 	async replacePlanModeState(state: IVSCloneUnifiedChatPlanModeState): Promise<void> {
-		if (!this.enabled || this.disabled) {
-			return;
-		}
-
 		await this.initialize();
-		if (!this.initialized || this.disabled) {
-			return;
-		}
-
-		this.model.replacePlanModeState(clonePlanModeState(state));
-		await this.persistNow();
+		this.planModeState = clonePlanModeState(state);
+		this.persistNow();
 	}
 
 	private async doInitialize(): Promise<void> {
 		try {
-			const snapshot = await this.store.load(this.persistScope);
-			this.model.initialize(snapshot);
-
-			const retention = this.model.applyRetention(this.maxThreads, this.retentionDays, Date.now());
-			// Mark the backend initialized before persisting any retention cleanup so the save path
-			// can materialize the pruned snapshot during the first successful restore.
+			const snapshot = this.store.load();
+			this.selectionState = cloneSelectionState(snapshot.selectionState);
+			this.planModeState = clonePlanModeState(snapshot.planModeState);
 			this.initialized = true;
-			// Persist if retention pruned threads OR if the model recovered streaming/pending turns
-			// from a crashed previous session. Both rewrite turn state that the UI should never
-			// see again on the next restart.
-			if (retention.deletedThreadIds.length > 0 || this.model.hasRecoveredInterruptedTurns) {
-				await this.persistNow();
-			}
-
-			this._onDidChange.fire({
-				reason: 'initialize',
-				scope: this.persistScope,
-				threadIds: this.model.getThreads({ includeArchived: true }).map(thread => thread.threadId),
-			});
+			this._onDidChange.fire({ reason: 'initialize' });
 		} catch (error) {
-			const err = toError(error);
-			this.logService.error('Failed to initialize VSClone chat history', error);
-			this.notificationService.warn(localize(
-				'vsclone.history.initializeFailed',
-				'VSClone chat history could not be restored from storage.'
-			));
-			this._onDidChange.fire({ reason: 'error', scope: this.persistScope, threadIds: [], error: err });
-			throw err;
+			// Selection and plan mode should degrade to an empty state rather than breaking chat init.
+			this.selectionState = createEmptySelectionState();
+			this.planModeState = createEmptyPlanModeState();
+			this.initialized = true;
+			this.logService.error('[VSCloneUnifiedChatBackendService] Failed to initialize unified chat state; using empty state.', error);
+			this._onDidChange.fire({ reason: 'error', error: error instanceof Error ? error : new Error(String(error)) });
 		}
 	}
 
-	private schedulePersist(): void {
-		void this.persistDelayer.trigger(() => this.persistNow());
-	}
-
-	private async persistNow(): Promise<void> {
-		if (!this.enabled || !this.initialized || this.disabled) {
+	private persistNow(reason: 'update' | 'clear' = 'update'): void {
+		if (!this.initialized) {
 			return;
 		}
 
 		try {
-			const snapshot = this.model.toSnapshot(Date.now());
-			await this.store.save(this.persistScope, snapshot, {
-				redactSecrets: this.redactSecrets,
+			this.store.save({
+				selectionState: this.selectionState,
+				planModeState: this.planModeState,
 			});
+			this._onDidChange.fire({ reason });
 		} catch (error) {
-			const err = toError(error);
-			this.logService.error('Failed to persist VSClone chat history', error);
-			this._onDidChange.fire({ reason: 'error', scope: this.persistScope, threadIds: [], error: err });
+			this.logService.error('[VSCloneUnifiedChatBackendService] Failed to persist unified chat state.', error);
+			this._onDidChange.fire({ reason: 'error', error: error instanceof Error ? error : new Error(String(error)) });
 		}
 	}
 }
