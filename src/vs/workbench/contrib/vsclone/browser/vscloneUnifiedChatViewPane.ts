@@ -140,6 +140,24 @@ interface ICompactRuntimeToolAction {
 	readonly infinitive: string;
 }
 
+interface IApprovalSearchReplaceBlock {
+	readonly searchText: string;
+	readonly replaceText: string;
+}
+
+// Mirrors the SEARCH/REPLACE parser in vscloneToolExecutionService so the approval row can
+// preview pending edits without pulling in the execution service from the view layer.
+function parseApprovalSearchReplaceBlocks(changes: string): readonly IApprovalSearchReplaceBlock[] {
+	const normalized = changes.replace(/\r\n/g, "\n");
+	const blockPattern = /<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;
+	const blocks: IApprovalSearchReplaceBlock[] = [];
+	let match: RegExpExecArray | null;
+	while ((match = blockPattern.exec(normalized)) !== null) {
+		blocks.push({ searchText: match[1], replaceText: match[2] });
+	}
+	return blocks;
+}
+
 function compactRuntimeToolAction(toolName: string): ICompactRuntimeToolAction {
 	switch (toolName) {
 		case "ls_dir":
@@ -2084,6 +2102,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		messageEl.textContent = this.getRuntimeApprovalMessage(message);
 		row.appendChild(messageEl);
 
+		const preview = this.renderRuntimeApprovalPreview(message);
+		if (preview) {
+			row.appendChild(preview);
+		}
+
 		const buttons = document.createElement("div");
 		buttons.className = "vsclone-runtime-approval-buttons";
 
@@ -2128,6 +2151,44 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		row.appendChild(buttons);
 		item.appendChild(row);
 		return item;
+	}
+
+	private renderRuntimeApprovalPreview(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool"; readonly type: "tool_request" }>,
+	): HTMLElement | undefined {
+		const filePath = message.params.path;
+		if (!filePath) {
+			return undefined;
+		}
+
+		if (message.toolName === "edit_file") {
+			const changes = message.params.changes ?? "";
+			const blocks = parseApprovalSearchReplaceBlocks(changes);
+			if (blocks.length === 0) {
+				return undefined;
+			}
+			const preview = document.createElement("div");
+			preview.className = "vsclone-runtime-approval-preview";
+			for (const block of blocks) {
+				preview.appendChild(
+					this.renderSearchReplaceDiffCard(filePath, block.searchText, block.replaceText),
+				);
+			}
+			return preview;
+		}
+
+		if (message.toolName === "create_file") {
+			const content = message.params.content;
+			if (typeof content !== "string" || content.length === 0) {
+				return undefined;
+			}
+			const preview = document.createElement("div");
+			preview.className = "vsclone-runtime-approval-preview";
+			preview.appendChild(this.renderSearchReplaceDiffCard(filePath, "", content));
+			return preview;
+		}
+
+		return undefined;
 	}
 
 	private getRuntimeApprovalMessage(

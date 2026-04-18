@@ -740,6 +740,21 @@
 	word-break: break-word;
 }
 
+.vsclone-runtime-approval-preview {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin: 2px 0;
+}
+
+.vsclone-runtime-approval-preview .vsclone-tool-diff-card {
+	margin: 0;
+}
+
+.vsclone-runtime-approval-preview .vsclone-tool-diff-body {
+	max-height: 220px;
+}
+
 .vsclone-runtime-approval-buttons {
 	display: flex;
 	gap: 6px;
