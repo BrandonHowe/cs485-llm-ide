@@ -15,6 +15,7 @@
 	position: relative;
 }
 
+
 .vsclone-chat-content {
 	flex: 1;
 	display: flex;
@@ -231,6 +232,47 @@
 .vsclone-thread-message.assistant.error {
 	border-color: color-mix(in srgb, var(--vscode-errorForeground) 45%, transparent 55%);
 	background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent 88%);
+}
+
+/* Runtime error row: upstream API failures etc. render as a red-tinted compact row so they
+ * stop reading as leaked debug prose. Borders/padding match the Void-style approval row shape
+ * so failures fit the same visual family as other runtime status rows. */
+.vsclone-thread-message.runtime-error {
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	max-width: 100%;
+	gap: 0;
+}
+
+.vsclone-runtime-error-row {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 6px 10px;
+	border: 1px solid color-mix(in srgb, var(--vscode-errorForeground, #f85149) 45%, transparent 55%);
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--vscode-errorForeground, #f85149) 10%, transparent 90%);
+	font-size: 12px;
+	line-height: 1.4;
+	min-width: 0;
+}
+
+.vsclone-runtime-error-icon {
+	font-size: 14px;
+	color: var(--vscode-errorForeground, #f85149);
+	flex-shrink: 0;
+}
+
+.vsclone-runtime-error-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: color-mix(in srgb, var(--vscode-errorForeground, #f85149) 82%, var(--vscode-editor-foreground) 18%);
+	font-weight: 500;
 }
 
 .vsclone-thread-message-meta {
@@ -838,20 +880,50 @@
 	gap: 0;
 }
 
+/* Compact tool row shares the diff card header's visual language: codicon, bold verb,
+ * truncated target. Keeps the row single-line, but no longer the italic-plain-text look
+ * that reads as a debug log. */
 .vsclone-runtime-tool-compact-line {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	margin: 2px 0;
-	padding: 1px 2px;
+	padding: 1px 0;
 	font-size: 12px;
-	font-style: italic;
 	line-height: 1.4;
-	color: color-mix(in srgb, var(--vscode-descriptionForeground) 90%, transparent 10%);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
+	min-width: 0;
 }
 
-.vsclone-thread-message.runtime-tool-compact.status-error .vsclone-runtime-tool-compact-line {
+.vsclone-runtime-tool-compact-icon {
+	font-size: 13px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 62%, transparent 38%);
+	flex-shrink: 0;
+}
+
+.vsclone-runtime-tool-compact-verb {
+	font-weight: 600;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 82%, transparent 18%);
+	flex-shrink: 0;
+}
+
+.vsclone-runtime-tool-compact-target {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 70%, transparent 30%);
+	font-family: var(--monaco-monospace-font);
+	font-size: 11.5px;
+}
+
+.vsclone-thread-message.runtime-tool-compact.status-error .vsclone-runtime-tool-compact-verb,
+.vsclone-thread-message.runtime-tool-compact.status-error .vsclone-runtime-tool-compact-icon {
 	color: color-mix(in srgb, var(--vscode-testing-iconFailed) 80%, transparent 20%);
+}
+
+.vsclone-thread-message.runtime-tool-compact.status-error .vsclone-runtime-tool-compact-target {
+	color: color-mix(in srgb, var(--vscode-testing-iconFailed) 60%, transparent 40%);
 }
 
 .vsclone-runtime-checkpoint-button {
@@ -872,6 +944,71 @@
 .vsclone-runtime-checkpoint-button:disabled {
 	opacity: 0.6;
 	cursor: default;
+}
+
+/* Compact single-file checkpoint row: one-liner with bookmark icon + relative time +
+ * inline Rewind link. Full card stays for multi-file snapshots where the summary matters. */
+.vsclone-thread-message.runtime-checkpoint-compact {
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	max-width: 100%;
+	gap: 0;
+}
+
+.vsclone-runtime-checkpoint-inline {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 0;
+	font-size: 12px;
+	line-height: 1.4;
+	min-width: 0;
+}
+
+.vsclone-runtime-checkpoint-inline-icon {
+	font-size: 13px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 58%, transparent 42%);
+	flex-shrink: 0;
+}
+
+.vsclone-runtime-checkpoint-inline-summary {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 72%, transparent 28%);
+}
+
+.vsclone-runtime-checkpoint-inline-rewind {
+	appearance: none;
+	background: transparent;
+	border: none;
+	padding: 1px 4px;
+	margin: 0;
+	font-family: inherit;
+	font-size: 12px;
+	line-height: 1.35;
+	color: var(--vscode-textLink-foreground);
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.vsclone-runtime-checkpoint-inline-rewind:hover:not(:disabled) {
+	color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground));
+	text-decoration: underline;
+}
+
+.vsclone-runtime-checkpoint-inline-rewind:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.vsclone-runtime-checkpoint-inline-rewind:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
 }
 
 /* Diff/code card: renders compact file changes and code snippets inside tool output. */
@@ -1024,14 +1161,16 @@
 	filter: brightness(1.06);
 }
 
+/* Background tints stay dim (~10% alpha) so the code itself remains the dominant visual,
+ * matching GitHub/Cursor diff cards rather than VS Code's heavier inline diff surface. */
 .vsclone-tool-diff-line.added {
-	background: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground, #2ea04340) 70%, transparent 30%);
-	border-left-color: color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 65%, transparent 35%);
+	background: color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 10%, transparent 90%);
+	border-left-color: color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 55%, transparent 45%);
 }
 
 .vsclone-tool-diff-line.removed {
-	background: color-mix(in srgb, var(--vscode-diffEditor-removedLineBackground, #f8514940) 70%, transparent 30%);
-	border-left-color: color-mix(in srgb, var(--vscode-testing-iconFailed, #f85149) 65%, transparent 35%);
+	background: color-mix(in srgb, var(--vscode-testing-iconFailed, #f85149) 10%, transparent 90%);
+	border-left-color: color-mix(in srgb, var(--vscode-testing-iconFailed, #f85149) 55%, transparent 45%);
 }
 
 .vsclone-tool-diff-line.hunk {

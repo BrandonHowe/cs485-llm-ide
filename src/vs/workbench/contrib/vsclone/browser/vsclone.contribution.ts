@@ -51,7 +51,11 @@ function registerVSCloneContribution(): void {
 		id: VSCloneViewContainerId,
 		title: localize2('vsclone.viewContainer.label', 'VSClone'),
 		icon: vscloneViewIcon,
-		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [VSCloneViewContainerId, { mergeViewWithContainerWhenSingleView: false }]),
+		// Merging collapses the pane's own "VSCLONE CHAT" header into the container title so the
+		// transcript isn't stacked under two redundant labels. The outer sidebar title bar is
+		// still rendered by the workbench chrome because its 35px height reservation lives in
+		// core PartLayout, outside CSS reach.
+		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [VSCloneViewContainerId, { mergeViewWithContainerWhenSingleView: true }]),
 		storageId: VSCloneViewContainerId,
 		hideIfEmpty: false,
 		// Keep the unified chat pane from being resized below a usable width.

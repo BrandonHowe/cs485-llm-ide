@@ -140,6 +140,58 @@ interface ICompactRuntimeToolAction {
 	readonly infinitive: string;
 }
 
+// Heuristic error detection for assistant content produced by `applyLoopError`. The runtime
+// stores upstream API failures (e.g. "400 status code (no body)"), tool-approval crashes
+// ("Tool approval failed for ..."), and safety-limit terminations as a plain assistant message.
+// We detect those shapes so the renderer can surface an error row instead of leaking the raw
+// string as prose. Single-line + known-error-prefix keeps false positives low.
+const RUNTIME_ERROR_PATTERNS: readonly RegExp[] = [
+	/^\d{3}\b.*\bstatus code\b/i,
+	/^Request failed\b/i,
+	/^Tool approval failed for\b/i,
+	/^Agent loop exceeded the safety limit\b/i,
+	/^Not signed in to\b/i,
+	/^(Bad|Unexpected) status code\b/i,
+];
+
+function looksLikeRuntimeErrorContent(content: string): boolean {
+	const trimmed = content.trim();
+	if (trimmed.length === 0 || trimmed.includes('\n')) {
+		return false;
+	}
+	return RUNTIME_ERROR_PATTERNS.some(pattern => pattern.test(trimmed));
+}
+
+function toHumanReadableRuntimeError(raw: string): string {
+	const trimmed = raw.trim();
+	const statusMatch = /^(\d{3})\b.*\bstatus code\b/i.exec(trimmed);
+	if (statusMatch) {
+		return localize(
+			"vsclone.thread.runtime.error.requestFailed",
+			"Request failed ({0})",
+			statusMatch[1],
+		);
+	}
+	return trimmed;
+}
+
+// The compact tool row and diff card header share the same truncation rule: show just the
+// filename (the only segment a user actually reads in chat) and keep the full path on hover.
+// Works for raw paths, file:// URIs, and falls back to the input for glob patterns or text.
+function toCompactTargetLabel(rawTarget: string): string {
+	if (!rawTarget) {
+		return rawTarget;
+	}
+	let withoutScheme = rawTarget;
+	const schemeMatch = /^[a-z][a-z0-9+.-]*:\/\//i.exec(rawTarget);
+	if (schemeMatch) {
+		withoutScheme = rawTarget.slice(schemeMatch[0].length);
+	}
+	const stripped = withoutScheme.replace(/\/+$/, '');
+	const lastSegment = stripped.split('/').pop();
+	return lastSegment && lastSegment.length > 0 ? lastSegment : rawTarget;
+}
+
 interface IApprovalSearchReplaceBlock {
 	readonly searchText: string;
 	readonly replaceText: string;
@@ -1666,6 +1718,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
 		threadId: string = this.activeThreadId ?? "",
 	): HTMLElement {
+		const visibleText = this.stripRuntimeAssistantWorkflowMarkup(message.content);
+		// Upstream provider failures (400 status code, auth errors, safety-limit termination) are
+		// stored verbatim as assistant content by `applyLoopError`. Those short one-line payloads
+		// would otherwise render as plain prose and read as a debug log. Route them through a
+		// dedicated error row so the transcript actually shows something went wrong.
+		if (looksLikeRuntimeErrorContent(visibleText)) {
+			return this.renderRuntimeErrorMessage(visibleText);
+		}
+
 		const item = document.createElement('div');
 		item.className = 'vsclone-thread-message assistant runtime runtime-assistant';
 
@@ -1676,7 +1737,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const body = document.createElement('div');
 		body.className = 'vsclone-thread-message-body';
-		const visibleText = this.stripRuntimeAssistantWorkflowMarkup(message.content);
 		if (visibleText.trim().length > 0) {
 			if (visibleText.includes("<<<<<<< SEARCH") || this.looksLikePartialSearchReplaceBlock(visibleText)) {
 				this.renderSearchReplaceAwareText(body, visibleText, false);
@@ -1705,6 +1765,30 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				this.appendAssistantApplyControls(item, applyTarget);
 			}
 		}
+		return item;
+	}
+
+	private renderRuntimeErrorMessage(rawErrorText: string): HTMLElement {
+		const item = document.createElement('div');
+		item.className = 'vsclone-thread-message assistant runtime runtime-error';
+
+		const row = document.createElement('div');
+		row.className = 'vsclone-runtime-error-row';
+
+		const icon = document.createElement('span');
+		icon.className = 'codicon codicon-warning vsclone-runtime-error-icon';
+		icon.setAttribute('aria-hidden', 'true');
+		row.appendChild(icon);
+
+		const label = document.createElement('span');
+		label.className = 'vsclone-runtime-error-label';
+		label.textContent = toHumanReadableRuntimeError(rawErrorText);
+		// Full error surface stays available on hover for debugging, since the humanized label
+		// intentionally drops provider-specific detail like "(no body)".
+		label.title = rawErrorText.trim();
+		row.appendChild(label);
+
+		item.appendChild(row);
 		return item;
 	}
 
@@ -1998,17 +2082,29 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const line = document.createElement("div");
 		line.className = "vsclone-runtime-tool-compact-line";
-		line.textContent = this.getCompactRuntimeToolLabel(message);
+
+		const icon = document.createElement("span");
+		icon.className = `codicon ${this.getToolIconClass(message.toolName)} vsclone-runtime-tool-compact-icon`;
+		icon.setAttribute("aria-hidden", "true");
+		line.appendChild(icon);
+
+		const verb = document.createElement("span");
+		verb.className = "vsclone-runtime-tool-compact-verb";
+		verb.textContent = this.getCompactRuntimeToolVerb(message);
+		line.appendChild(verb);
+
+		const rawTarget = this.describeCompactRuntimeToolTarget(message.toolName, message.params);
+		if (rawTarget) {
+			const target = document.createElement("span");
+			target.className = "vsclone-runtime-tool-compact-target";
+			target.textContent = toCompactTargetLabel(rawTarget);
+			// Full original path/pattern stays available on hover so truncation never costs context.
+			target.title = rawTarget;
+			line.appendChild(target);
+		}
+
 		item.appendChild(line);
 		return item;
-	}
-
-	private getCompactRuntimeToolLabel(
-		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
-	): string {
-		const target = this.describeCompactRuntimeToolTarget(message.toolName, message.params);
-		const verb = this.getCompactRuntimeToolVerb(message);
-		return target ? `${verb} ${target}` : verb;
 	}
 
 	private getCompactRuntimeToolVerb(
@@ -2329,6 +2425,30 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		checkpoint: IVSCloneThreadRuntimeCheckpoint,
 		threadIsRunning: boolean,
 	): HTMLElement {
+		const assistantApplyPending = this.hasPendingAssistantApply(threadId);
+		const rewindDisabled = threadIsRunning || assistantApplyPending;
+		const rewindTooltip = threadIsRunning
+			? localize(
+				"vsclone.thread.runtime.checkpoint.rewindDisabled",
+				"Wait for the active run to finish before rewinding.",
+			)
+			: assistantApplyPending
+				? localize(
+					"vsclone.thread.runtime.checkpoint.rewindApplyPending",
+					"Wait for edit application to finish before rewinding.",
+				)
+				: localize(
+					"vsclone.thread.runtime.checkpoint.rewindTooltip",
+					"Restore the files captured in this checkpoint.",
+				);
+
+		// Single-file snapshots dominate the transcript, so they render as a one-row variant:
+		// bookmark icon + "Checkpoint · N ago" + inline Rewind link. Multi-file snapshots still
+		// earn the full card because their summary line carries meaningful detail.
+		if (checkpoint.snapshots.length === 1) {
+			return this.renderRuntimeCheckpointCompact(threadId, checkpoint, rewindDisabled, rewindTooltip);
+		}
+
 		const item = document.createElement("div");
 		item.className = "vsclone-thread-message assistant runtime runtime-checkpoint";
 
@@ -2340,19 +2460,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const summary = document.createElement("div");
 		summary.className = "vsclone-runtime-checkpoint-summary";
-		summary.textContent =
-			checkpoint.snapshots.length === 1
-				? localize(
-					"vsclone.thread.runtime.checkpoint.summary.one",
-					"Checkpoint saved after {0} with 1 file snapshot.",
-					checkpoint.toolName,
-				)
-				: localize(
-					"vsclone.thread.runtime.checkpoint.summary.many",
-					"Checkpoint saved after {0} with {1} file snapshots.",
-					checkpoint.toolName,
-					checkpoint.snapshots.length.toString(),
-				);
+		summary.textContent = localize(
+			"vsclone.thread.runtime.checkpoint.summary.many",
+			"Checkpoint saved after {0} with {1} file snapshots.",
+			checkpoint.toolName,
+			checkpoint.snapshots.length.toString(),
+		);
 		card.appendChild(summary);
 
 		const meta = document.createElement("div");
@@ -2373,25 +2486,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			"vsclone.thread.runtime.checkpoint.rewind",
 			"Rewind to checkpoint",
 		);
-		const assistantApplyPending = this.hasPendingAssistantApply(threadId);
 		// Rewind is intentionally blocked during active execution because applying an older
 		// snapshot mid-run or mid-apply would race active mutations and leave the transcript
 		// describing a workspace state that no longer exists.
-		rewindButton.disabled = threadIsRunning || assistantApplyPending;
-		rewindButton.title = threadIsRunning
-			? localize(
-				"vsclone.thread.runtime.checkpoint.rewindDisabled",
-				"Wait for the active run to finish before rewinding.",
-			)
-			: assistantApplyPending
-				? localize(
-					"vsclone.thread.runtime.checkpoint.rewindApplyPending",
-					"Wait for edit application to finish before rewinding.",
-				)
-				: localize(
-					"vsclone.thread.runtime.checkpoint.rewindTooltip",
-					"Restore the files captured in this checkpoint.",
-				);
+		rewindButton.disabled = rewindDisabled;
+		rewindButton.title = rewindTooltip;
 		rewindButton.addEventListener(EventType.CLICK, () => {
 			void this.handleCheckpointRewind(threadId, checkpoint, rewindButton);
 		});
@@ -2400,6 +2499,55 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		body.appendChild(card);
 		item.appendChild(body);
+		return item;
+	}
+
+	private renderRuntimeCheckpointCompact(
+		threadId: string,
+		checkpoint: IVSCloneThreadRuntimeCheckpoint,
+		rewindDisabled: boolean,
+		rewindTooltip: string,
+	): HTMLElement {
+		const item = document.createElement("div");
+		item.className = "vsclone-thread-message assistant runtime runtime-checkpoint runtime-checkpoint-compact";
+
+		const row = document.createElement("div");
+		row.className = "vsclone-runtime-checkpoint-inline";
+
+		const icon = document.createElement("span");
+		icon.className = "codicon codicon-bookmark vsclone-runtime-checkpoint-inline-icon";
+		icon.setAttribute("aria-hidden", "true");
+		row.appendChild(icon);
+
+		const summary = document.createElement("span");
+		summary.className = "vsclone-runtime-checkpoint-inline-summary";
+		summary.textContent = localize(
+			"vsclone.thread.runtime.checkpoint.compactSummary",
+			"Checkpoint · {0}",
+			fromNow(checkpoint.createdAt, true),
+		);
+		summary.title = localize(
+			"vsclone.thread.runtime.checkpoint.summary.one",
+			"Checkpoint saved after {0} with 1 file snapshot.",
+			checkpoint.toolName,
+		);
+		row.appendChild(summary);
+
+		const rewindLink = document.createElement("button");
+		rewindLink.type = "button";
+		rewindLink.className = "vsclone-runtime-checkpoint-inline-rewind";
+		rewindLink.textContent = localize(
+			"vsclone.thread.runtime.checkpoint.rewindCompact",
+			"Rewind",
+		);
+		rewindLink.disabled = rewindDisabled;
+		rewindLink.title = rewindTooltip;
+		rewindLink.addEventListener(EventType.CLICK, () => {
+			void this.handleCheckpointRewind(threadId, checkpoint, rewindLink);
+		});
+		row.appendChild(rewindLink);
+
+		item.appendChild(row);
 		return item;
 	}
 
@@ -3082,7 +3230,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const titleBar = document.createElement("div");
 		titleBar.className = "vsclone-tool-diff-title";
 
-		const filename = filePath.split('/').pop() ?? filePath;
+		const filename = toCompactTargetLabel(filePath);
 		const langLabel = this.getLanguageLabelFromFilename(filename);
 		const langTag = document.createElement("span");
 		langTag.className = "vsclone-tool-diff-title-lang-tag";
@@ -3179,13 +3327,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	/**
 	 * Extracts a filename from diff content by looking for `---` and `+++` header lines.
+	 * The chat pane only ever surfaces the basename; git-style prefixes and file:// schemes from
+	 * upstream tooling would otherwise eat the interesting tail of the path under right-ellipsis.
 	 */
 	private extractFilenameFromDiff(diff: string): string | undefined {
 		for (const line of diff.split("\n")) {
 			if (line.startsWith("+++ ") && !line.startsWith("+++ /dev/null")) {
-				const path = line.slice(4).trim();
-				// Strip leading a/ or b/ prefix from git diffs
-				return path.replace(/^[ab]\//, "");
+				const rawPath = line.slice(4).trim().replace(/^[ab]\//, "");
+				return toCompactTargetLabel(rawPath);
 			}
 		}
 		return undefined;
@@ -3560,12 +3709,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			const fileLabel = document.createElement("a");
 			fileLabel.className = "vsclone-tool-diff-title-filename";
 			fileLabel.textContent = filename;
+			// Full URI stays in the tooltip regardless of line-navigation state so users never lose
+			// the path after we switched the label to basename-only.
 			fileLabel.title =
 				titleNavigation.startLineNumber !== undefined
 					? localize(
 						"vsclone.thread.toolDiff.openAtLineTitle",
 						"Open {0} at line {1}",
-						filename,
+						fileUri ?? filename,
 						titleNavigation.startLineNumber.toString(),
 					)
 					: (fileUri ?? filename);
