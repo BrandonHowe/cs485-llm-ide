@@ -128,6 +128,8 @@ class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	readonly statesByThreadId = new Map<string, IVSCloneThreadRuntimeState>();
 	lastOptions: IVSCloneThreadRuntimeRunOptions | undefined;
 	cancelledThreadId: string | undefined;
+	deletedThreadId: string | undefined;
+	clearAllCallCount = 0;
 
 	runThread(options: IVSCloneThreadRuntimeRunOptions): IVSCloneThreadRuntimeHandle {
 		this.lastOptions = options;
@@ -141,8 +143,13 @@ class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	getThreads(): readonly [] { return []; }
 	isDeletedThread(): boolean { return false; }
 	archiveThread(): boolean { return false; }
-	deleteThread(): boolean { return false; }
-	clearAll(): void { }
+	deleteThread(threadId: string): boolean {
+		this.deletedThreadId = threadId;
+		return true;
+	}
+	clearAll(): void {
+		this.clearAllCallCount++;
+	}
 	getState(threadId: string): IVSCloneThreadRuntimeState | undefined { return this.statesByThreadId.get(threadId); }
 	async rewindToCheckpoint(): Promise<boolean> { return false; }
 }
@@ -172,6 +179,10 @@ function createSelectionWithOverrides(overrides: Partial<IVSCloneModelSelection>
 		...createSelection(),
 		...overrides,
 	};
+}
+
+function createThreadSelection(threadId: string): IVSCloneModelSelection {
+	return createSelectionWithOverrides({ threadId });
 }
 
 suite('VSCloneChatThreadService', () => {
@@ -275,5 +286,85 @@ suite('VSCloneChatThreadService', () => {
 		assert.strictEqual(settingsService.setSelections[0].reasoningEffort, 'high');
 		assert.strictEqual(runtimeService.lastOptions?.modelIdentifier, 'openai/gpt-5.4-codex');
 		assert.strictEqual(runtimeService.lastOptions?.reasoningEffort, 'high');
+	});
+
+	test('deleteThread clears unified backend sidecars after the runtime reports a successful delete', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const runtimeService = new RecordingThreadRuntimeService();
+		const backendService = new TestVSCloneUnifiedChatBackendService();
+		await backendService.replaceSelectionState({
+			selectedByThread: {
+				'thread-1': {
+					chat: createThreadSelection('thread-1'),
+				},
+			},
+			selectedByLocation: {},
+			recentModelIdentifiers: ['openai/gpt-5.3-codex'],
+		});
+		await backendService.replacePlanModeState({
+			modeByThread: {
+				'thread-1': 'plan',
+			},
+		});
+		const threadService = testDisposables.add(new VSCloneChatThreadService(
+			new StaticSettingsService(createSelection()),
+			new StaticPlanModeService(),
+			new NullLogService(),
+			runtimeService,
+			new StaticContextGatheringService(),
+			backendService,
+		));
+
+		// The service-level delete contract matters because the runtime owns transcript data while
+		// the backend owns the per-thread UI sidecars. A successful delete has to clear both layers.
+		const deleted = await threadService.deleteThread('thread-1');
+
+		assert.strictEqual(deleted, true);
+		assert.strictEqual(runtimeService.cancelledThreadId, 'thread-1');
+		assert.strictEqual(runtimeService.deletedThreadId, 'thread-1');
+		assert.deepStrictEqual(backendService.getSelectionState().selectedByThread, {});
+		assert.deepStrictEqual(backendService.getPlanModeState().modeByThread, {});
+	});
+
+	test('clearAll clears unified backend sidecars after runtime history is reset', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const runtimeService = new RecordingThreadRuntimeService();
+		const backendService = new TestVSCloneUnifiedChatBackendService();
+		await backendService.replaceSelectionState({
+			selectedByThread: {
+				'thread-1': {
+					chat: createThreadSelection('thread-1'),
+				},
+			},
+			selectedByLocation: {
+				chat: createThreadSelection('thread-1'),
+			},
+			recentModelIdentifiers: ['openai/gpt-5.3-codex'],
+		});
+		await backendService.replacePlanModeState({
+			modeByThread: {
+				'thread-1': 'plan',
+			},
+		});
+		const threadService = testDisposables.add(new VSCloneChatThreadService(
+			new StaticSettingsService(createSelection()),
+			new StaticPlanModeService(),
+			new NullLogService(),
+			runtimeService,
+			new StaticContextGatheringService(),
+			backendService,
+		));
+
+		await threadService.clearAll();
+
+		assert.strictEqual(runtimeService.clearAllCallCount, 1);
+		assert.deepStrictEqual(backendService.getSelectionState(), {
+			selectedByThread: {},
+			selectedByLocation: {},
+			recentModelIdentifiers: [],
+		});
+		assert.deepStrictEqual(backendService.getPlanModeState(), {
+			modeByThread: {},
+		});
 	});
 });

@@ -36,6 +36,21 @@ function createQuickInputService(): IQuickInputService {
 	} as unknown as IQuickInputService;
 }
 
+function createRecordingQuickInputService(inputResult: string | undefined) {
+	const inputCalls: unknown[] = [];
+
+	return {
+		inputCalls,
+		service: {
+			input: async (options: unknown) => {
+				inputCalls.push(options);
+				return inputResult;
+			},
+			pick: async () => undefined,
+		} as unknown as IQuickInputService,
+	};
+}
+
 function createChannel(
 	handlers: Partial<Record<string, (payload: unknown) => unknown | Promise<unknown>>> = {},
 ) {
@@ -153,5 +168,62 @@ suite('VSCloneOAuthService integration', () => {
 		assert.strictEqual(service.state.providers.openai.status, 'signed_out');
 		assert.strictEqual(service.state.providers.openai.isReady, false);
 		assert.strictEqual(await secretStorageService.get(oauthSecretKey('openai')), undefined);
+	});
+
+	test('signIn falls back to manual code entry when loopback startup fails', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const secretStorageService = testDisposables.add(new TestSecretStorageService());
+		const quickInputService = createRecordingQuickInputService('manual-auth-code');
+		let openedRedirectUri: string | undefined;
+
+		const { channel, calls } = createChannel({
+			startLoopback: () => {
+				throw new Error('Port already in use');
+			},
+			openExternal: (payload) => {
+				const authUrl = new URL(payload as string);
+				openedRedirectUri = authUrl.searchParams.get('redirect_uri') ?? undefined;
+				return undefined;
+			},
+			stopLoopback: () => undefined,
+			[VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE]: (payload) => {
+				const request = payload as { url: string; body: string; contentType: string };
+				const body = new URLSearchParams(request.body);
+
+				assert.strictEqual(request.url, defaultOAuthProviderConfig.openai.tokenUrl);
+				assert.strictEqual(request.contentType, 'application/x-www-form-urlencoded');
+				assert.strictEqual(body.get('grant_type'), 'authorization_code');
+				assert.strictEqual(body.get('code'), 'manual-auth-code');
+				assert.strictEqual(body.get('redirect_uri'), `http://localhost:${defaultOAuthProviderConfig.openai.preferredPort}/auth/callback`);
+
+				return {
+					statusCode: 200,
+					body: JSON.stringify({
+						access_token: 'manual-access-token',
+						token_type: 'Bearer',
+						expires_in: 3600,
+						scope: 'openid profile',
+					}),
+				};
+			},
+		});
+		const service = testDisposables.add(new VSCloneOAuthService(
+			secretStorageService,
+			new NullLogService(),
+			createNotificationService(),
+			quickInputService.service,
+			createMainProcessService(channel).service,
+		));
+
+		await service.signIn('openai');
+
+		assert.strictEqual(openedRedirectUri, `http://localhost:${defaultOAuthProviderConfig.openai.preferredPort}/auth/callback`);
+		assert.strictEqual(quickInputService.inputCalls.length, 1);
+		assert.strictEqual(service.state.providers.openai.status, 'signed_in');
+		assert.strictEqual(service.state.providers.openai.isReady, true);
+		assert.strictEqual(await secretStorageService.get(oauthSecretKey('openai')) !== undefined, true);
+		assert.ok(calls.some(call => call.command === 'startLoopback'));
+		assert.ok(calls.some(call => call.command === 'openExternal'));
+		assert.ok(!calls.some(call => call.command === 'waitForLoopback'));
 	});
 });

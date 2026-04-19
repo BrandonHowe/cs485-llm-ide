@@ -1,0 +1,110 @@
+name: Run VSClone Live Provider Smoke
+
+on:
+  # Live-provider traffic spends real quota and depends on environment-scoped refresh tokens, so
+  # keep this workflow opt-in/scheduled instead of running it on every push or pull request.
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 9 * * *'
+
+jobs:
+  live-provider-smoke:
+    name: VSClone Live Provider Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    # GitHub environment secrets keep the long-lived OAuth refresh credentials out of the normal
+    # unit/integration workflows that run for untrusted branches and forked pull requests.
+    environment: vsclone-live-providers
+    env:
+      npm_config_arch: x64
+      VSCODE_ARCH: x64
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+      # The minting helper fails fast if any of these providers are not configured, which avoids a
+      # false-green schedule where missing secrets silently downgrade real backend coverage to skips.
+      VSCODE_VSCLONE_E2E_REQUIRED_VENDORS: openai,anthropic,google
+      VSCODE_VSCLONE_E2E_OPENAI_REFRESH_TOKEN: ${{ secrets.VSCODE_VSCLONE_E2E_OPENAI_REFRESH_TOKEN }}
+      VSCODE_VSCLONE_E2E_ANTHROPIC_REFRESH_TOKEN: ${{ secrets.VSCODE_VSCLONE_E2E_ANTHROPIC_REFRESH_TOKEN }}
+      VSCODE_VSCLONE_E2E_GOOGLE_REFRESH_TOKEN: ${{ secrets.VSCODE_VSCLONE_E2E_GOOGLE_REFRESH_TOKEN }}
+      # Google OAuth refresh requires the real desktop client configuration because the repository
+      # default intentionally uses placeholder credentials when no local overrides are present.
+      VSCODE_VSCLONE_GOOGLE_CLIENT_ID: ${{ secrets.VSCODE_VSCLONE_GOOGLE_CLIENT_ID }}
+      VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET: ${{ secrets.VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET }}
+      VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT: ${{ secrets.VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT }}
+      # Keep optional header overrides environment-based so operators can supply provider-specific
+      # headers without having to fork the workflow or edit the minting helper.
+      VSCODE_VSCLONE_E2E_OPENAI_HEADERS_JSON: ${{ secrets.VSCODE_VSCLONE_E2E_OPENAI_HEADERS_JSON }}
+      VSCODE_VSCLONE_E2E_ANTHROPIC_HEADERS_JSON: ${{ secrets.VSCODE_VSCLONE_E2E_ANTHROPIC_HEADERS_JSON }}
+      VSCODE_VSCLONE_E2E_GOOGLE_HEADERS_JSON: ${{ secrets.VSCODE_VSCLONE_E2E_GOOGLE_HEADERS_JSON }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            build/package-lock.json
+
+      - name: Install Linux System Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config xvfb libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 rpm
+
+      - name: Install Build Dependencies
+        working-directory: build
+        run: |
+          # GitHub-hosted runners occasionally hit transient registry failures, so keep the same
+          # short retry loop that the rest of the repository's test workflows already rely on.
+          for attempt in 1 2 3; do
+            if npm ci; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Workspace Dependencies
+        run: |
+          # setup-env.sh fetches native toolchain artifacts before npm starts, so the retry boundary
+          # has to cover both the bootstrap and install steps or partial downloads poison retries.
+          for attempt in 1 2 3; do
+            if [ "$attempt" -gt 1 ]; then
+              rm -rf node_modules .build/CR_Clang .build/libcxx-objects .build/libcxx_headers .build/libcxxabi_headers
+            fi
+            if bash -e -c 'source ./build/azure-pipelines/linux/setup-env.sh && npm ci'; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Built-In Extensions
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Transpile Client and Extensions
+        # The token minting helper imports the compiled VSClone OAuth registry from out/, so keep
+        # this step ahead of token refresh instead of duplicating provider endpoints in CI YAML.
+        run: npm run gulp transpile-client-esbuild transpile-extensions
+
+      - name: Mint VSClone Live Provider Access Tokens
+        run: node build/azure-pipelines/common/mintVSCloneLiveProviderTokens.ts
+
+      - name: Run VSClone Live Provider Smoke
+        run: npm run test-node -- --runGlob '**/vsclone/test/electron-main/vscloneLLMMessageLiveProviderSmoke.test.js'
