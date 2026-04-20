@@ -355,8 +355,6 @@ jobs:
           EOF
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            RELEASE_ID="$(gh release view "$TAG" --json id --jq '.id')"
-
             gh release view "$TAG" --json assets --jq '.assets[]?.name' | while IFS= read -r asset_name; do
               if [ -n "$asset_name" ]; then
                 gh release delete-asset "$TAG" "$asset_name" --yes
@@ -364,16 +362,19 @@ jobs:
             done
 
             gh release upload "$TAG" release-assets/* --clobber
-            gh api "repos/{owner}/{repo}/releases/${RELEASE_ID}" \
-              --method PATCH \
-              -f tag_name="$TAG" \
-              -f target_commitish="$GITHUB_SHA" \
-              -f name="$TITLE" \
-              -F "body=@$NOTES_FILE" \
-              -F draft=false \
-              -F prerelease=false \
-              -F make_latest=true \
-              --silent
+            # Use gh release edit instead of raw gh api PATCH. The REST
+            # /releases/{release_id} endpoint wants the numeric databaseId;
+            # --json id returns the GraphQL node_id, which 404s when passed
+            # into the REST URL. gh release edit takes the tag directly and
+            # handles the lookup internally.
+            gh release edit "$TAG" \
+              --tag "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes-file "$NOTES_FILE" \
+              --draft=false \
+              --prerelease=false \
+              --latest
           else
             gh release create "$TAG" release-assets/* \
               --target "$GITHUB_SHA" \
