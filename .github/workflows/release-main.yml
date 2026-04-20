@@ -207,6 +207,9 @@ jobs:
           $Version = node -p "require('./package.json').version"
           New-Item -ItemType Directory -Force -Path release | Out-Null
           Copy-Item ".build/win32-x64/user-setup/VSCodeSetup.exe" "release/VSCodeUserSetup-x64-$Version.exe"
+          # Stable alias so deep links like /releases/latest/download/VSCodeUserSetup-x64-latest.exe
+          # keep resolving when package.json version bumps change the versioned filename.
+          Copy-Item ".build/win32-x64/user-setup/VSCodeSetup.exe" "release/VSCodeUserSetup-x64-latest.exe"
 
       - name: Upload Windows Release Asset
         uses: actions/upload-artifact@v6
@@ -282,6 +285,9 @@ jobs:
           # The Intel/universal merge path was removed because macos-13 runner
           # availability made it the long pole on every release.
           ditto -c -k --sequesterRsrc --keepParent "../VSCode-darwin-arm64/Code - OSS.app" "release/VSCode-darwin-arm64-${VERSION}.zip"
+          # Stable alias so deep links like /releases/latest/download/VSCode-darwin-arm64-latest.zip
+          # keep resolving when package.json version bumps change the versioned filename.
+          cp "release/VSCode-darwin-arm64-${VERSION}.zip" "release/VSCode-darwin-arm64-latest.zip"
 
       - name: Upload macOS arm64 Release Asset
         uses: actions/upload-artifact@v6
