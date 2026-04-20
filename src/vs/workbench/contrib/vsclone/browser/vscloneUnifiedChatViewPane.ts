@@ -80,7 +80,6 @@ import {
 import {
 	type IVSCloneThreadRuntimeAssistantEditSuggestion,
 	type IVSCloneThreadRuntimeCatalogQuery,
-	type IVSCloneThreadRuntimeCheckpoint,
 	type IVSCloneThreadRuntimeMessage,
 	type IVSCloneThreadRuntimeState,
 } from "../common/vscloneThreadRuntimeTypes.js";
@@ -1618,14 +1617,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					break;
 				}
 				case 'checkpoint':
-					flushNarration();
-					nodes.push(
-						this.renderRuntimeCheckpointMessage(
-							state.threadId,
-							message.checkpoint,
-							this.isThreadBusy(state.threadId),
-						),
-					);
+					// Checkpoint UI is hidden for now. Runtime still captures snapshots and
+					// exposes rewindToCheckpoint so the feature can be re-enabled by restoring
+					// this render branch without touching the runtime layer.
 					break;
 			}
 		}
@@ -1923,7 +1917,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		state: IVSCloneThreadRuntimeState,
 	): HTMLElement | undefined {
 		let label: string | undefined;
-		let statusClass = "running";
+		const statusClass = "running";
 		switch (state.streamState.kind) {
 			case "llm":
 				label = localize(
@@ -1983,6 +1977,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
 	): HTMLElement | undefined {
 		// attempt_completion is the agent's "I'm done" signal, not a real tool call. Cursor/Void
+		// allow-any-unicode-next-line
 		// don't have an equivalent — their agent loops stop when the model emits no tool call.
 		// Rendering the tool card made it look like the agent was still working after its final
 		// summary, so we fold the completion text into a final assistant-style row and drop the
@@ -2454,201 +2449,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			case "rejected":
 			case "tool_error":
 				return "error";
-		}
-	}
-
-	private renderRuntimeCheckpointMessage(
-		threadId: string,
-		checkpoint: IVSCloneThreadRuntimeCheckpoint,
-		threadIsRunning: boolean,
-	): HTMLElement {
-		const assistantApplyPending = this.hasPendingAssistantApply(threadId);
-		const rewindDisabled = threadIsRunning || assistantApplyPending;
-		const rewindTooltip = threadIsRunning
-			? localize(
-				"vsclone.thread.runtime.checkpoint.rewindDisabled",
-				"Wait for the active run to finish before rewinding.",
-			)
-			: assistantApplyPending
-				? localize(
-					"vsclone.thread.runtime.checkpoint.rewindApplyPending",
-					"Wait for edit application to finish before rewinding.",
-				)
-				: localize(
-					"vsclone.thread.runtime.checkpoint.rewindTooltip",
-					"Restore the files captured in this checkpoint.",
-				);
-
-		// Single-file snapshots dominate the transcript, so they render as a one-row variant:
-		// bookmark icon + "Checkpoint · N ago" + inline Rewind link. Multi-file snapshots still
-		// earn the full card because their summary line carries meaningful detail.
-		if (checkpoint.snapshots.length === 1) {
-			return this.renderRuntimeCheckpointCompact(threadId, checkpoint, rewindDisabled, rewindTooltip);
-		}
-
-		const item = document.createElement("div");
-		item.className = "vsclone-thread-message assistant runtime runtime-checkpoint";
-
-		const body = document.createElement("div");
-		body.className = "vsclone-thread-message-body";
-
-		const card = document.createElement("div");
-		card.className = "vsclone-runtime-checkpoint-card";
-
-		const summary = document.createElement("div");
-		summary.className = "vsclone-runtime-checkpoint-summary";
-		summary.textContent = localize(
-			"vsclone.thread.runtime.checkpoint.summary.many",
-			"Checkpoint saved after {0} with {1} file snapshots.",
-			checkpoint.toolName,
-			checkpoint.snapshots.length.toString(),
-		);
-		card.appendChild(summary);
-
-		const meta = document.createElement("div");
-		meta.className = "vsclone-runtime-checkpoint-meta";
-		meta.textContent = localize(
-			"vsclone.thread.runtime.checkpoint.meta",
-			"Created {0}",
-			fromNow(checkpoint.createdAt, true),
-		);
-		card.appendChild(meta);
-
-		const actions = document.createElement("div");
-		actions.className = "vsclone-runtime-checkpoint-actions";
-		const rewindButton = document.createElement("button");
-		rewindButton.type = "button";
-		rewindButton.className = "vsclone-runtime-checkpoint-button";
-		rewindButton.textContent = localize(
-			"vsclone.thread.runtime.checkpoint.rewind",
-			"Rewind to checkpoint",
-		);
-		// Rewind is intentionally blocked during active execution because applying an older
-		// snapshot mid-run or mid-apply would race active mutations and leave the transcript
-		// describing a workspace state that no longer exists.
-		rewindButton.disabled = rewindDisabled;
-		rewindButton.title = rewindTooltip;
-		rewindButton.addEventListener(EventType.CLICK, () => {
-			void this.handleCheckpointRewind(threadId, checkpoint, rewindButton);
-		});
-		actions.appendChild(rewindButton);
-		card.appendChild(actions);
-
-		body.appendChild(card);
-		item.appendChild(body);
-		return item;
-	}
-
-	private renderRuntimeCheckpointCompact(
-		threadId: string,
-		checkpoint: IVSCloneThreadRuntimeCheckpoint,
-		rewindDisabled: boolean,
-		rewindTooltip: string,
-	): HTMLElement {
-		const item = document.createElement("div");
-		item.className = "vsclone-thread-message assistant runtime runtime-checkpoint runtime-checkpoint-compact";
-
-		const row = document.createElement("div");
-		row.className = "vsclone-runtime-checkpoint-inline";
-
-		const icon = document.createElement("span");
-		icon.className = "codicon codicon-bookmark vsclone-runtime-checkpoint-inline-icon";
-		icon.setAttribute("aria-hidden", "true");
-		row.appendChild(icon);
-
-		const summary = document.createElement("span");
-		summary.className = "vsclone-runtime-checkpoint-inline-summary";
-		summary.textContent = localize(
-			"vsclone.thread.runtime.checkpoint.compactSummary",
-			"Checkpoint · {0}",
-			fromNow(checkpoint.createdAt, true),
-		);
-		summary.title = localize(
-			"vsclone.thread.runtime.checkpoint.summary.one",
-			"Checkpoint saved after {0} with 1 file snapshot.",
-			checkpoint.toolName,
-		);
-		row.appendChild(summary);
-
-		const rewindLink = document.createElement("button");
-		rewindLink.type = "button";
-		rewindLink.className = "vsclone-runtime-checkpoint-inline-rewind";
-		rewindLink.textContent = localize(
-			"vsclone.thread.runtime.checkpoint.rewindCompact",
-			"Rewind",
-		);
-		rewindLink.disabled = rewindDisabled;
-		rewindLink.title = rewindTooltip;
-		rewindLink.addEventListener(EventType.CLICK, () => {
-			void this.handleCheckpointRewind(threadId, checkpoint, rewindLink);
-		});
-		row.appendChild(rewindLink);
-
-		item.appendChild(row);
-		return item;
-	}
-
-	private async handleCheckpointRewind(
-		threadId: string,
-		checkpoint: IVSCloneThreadRuntimeCheckpoint,
-		button: HTMLButtonElement,
-	): Promise<void> {
-		if (this.isThreadBusy(threadId)) {
-			this.notificationService.warn(
-				localize(
-					"vsclone.thread.runtime.checkpoint.rewindBusy",
-					"Wait for the active run to finish before rewinding.",
-				),
-			);
-			return;
-		}
-		if (this.hasPendingAssistantApply(threadId)) {
-			this.notificationService.warn(
-				localize(
-					"vsclone.thread.runtime.checkpoint.rewindPendingApply",
-					"Wait for edit application to finish before rewinding.",
-				),
-			);
-			return;
-		}
-		button.disabled = true;
-		try {
-			const restored = await this.threadRuntimeService.rewindToCheckpoint(
-				threadId,
-				checkpoint.id,
-			);
-			if (!restored) {
-				this.notificationService.warn(
-					localize(
-						"vsclone.thread.runtime.checkpoint.rewindMissing",
-						"That checkpoint is no longer available.",
-					),
-				);
-				return;
-			}
-			this.notificationService.info(
-				localize(
-					"vsclone.thread.runtime.checkpoint.rewindSuccess",
-					"Restored {0} file snapshot(s) from {1}.",
-					checkpoint.snapshots.length,
-					checkpoint.toolName,
-				),
-			);
-			this.refreshConversation();
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			this.notificationService.error(
-				localize(
-					"vsclone.thread.runtime.checkpoint.rewindError",
-					"Failed to restore the checkpoint: {0}",
-					message,
-				),
-			);
-		} finally {
-			const latestState = this.getThreadRuntimeState(threadId);
-			if (button.isConnected && !isRuntimeThreadExecuting(latestState)) {
-				button.disabled = false;
-			}
 		}
 	}
 
@@ -4634,8 +4434,3 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 }
 
-function isRuntimeThreadExecuting(state: IVSCloneThreadRuntimeState | undefined): boolean {
-	// Awaiting approval is still a non-idle stream state, but UI affordances such as rewind should
-	// only stay disabled while the runtime is actively streaming or running a tool.
-	return state?.streamState.kind === "llm" || state?.streamState.kind === "tool";
-}
