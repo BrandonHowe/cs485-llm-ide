@@ -17,6 +17,111 @@ permissions:
   contents: write
 
 jobs:
+  compile-release:
+    name: Compile Release Artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Linux System Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config xvfb libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 rpm
+
+      - name: Install Workspace Dependencies
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Built-In Extensions
+        run: node build/lib/builtInExtensions.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build VSClone Preact Bundles
+        # VSClone browser surfaces import these generated entrypoints directly
+        # from src/, so the release compile job has to materialize them in its
+        # own checkout before the shared TypeScript compile snapshots src/ into
+        # out-build. The backend/frontend test jobs already do this, but their
+        # workspaces do not carry over into this separate release job.
+        run: npm run build-vsclone-preact
+
+      - name: Compile Shared Build Outputs
+        # Keep the expensive compile isolated so the Actions log shows whether
+        # the pipeline is genuinely hanging in TypeScript compilation or has
+        # already moved on to minification. The earlier single-step wrapper hid
+        # all three phases behind one status label, which made failures much
+        # harder to reason about from GitHub-hosted runs. Use the supported
+        # non-mangled compile path here because GitHub-hosted release validation
+        # has repeatedly stalled in the mangled variant before platform package
+        # jobs could even start.
+        run: |
+          set -e
+          date -u
+          npm run gulp compile-build-without-mangling
+          date -u
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Minified Client Bundle
+        # The platform packaging jobs only consume the client-side
+        # `out-vscode-min` tree, so keep this as a dedicated step with its own
+        # timing and failure boundary.
+        run: |
+          set -e
+          date -u
+          npm run gulp minify-vscode
+          date -u
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Shared Extension Outputs
+        # Build extension artifacts separately from the client minification so
+        # GitHub Actions exposes which phase is slow or broken instead of
+        # reporting one opaque "Build Shared Compilation Outputs" step.
+        run: |
+          set -e
+          date -u
+          npm run gulp extensions-ci
+          date -u
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Compilation Outputs
+        run: |
+          set -e
+          [ -d "out-build" ] || { echo "ERROR: out-build folder is missing" >&2; exit 1; }
+          [ -n "$(find out-build -mindepth 1 | head -1)" ] || { echo "ERROR: out-build folder is empty" >&2; exit 1; }
+          [ -d "out-vscode-min" ] || { echo "ERROR: out-vscode-min folder is missing" >&2; exit 1; }
+          [ -n "$(find out-vscode-min -mindepth 1 | head -1)" ] || { echo "ERROR: out-vscode-min folder is empty" >&2; exit 1; }
+          [ -d ".build/extensions" ] || { echo "ERROR: .build/extensions folder is missing" >&2; exit 1; }
+          [ -n "$(find .build/extensions -mindepth 1 | head -1)" ] || { echo "ERROR: .build/extensions folder is empty" >&2; exit 1; }
+
+      - name: Archive Compilation Outputs
+        run: |
+          set -e
+          tar -cz --exclude='.build/node_modules_cache' --exclude='.build/node_modules_list.txt' --exclude='.build/distro' -f compilation.tar.gz .build out-build out-vscode-min
+
+      - name: Upload Compilation Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: compilation-release-input
+          path: compilation.tar.gz
+          if-no-files-found: error
+
   backend-tests:
     name: VSClone Backend Tests
     uses: ./.github/workflows/run-backend-tests.yml
@@ -29,6 +134,7 @@ jobs:
     name: Build Windows Installer
     runs-on: windows-2022
     needs:
+      - compile-release
       - backend-tests
       - frontend-tests
     permissions:
@@ -48,6 +154,15 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
+
+      - name: Download Compilation Artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: compilation-release-input
+
+      - name: Extract Compilation Output
+        shell: pwsh
+        run: tar -xzf compilation.tar.gz
 
       - name: Install Workspace Dependencies
         shell: pwsh
@@ -100,74 +215,11 @@ jobs:
           path: release/*.exe
           if-no-files-found: error
 
-  build-macos-x64:
-    name: Build macOS Intel Bundle
-    runs-on: macos-13
-    needs:
-      - backend-tests
-      - frontend-tests
-    permissions:
-      contents: read
-    env:
-      npm_config_arch: x64
-      VSCODE_ARCH: x64
-      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install Workspace Dependencies
-        run: |
-          set -e
-          c++ --version
-          xcode-select -print-path
-          # Centralize the PEP 668 workaround so macOS runner image changes do not
-          # leave the release workflow out of sync with the other Darwin jobs.
-          node build/lib/pythonPackages.ts setuptools
-          npm ci
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # VS Code's macOS jobs rely on this to avoid the dlopen Kerberos path
-          # that is brittle on hosted runners.
-          GYP_DEFINES: "kerberos_use_rtld=false"
-
-      - name: Download Built-In Extensions
-        run: node build/lib/builtInExtensions.ts
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build macOS x64 Client
-        run: npm run gulp "vscode-darwin-x64-min-ci"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Stage macOS x64 Intermediate Artifact
-        run: |
-          set -e
-          mkdir -p release
-          # Keep the app bundle intact because the later universal merge step
-          # expects a normal `Code - OSS.app` tree on disk.
-          ditto -c -k --sequesterRsrc --keepParent "../VSCode-darwin-x64/Code - OSS.app" "release/VSCode-darwin-x64.zip"
-
-      - name: Upload macOS x64 Intermediate Artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: macos-x64-release-input
-          path: release/VSCode-darwin-x64.zip
-          if-no-files-found: error
-
   build-macos-arm64:
     name: Build macOS Apple Silicon Bundle
     runs-on: macos-14
     needs:
+      - compile-release
       - backend-tests
       - frontend-tests
     permissions:
@@ -188,13 +240,21 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Download Compilation Artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: compilation-release-input
+
+      - name: Extract Compilation Output
+        run: tar -xzf compilation.tar.gz
+
       - name: Install Workspace Dependencies
         run: |
           set -e
           c++ --version
           xcode-select -print-path
-          # Keep the Apple Silicon install path aligned with the Intel job because
-          # both runners now use Homebrew-managed Python that enforces PEP 668.
+          # Homebrew-managed Python on macos-14 enforces PEP 668, so install
+          # setuptools through the shared helper before npm ci runs native gyp.
           node build/lib/pythonPackages.ts setuptools
           npm ci
         env:
@@ -213,85 +273,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Stage macOS arm64 Intermediate Artifact
-        run: |
-          set -e
-          mkdir -p release
-          ditto -c -k --sequesterRsrc --keepParent "../VSCode-darwin-arm64/Code - OSS.app" "release/VSCode-darwin-arm64.zip"
-
-      - name: Upload macOS arm64 Intermediate Artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: macos-arm64-release-input
-          path: release/VSCode-darwin-arm64.zip
-          if-no-files-found: error
-
-  build-macos-universal:
-    name: Build macOS Universal Bundle
-    runs-on: macos-14
-    needs:
-      - build-macos-x64
-      - build-macos-arm64
-    permissions:
-      contents: read
-    env:
-      VSCODE_ARCH: universal
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: build/package-lock.json
-
-      - name: Install Build Dependencies
-        working-directory: build
-        run: npm ci
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download macOS x64 Intermediate Artifact
-        uses: actions/download-artifact@v5
-        with:
-          name: macos-x64-release-input
-          path: release-inputs/x64
-
-      - name: Download macOS arm64 Intermediate Artifact
-        uses: actions/download-artifact@v5
-        with:
-          name: macos-arm64-release-input
-          path: release-inputs/arm64
-
-      - name: Merge Universal App Bundle
-        run: |
-          set -e
-          mkdir -p universal-build/VSCode-darwin-x64 universal-build/VSCode-darwin-arm64 release
-          unzip -q release-inputs/x64/VSCode-darwin-x64.zip -d universal-build/VSCode-darwin-x64
-          unzip -q release-inputs/arm64/VSCode-darwin-arm64.zip -d universal-build/VSCode-darwin-arm64
-          DEBUG=* node build/darwin/create-universal-app.ts universal-build
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify Universal Mach-O Objects
-        run: |
-          set -e
-          APP_PATH="$PWD/universal-build/VSCode-darwin-universal/Code - OSS.app" node build/darwin/verify-macho.ts universal
-
-      - name: Stage macOS Universal Release Asset
+      - name: Stage macOS arm64 Release Asset
         run: |
           set -e
           VERSION="$(node -p "require('./package.json').version")"
-          # The unsigned distribution target here is a zipped `.app` bundle because
-          # the repo is not configured for a polished unsigned DMG/notarization path.
-          ditto -c -k --sequesterRsrc --keepParent "universal-build/VSCode-darwin-universal/Code - OSS.app" "release/VSCode-darwin-universal-${VERSION}.zip"
+          mkdir -p release
+          # Ship the Apple Silicon bundle directly as the macOS release asset.
+          # The Intel/universal merge path was removed because macos-13 runner
+          # availability made it the long pole on every release.
+          ditto -c -k --sequesterRsrc --keepParent "../VSCode-darwin-arm64/Code - OSS.app" "release/VSCode-darwin-arm64-${VERSION}.zip"
 
-      - name: Upload macOS Universal Release Asset
+      - name: Upload macOS arm64 Release Asset
         uses: actions/upload-artifact@v6
         with:
-          name: macos-universal-release-assets
+          name: macos-arm64-release-assets
           path: release/*.zip
           if-no-files-found: error
 
@@ -300,7 +295,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build-windows
-      - build-macos-universal
+      - build-macos-arm64
     # Manual branch runs are useful for validating the release build graph, but
     # only an actual push to main should move the rolling tag and release.
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -316,10 +311,10 @@ jobs:
           name: windows-release-assets
           path: release-assets
 
-      - name: Download macOS Universal Release Asset
+      - name: Download macOS Apple Silicon Release Asset
         uses: actions/download-artifact@v5
         with:
-          name: macos-universal-release-assets
+          name: macos-arm64-release-assets
           path: release-assets
 
       - name: Move Fixed Release Tag To Current Commit
@@ -346,7 +341,7 @@ jobs:
 
           Assets:
           - Windows: unsigned x64 installer \`.exe\`
-          - macOS: unsigned universal \`.app\` bundle packaged as \`.zip\`
+          - macOS: unsigned Apple Silicon (arm64) \`.app\` bundle packaged as \`.zip\`
 
           Install notes:
           - Windows: if SmartScreen warns, click "More info" and then "Run anyway".
