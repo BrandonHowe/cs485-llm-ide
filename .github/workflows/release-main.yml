@@ -156,7 +156,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Download Compilation Artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: compilation-release-input
 
@@ -241,7 +241,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Download Compilation Artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: compilation-release-input
 
@@ -306,13 +306,13 @@ jobs:
           fetch-depth: 0
 
       - name: Download Windows Release Asset
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: windows-release-assets
           path: release-assets
 
       - name: Download macOS Apple Silicon Release Asset
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: macos-arm64-release-assets
           path: release-assets
