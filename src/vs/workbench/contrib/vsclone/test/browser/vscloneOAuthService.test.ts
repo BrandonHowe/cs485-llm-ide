@@ -538,8 +538,10 @@ suite('VSCloneOAuthService', () => {
 			'OAuth requires the desktop VSClone bridge for browser launch and token exchange.'
 		);
 		assert.strictEqual(harness.notificationService.errors.length, 1);
-		assert.match(harness.notificationService.errors[0], /Failed to sign in to OpenAI:/);
-		assert.match(harness.notificationService.errors[0], /OAuth requires the desktop VSClone bridge for browser launch and token exchange\./);
+		// The browser test harness ships an older assert shim without `assert.match`, so keep these
+		// checks on plain regex `.test()` to verify the full surfaced error message in Chromium too.
+		assert.ok(/Failed to sign in to OpenAI:/.test(harness.notificationService.errors[0]));
+		assert.ok(/OAuth requires the desktop VSClone bridge for browser launch and token exchange\./.test(harness.notificationService.errors[0]));
 	});
 
 	test('refresh fails coherently when the OAuth transport channel is unavailable', async () => {
@@ -568,7 +570,7 @@ suite('VSCloneOAuthService', () => {
 			'OAuth requires the desktop VSClone bridge for browser launch and token exchange.'
 		);
 		assert.strictEqual(harness.notificationService.errors.length, 1);
-		assert.match(harness.notificationService.errors[0], /Failed to refresh OpenAI session:/);
+		assert.ok(/Failed to refresh OpenAI session:/.test(harness.notificationService.errors[0]));
 	});
 
 	test('refreshes near-expiry OpenAI tokens once and coalesces concurrent refreshes', async () => {

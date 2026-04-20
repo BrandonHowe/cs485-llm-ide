@@ -292,12 +292,13 @@ suite('VSCloneThreadRail', () => {
 			assert.strictEqual(cancel, document.activeElement);
 			assert.strictEqual(container.querySelector('.vsclone-thread-rail-delete-description')?.textContent?.includes('Alpha'), true);
 
-			// The modal intentionally traps focus because the delete confirmation is a destructive action.
+			// The focus trap is attached to the dialog container, so keyboard simulation has to target
+			// the modal itself rather than the backdrop to match how real bubbled key events arrive.
 			confirm.focus();
-			overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+			modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
 			assert.strictEqual(document.activeElement, cancel);
 			cancel.focus();
-			overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+			modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
 			assert.strictEqual(document.activeElement, confirm);
 
 			cancel.click();
@@ -311,7 +312,7 @@ suite('VSCloneThreadRail', () => {
 			assert.strictEqual(document.activeElement, priorFocus);
 
 			rail.confirmDeleteThread('thread-1', 'Alpha');
-			overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+			modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 			assert.strictEqual(overlay.getAttribute('aria-hidden'), 'true');
 			assert.strictEqual(overlay.classList.contains('visible'), false);
 			assert.strictEqual(document.activeElement, priorFocus);

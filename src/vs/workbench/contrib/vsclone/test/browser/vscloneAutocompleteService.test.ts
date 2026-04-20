@@ -97,6 +97,7 @@ class RecordingLLMMessageService implements IVSCloneLLMMessageService {
 }
 
 interface IAutocompleteServiceSetup {
+	disposables: DisposableStore;
 	service: VSCloneAutocompleteService;
 	settingsService: VSCloneSettingsService;
 	contextKeyService: MockContextKeyService;
@@ -166,16 +167,20 @@ async function createAutocompleteService(
 	} = {},
 ): Promise<IAutocompleteServiceSetup> {
 	const oauthService = new TestVSCloneOAuthService();
-	const settingsService = new VSCloneSettingsService(
-		new TestStorageService(),
+	// The helper constructs a real settings stack under the autocomplete service, so the tests
+	// need one disposable handle that tears down both the service under test and its storage-backed
+	// dependencies. Returning the bundle keeps leak detection honest in the browser harness.
+	const disposables = new DisposableStore();
+	const settingsService = disposables.add(new VSCloneSettingsService(
+		disposables.add(new TestStorageService()),
 		oauthService,
 		new TestVSCloneUnifiedChatBackendService(),
-	);
+	));
 	await settingsService.initialize();
 
 	const llmMessageService = new RecordingLLMMessageService(options.resolveText);
 	const contextKeyService = new MockContextKeyService();
-	const service = new VSCloneAutocompleteService(
+	const service = disposables.add(new VSCloneAutocompleteService(
 		settingsService,
 		new TestConvertToLLMMessageService(),
 		llmMessageService,
@@ -186,9 +191,9 @@ async function createAutocompleteService(
 		new TestConfigurationService(options.configuration ?? Object.create(null)),
 		contextKeyService,
 		new NullLogService(),
-	);
+	));
 
-	return { service, settingsService, contextKeyService, llmMessageService };
+	return { disposables, service, settingsService, contextKeyService, llmMessageService };
 }
 
 suite('VSCloneAutocompleteService', () => {
@@ -198,13 +203,14 @@ suite('VSCloneAutocompleteService', () => {
 		const testDisposables = store.add(new DisposableStore());
 		let registeredSelector: unknown;
 		let registeredProvider: unknown;
-		const { service, contextKeyService } = await createAutocompleteService({
+		const setup = await createAutocompleteService({
 			onRegister: (selector, provider) => {
 				registeredSelector = selector;
 				registeredProvider = provider;
 			},
 		});
-		testDisposables.add(service);
+		testDisposables.add(setup.disposables);
+		const { service, contextKeyService } = setup;
 
 		assert.deepStrictEqual(registeredSelector, { pattern: '**' });
 		assert.strictEqual(registeredProvider, service);
@@ -213,8 +219,9 @@ suite('VSCloneAutocompleteService', () => {
 
 	test('sets the VSClone visibility context key while a shown completion list is alive', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service, contextKeyService } = await createAutocompleteService();
-		testDisposables.add(service);
+		const setup = await createAutocompleteService();
+		testDisposables.add(setup.disposables);
+		const { service, contextKeyService } = setup;
 		const item = { insertText: 'completion' } as InlineCompletion;
 		const completions = { items: [item] } as InlineCompletions;
 
@@ -227,8 +234,9 @@ suite('VSCloneAutocompleteService', () => {
 
 	test('disposes active requests, clears cache state, and resets the visibility key', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service, contextKeyService } = await createAutocompleteService();
-		testDisposables.add(service);
+		const setup = await createAutocompleteService();
+		testDisposables.add(setup.disposables);
+		const { service, contextKeyService } = setup;
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const resource = URI.file('/workspace/sample.ts');
 		const requestHandle = internals.beginBackendRequest(resource, new CancellationTokenSource().token);
@@ -247,15 +255,15 @@ suite('VSCloneAutocompleteService', () => {
 	test('classifies prediction modes, debounce windows, and replacement ranges', async () => {
 		const testDisposables = store.add(new DisposableStore());
 		const defaultSetup = await createAutocompleteService();
-		testDisposables.add(defaultSetup.service);
+		testDisposables.add(defaultSetup.disposables);
 		const configuredSetup = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 125 },
 		});
-		testDisposables.add(configuredSetup.service);
+		testDisposables.add(configuredSetup.disposables);
 		const negativeSetup = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: -25 },
 		});
-		testDisposables.add(negativeSetup.service);
+		testDisposables.add(negativeSetup.disposables);
 		const defaultService = defaultSetup.service as unknown as IAutocompleteServiceInternals;
 		const configuredService = configuredSetup.service as unknown as IAutocompleteServiceInternals;
 		const negativeService = negativeSetup.service as unknown as IAutocompleteServiceInternals;
@@ -279,8 +287,9 @@ suite('VSCloneAutocompleteService', () => {
 
 	test('reuses cached completions and trims overlapping suffixes', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service } = await createAutocompleteService();
-		testDisposables.add(service);
+		const setup = await createAutocompleteService();
+		testDisposables.add(setup.disposables);
+		const { service } = setup;
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const resource = URI.file('/workspace/sample.ts');
 
@@ -299,8 +308,9 @@ suite('VSCloneAutocompleteService', () => {
 
 	test('evicts only cache entries older than the 30 second boundary', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service } = await createAutocompleteService();
-		testDisposables.add(service);
+		const setup = await createAutocompleteService();
+		testDisposables.add(setup.disposables);
+		const { service } = setup;
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const cache = new LRUCache<string, { readonly timestamp: number }>(5);
 		const now = 10_000;
@@ -317,10 +327,11 @@ suite('VSCloneAutocompleteService', () => {
 
 	test('honors debounce cancellation and request supersession', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service } = await createAutocompleteService({
+		const setup = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 1 },
 		});
-		testDisposables.add(service);
+		testDisposables.add(setup.disposables);
+		const { service } = setup;
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const resource = URI.file('/workspace/sample.ts');
 		const originalDateNow = Date.now;
@@ -346,8 +357,9 @@ suite('VSCloneAutocompleteService', () => {
 
 	test('tracks backend request lifetimes and parent cancellation', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service } = await createAutocompleteService();
-		testDisposables.add(service);
+		const setup = await createAutocompleteService();
+		testDisposables.add(setup.disposables);
+		const { service } = setup;
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const resource = URI.file('/workspace/sample.ts');
 		const activeRequestsByResource = (internals as unknown as {
@@ -400,10 +412,11 @@ suite('VSCloneAutocompleteService', () => {
 
 	test('returns cached inline completions immediately and bypasses the transport', async () => {
 		const testDisposables = store.add(new DisposableStore());
-		const { service, llmMessageService } = await createAutocompleteService({
+		const setup = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 0 },
 		});
-		testDisposables.add(service);
+		testDisposables.add(setup.disposables);
+		const { service, llmMessageService } = setup;
 		const internals = service as unknown as IAutocompleteServiceInternals;
 		const resource = URI.file('/workspace/sample.ts');
 		const model = createTextModel('fooBa', resource);
@@ -422,13 +435,17 @@ suite('VSCloneAutocompleteService', () => {
 		const helperResource = URI.file('/workspace/helper.ts');
 		const helperModel = createTextModel('export const helper = true;', helperResource, 'typescript', 2);
 		const modelsByResource = new Map([[helperResource.toString(), helperModel]]);
-		const { service, llmMessageService } = await createAutocompleteService({
+		const setup = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 0 },
 			editorResources: [helperResource],
 			modelsByResource,
-			resolveText: () => 'const value = 1;\nreturn value;',
+			// Multi-line completions keep growing only while subsequent lines stay at or below the
+			// cursor indentation depth. Use an indented continuation here so the test exercises the
+			// multi-line happy path instead of the scope-exit truncation guard.
+			resolveText: () => 'const value = 1;\n    return value;',
 		});
-		testDisposables.add(service);
+		testDisposables.add(setup.disposables);
+		const { service, llmMessageService } = setup;
 		const model = createTextModel('function f() {\n    \n}', URI.file('/workspace/sample.ts'));
 
 		const completions = await service.provideInlineCompletions(model, new Position(2, 5), {} as never, CancellationToken.None);
@@ -439,11 +456,11 @@ suite('VSCloneAutocompleteService', () => {
 		assert.ok(request.prepared.prompt.promptText.includes('Related files:'));
 		assert.ok(request.prepared.prompt.promptText.includes('/workspace/helper.ts'));
 		assert.ok(request.prepared.prompt.promptText.includes('export const helper = true;'));
-		assert.strictEqual(completions?.items[0].insertText, 'const value = 1;\nreturn value;');
+		assert.strictEqual(completions?.items[0].insertText, 'const value = 1;\n    return value;');
 		assert.deepStrictEqual(completions?.items[0].range, new Range(2, 5, 2, 5));
 
 		const second = await service.provideInlineCompletions(model, new Position(2, 5), {} as never, CancellationToken.None);
-		assert.strictEqual(second?.items[0].insertText, 'const value = 1;\nreturn value;');
+		assert.strictEqual(second?.items[0].insertText, 'const value = 1;\n    return value;');
 		assert.strictEqual(llmMessageService.requests.length, 1);
 	});
 });

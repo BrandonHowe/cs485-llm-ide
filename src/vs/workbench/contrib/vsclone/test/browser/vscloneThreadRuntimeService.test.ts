@@ -180,6 +180,11 @@ suite('VSCloneThreadRuntimeService', () => {
 				runtimeStorage.delete(key);
 			},
 		} as unknown as IStorageService;
+		const workspaceContextService = {
+			// Runtime persistence keys thread snapshots by workspace id, so this test double needs the
+			// same `getWorkspace()` contract that production workbench services now provide.
+			getWorkspace: () => ({ id: 'workspace-test', folders: [] }),
+		} as Partial<IWorkspaceContextService> as IWorkspaceContextService;
 
 		return {
 			llmMessageService,
@@ -194,7 +199,7 @@ suite('VSCloneThreadRuntimeService', () => {
 				{} as IFileService,
 				storageService,
 				new NullLogService(),
-				{} as IWorkspaceContextService,
+				workspaceContextService,
 			)),
 		};
 	}
@@ -231,11 +236,11 @@ suite('VSCloneThreadRuntimeService', () => {
 
 		await waitForAwaitingApproval(service, 'thread-1');
 		assert.strictEqual(service.rejectLatestToolRequest('thread-1', 'Rejected by the test harness.'), true);
-			await handle.done;
+		await handle.done;
 
-			const toolMessages = service.getState('thread-1')?.messages.filter(message => message.role === 'tool') ?? [];
-			const rejectedMessage = toolMessages.find(message => message.type === 'rejected');
-			assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'rejected']);
-			assert.strictEqual(rejectedMessage && 'output' in rejectedMessage ? rejectedMessage.output : undefined, 'Rejected by the test harness.');
-		});
+		const toolMessages = service.getState('thread-1')?.messages.filter(message => message.role === 'tool') ?? [];
+		const rejectedMessage = toolMessages.find(message => message.type === 'rejected') as Extract<typeof toolMessages[number], { type: 'rejected' }> | undefined;
+		assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'rejected']);
+		assert.strictEqual(rejectedMessage?.output, 'Rejected by the test harness.');
 	});
+});

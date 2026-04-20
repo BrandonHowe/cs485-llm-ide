@@ -3,10 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import Anthropic from '@anthropic-ai/sdk';
-import { FunctionCallingConfigMode, GoogleGenAI, Type, type FunctionDeclaration, type GenerateContentResponse } from '@google/genai';
-import { PassThroughClient } from 'google-auth-library';
-import OpenAI from 'openai';
 import { localize } from '../../../../nls.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import {
@@ -35,9 +31,17 @@ interface IVSCloneLLMMessageCallbacks {
 	readonly onAbort: () => void;
 }
 
-type VSCloneGoogleCandidate = NonNullable<GenerateContentResponse['candidates']>[number];
+type VSCloneAnthropicMessage = import('@anthropic-ai/sdk').default.Message;
+type VSCloneAnthropicTool = import('@anthropic-ai/sdk').default.Messages.Tool;
+type VSCloneAnthropicToolInputSchema = VSCloneAnthropicTool['input_schema'];
+type VSCloneGoogleCandidate = NonNullable<import('@google/genai').GenerateContentResponse['candidates']>[number];
+type VSCloneGoogleFunctionDeclaration = import('@google/genai').FunctionDeclaration;
 type VSCloneFIMEndpointMode = 'sse';
-type VSCloneGoogleAuthClient = NonNullable<NonNullable<ConstructorParameters<typeof GoogleGenAI>[0]['googleAuthOptions']>['authClient']>;
+type VSCloneGoogleGenAIConstructor = typeof import('@google/genai').GoogleGenAI;
+type VSCloneGoogleAuthClient = NonNullable<NonNullable<ConstructorParameters<VSCloneGoogleGenAIConstructor>[0]['googleAuthOptions']>['authClient']>;
+type VSCloneOpenAIFunctionTool = import('openai').default.Responses.FunctionTool;
+type VSCloneOpenAIResponse = import('openai').default.Responses.Response;
+type VSCloneOpenAIResponseOutputItem = import('openai').default.Responses.ResponseOutputItem;
 
 interface IVSCloneFIMTransportRequest {
 	readonly url: string;
@@ -63,6 +67,12 @@ const googleModelMap: Record<string, string> = {
 	'gemini-2.5-flash': 'gemini-2.5-flash',
 	'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',
 };
+
+// Mirror the SDK enum payloads locally so the request builders stay serializable without forcing
+// renderer-imported tests to eagerly parse the Google SDK just to read constant values.
+const googleFunctionCallingConfigModeAuto = 'AUTO';
+const googleSchemaTypeObject = 'OBJECT';
+const googleSchemaTypeString = 'STRING';
 
 const supportedAnthropicOAuthMessagesModelIds = new Set<string>([
 	'claude-haiku-4-5-20251001',
@@ -252,6 +262,7 @@ async function sendOpenAIChatMessage(
 	callbacks: IVSCloneLLMMessageCallbacks,
 	signal: AbortSignal,
 ): Promise<void> {
+	const OpenAI = await loadOpenAIConstructor();
 	const token = requireBearerToken(auth.headers, 'openai');
 	const client = new OpenAI({
 		apiKey: token,
@@ -343,6 +354,7 @@ async function sendAnthropicChatMessage(
 	callbacks: IVSCloneLLMMessageCallbacks,
 	signal: AbortSignal,
 ): Promise<void> {
+	const Anthropic = await loadAnthropicConstructor();
 	const token = requireBearerToken(auth.headers, 'anthropic');
 	const client = new Anthropic({
 		authToken: token,
@@ -428,12 +440,15 @@ async function sendGoogleChatMessage(
 	callbacks: IVSCloneLLMMessageCallbacks,
 	signal: AbortSignal,
 ): Promise<void> {
+	const GoogleGenAI = await loadGoogleGenAIConstructor();
 	const client = new GoogleGenAI({
 		vertexai: false,
 		// PassThroughClient keeps the SDK on its native request path without letting google-auth or
 		// API-key plumbing replace the renderer-supplied OAuth headers that VSClone explicitly passes.
+		// Load it lazily so renderer-hosted bridge tests can import this Electron module graph without
+		// having to resolve the Node-only `google-auth-library` package before any Google request runs.
 		googleAuthOptions: {
-			authClient: new PassThroughClient() as unknown as VSCloneGoogleAuthClient,
+			authClient: await createGooglePassThroughAuthClient(),
 		},
 		httpOptions: buildGoogleHttpOptions(auth.headers),
 	});
@@ -489,6 +504,34 @@ async function sendGoogleChatMessage(
 		toolCall: toolCall.name ? toolCall : undefined,
 		anthropicReasoning: null,
 	});
+}
+
+async function createGooglePassThroughAuthClient(): Promise<VSCloneGoogleAuthClient> {
+	// The IPC bridge tests execute inside Electron's renderer process while importing the real
+	// main-process request code. Keeping this dependency behind a dynamic import avoids tripping the
+	// renderer ESM loader on a server-only package in tests that never exercise the Google path.
+	const { PassThroughClient } = await import('google-auth-library');
+	return new PassThroughClient() as unknown as VSCloneGoogleAuthClient;
+}
+
+/**
+ * The renderer-hosted bridge tests import this module to exercise the real IPC seam, but they do
+ * not execute provider SDK paths. Keep those packages lazy so the renderer loader never has to
+ * parse Node-oriented SDK entrypoints unless a request for that vendor actually runs.
+ */
+async function loadOpenAIConstructor(): Promise<typeof import('openai').default> {
+	const { default: OpenAI } = await import('openai');
+	return OpenAI;
+}
+
+async function loadAnthropicConstructor(): Promise<typeof import('@anthropic-ai/sdk').default> {
+	const { default: Anthropic } = await import('@anthropic-ai/sdk');
+	return Anthropic;
+}
+
+async function loadGoogleGenAIConstructor(): Promise<VSCloneGoogleGenAIConstructor> {
+	const { GoogleGenAI } = await import('@google/genai');
+	return GoogleGenAI;
 }
 
 /**
@@ -551,7 +594,7 @@ function buildGoogleChatRequest(prepared: IVSCloneLLMPreparedChatPayload, signal
 			...(googleTools.length > 0 ? {
 				toolConfig: {
 					functionCallingConfig: {
-						mode: FunctionCallingConfigMode.AUTO,
+						mode: googleFunctionCallingConfigModeAuto,
 					},
 				},
 				tools: googleTools,
@@ -960,7 +1003,7 @@ function buildOpenAIInput(messages: readonly IVSCloneOpenAILLMChatMessage[]) {
 	return input;
 }
 
-function buildOpenAITools(mode: IVSCloneLLMPreparedChatPayload['mode']): OpenAI.Responses.FunctionTool[] {
+function buildOpenAITools(mode: IVSCloneLLMPreparedChatPayload['mode']): VSCloneOpenAIFunctionTool[] {
 	return getVSCloneVisibleToolDefinitions(mode).map(tool => ({
 		type: 'function',
 		name: tool.name,
@@ -970,22 +1013,22 @@ function buildOpenAITools(mode: IVSCloneLLMPreparedChatPayload['mode']): OpenAI.
 	}));
 }
 
-function buildAnthropicTools(mode: IVSCloneLLMPreparedChatPayload['mode']): Anthropic.Messages.Tool[] {
+function buildAnthropicTools(mode: IVSCloneLLMPreparedChatPayload['mode']): VSCloneAnthropicTool[] {
 	return getVSCloneVisibleToolDefinitions(mode).map(tool => ({
 		name: tool.name,
 		description: tool.description,
-		input_schema: cloneToolJsonSchema(toVSCloneToolJsonSchema(tool)) as Anthropic.Messages.Tool['input_schema'],
+		input_schema: cloneToolJsonSchema(toVSCloneToolJsonSchema(tool)) as VSCloneAnthropicToolInputSchema,
 	}));
 }
 
-function buildGoogleTools(mode: IVSCloneLLMPreparedChatPayload['mode']): Array<{ functionDeclarations: FunctionDeclaration[] }> {
-	const functionDeclarations: FunctionDeclaration[] = getVSCloneVisibleToolDefinitions(mode).map(tool => ({
+function buildGoogleTools(mode: IVSCloneLLMPreparedChatPayload['mode']): Array<{ functionDeclarations: VSCloneGoogleFunctionDeclaration[] }> {
+	const functionDeclarations: VSCloneGoogleFunctionDeclaration[] = getVSCloneVisibleToolDefinitions(mode).map(tool => ({
 		name: tool.name,
 		description: tool.description,
 		parameters: {
-			type: Type.OBJECT,
+			type: googleSchemaTypeObject,
 			properties: Object.fromEntries(tool.parameters.map(parameter => [parameter.name, {
-				type: Type.STRING,
+				type: googleSchemaTypeString,
 				description: parameter.description,
 			}])),
 			...(tool.parameters.some(parameter => parameter.required)
@@ -1073,7 +1116,7 @@ function parseToolArgsJson(value: string): Record<string, string> {
 }
 
 function toVSCloneToolCallFromOpenAIEventItem(
-	item: OpenAI.Responses.ResponseOutputItem,
+	item: VSCloneOpenAIResponseOutputItem,
 	currentToolCall: IVSCloneLLMMessageToolCall,
 	argsJson: string,
 ): IVSCloneLLMMessageToolCall {
@@ -1092,7 +1135,7 @@ function toVSCloneToolCallFromOpenAIEventItem(
 }
 
 function toVSCloneToolCallFromOpenAIResponse(
-	response: OpenAI.Responses.Response,
+	response: VSCloneOpenAIResponse,
 ): IVSCloneLLMMessageToolCall | undefined {
 	const functionCall = response.output.find(item => item.type === 'function_call');
 	if (!functionCall) {
@@ -1110,7 +1153,7 @@ function toVSCloneToolCallFromOpenAIResponse(
 }
 
 function toVSCloneToolCallFromAnthropicMessage(
-	message: Anthropic.Message,
+	message: VSCloneAnthropicMessage,
 ): IVSCloneLLMMessageToolCall | undefined {
 	const toolUseBlock = message.content.find(contentBlock => contentBlock.type === 'tool_use');
 	if (!toolUseBlock || !toolUseBlock.id || !toolUseBlock.name) {
@@ -1225,7 +1268,7 @@ function buildGoogleHttpOptions(headers: Readonly<Record<string, string>>) {
 	};
 }
 
-function getGooglePromptFeedbackErrorMessage(response: GenerateContentResponse): string | undefined {
+function getGooglePromptFeedbackErrorMessage(response: import('@google/genai').GenerateContentResponse): string | undefined {
 	const blockReason = response.promptFeedback?.blockReason;
 	if (!blockReason) {
 		return undefined;
@@ -1305,7 +1348,7 @@ function withoutHeader(headers: Readonly<Record<string, string>>, name: string):
 function bindAbortController(signal: AbortSignal, abort: () => void): () => void {
 	if (signal.aborted) {
 		abort();
-		return () => {};
+		return () => { };
 	}
 
 	const abortListener = () => abort();
