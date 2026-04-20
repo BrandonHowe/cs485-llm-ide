@@ -132,6 +132,9 @@ class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	cancelThread(threadId: string): void { this.lifecycleCalls.push(`cancel:${threadId}`); }
 	approveLatestToolRequest(): boolean { return false; }
 	rejectLatestToolRequest(): boolean { return false; }
+	isAutoApproveEdits(): boolean { return false; }
+	setAutoApproveEdits(): void { }
+	readonly onDidChangeAutoApproveEdits = Event.None;
 	getThreads(): readonly [] { return []; }
 	isDeletedThread(): boolean { return false; }
 	archiveThread(): boolean { return false; }

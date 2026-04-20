@@ -1,6 +1,122 @@
 # VSClone Frontend/Backend Integration Test Specification
 
-Scope: `src/vs/workbench/contrib/vsclone`. A "frontend/backend pathway" here means a renderer/workbench service coordinating with either the unified backend persistence layer or an Electron main-process IPC channel. This document inventories the deterministic cross-stack integration coverage that runs in the normal repo harness, plus the opt-in live-provider transport smoke coverage that calls the real OpenAI, Claude, and Gemini backends when credentials are configured locally. The live suite exercises the real renderer service and the real main-process channel implementation in-process through a test `IMainProcessService` adapter; it does not boot a full Electron workbench.
+Scope: The pathway-specific test matrix in this document is still scoped to `src/vs/workbench/contrib/vsclone`, but the document now also inventories the shared repo integration harnesses that the VSClone GitHub Actions workflows execute. That broader inventory matters because the GitHub checks are the real enforcement boundary: a VSClone change is considered integrated only after the dedicated VSClone suites and the shared backend/frontend integration harnesses both pass. A "frontend/backend pathway" here means a renderer/workbench service coordinating with either the unified backend persistence layer or an Electron main-process IPC channel. This document therefore inventories the deterministic cross-stack VSClone coverage, the repo-wide integration suite buckets that run in CI, and the opt-in live-provider transport smoke coverage that calls the real OpenAI, Claude, and Gemini backends when credentials are configured locally. The live suite exercises the real renderer service and the real main-process channel implementation in-process through a test `IMainProcessService` adapter; it does not boot a full Electron workbench.
+
+## Implementation Locations
+
+- Common deterministic VSClone coverage lives in `src/vs/workbench/contrib/vsclone/test/common/`. These tests cover backend-safe helpers, prompt/state formatting, and persistence adapters that are exercised by the dedicated backend workflow.
+- Browser-layer integration coverage lives in `src/vs/workbench/contrib/vsclone/test/browser/`. These tests cover renderer-owned services coordinating with the unified backend persistence layer and other frontend-side VSClone services.
+- Renderer-to-main-process bridge coverage lives in `src/vs/workbench/contrib/vsclone/test/electron-main/`. These tests cover the real IPC/channel seam and the optional live-provider transport smoke runs.
+- Live-provider CI support for the `electron-main` smoke suite lives in `.github/workflows/run-vsclone-live-provider-smoke.yml` and `build/azure-pipelines/common/mintVSCloneLiveProviderTokens.ts`.
+
+## CI Execution Matrix
+
+The plan is enforced by four distinct GitHub Actions surfaces. The dedicated VSClone workflows run VSClone-owned test globs directly, while the integration workflow runs the broader upstream VS Code harnesses that share the same compiled `out/` tree and extension bundles.
+
+| Workflow / job | Command | Coverage surface |
+| --- | --- | --- |
+| `.github/workflows/run-backend-tests.yml` / `VSClone Backend Tests` | `npm run test-node -- --runGlob '**/vsclone/test/common/**/*.test.js'` | Dedicated VSClone common/backend-safe deterministic tests under `src/vs/workbench/contrib/vsclone/test/common/`. |
+| `.github/workflows/run-backend-tests.yml` / `VSClone Backend Tests` | `xvfb-run -a ./scripts/test.sh --no-sandbox --disable-gpu-sandbox --runGlob '**/vsclone/test/electron-main/**/*.test.js'` | Dedicated VSClone Electron main-process bridge tests under `src/vs/workbench/contrib/vsclone/test/electron-main/`. |
+| `.github/workflows/run-frontend-tests.yml` / `VSClone Frontend Tests` | `npm run test-browser-no-install -- --browser chromium --runGlob '**/vsclone/test/browser/**/*.test.js'` | Dedicated VSClone browser/workbench tests under `src/vs/workbench/contrib/vsclone/test/browser/`. |
+| `.github/workflows/run-integration-tests.yml` / `VSClone Backend Integration Tests` | `xvfb-run -a ./scripts/test-integration.sh --no-sandbox --disable-gpu-sandbox --tfs "Integration Tests"` | Shared Electron integration harness. This is broader than VSClone and executes the repo-wide backend integration suite buckets listed below. |
+| `.github/workflows/run-integration-tests.yml` / `VSClone Frontend Integration Tests` | `./scripts/test-web-integration.sh --browser chromium` | Shared browser integration harness. This is broader than VSClone and executes the repo-wide frontend integration suite buckets listed below. |
+| `.github/workflows/run-vsclone-live-provider-smoke.yml` / `VSClone Live Provider Smoke` | `npm run test-node -- --runGlob '**/vsclone/test/electron-main/vscloneLLMMessageLiveProviderSmoke.test.js'` | Opt-in live OpenAI, Anthropic, and Google transport smoke coverage using real credentials. |
+
+## Current VSClone-Owned Suite Files
+
+The dedicated VSClone workflow globs currently expand to the following test files. This list is intentionally explicit so a newly added VSClone suite file does not silently drift outside the written plan.
+
+### Common deterministic files
+
+- `src/vs/workbench/contrib/vsclone/test/common/vscloneModelCapabilities.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/common/vsclonePlanModeService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/common/vsclonePrompts.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/common/vscloneSettingsService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/common/vscloneThreadModelSelectionService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/common/vscloneToolDefinitions.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/common/vscloneToolResultDiff.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/common/vscloneUnifiedChatStateStore.test.ts`
+
+### Browser/workbench files
+
+- `src/vs/workbench/contrib/vsclone/test/browser/vsclone.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneAutocompleteActions.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneAutocompleteService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneChatExecutionIntegration.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneChatThreadLifecycle.integration.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneChatThreadService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneContextGatheringService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneContribution.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneConvertToLLMMessageService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneEditCodeService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneMockCompletionBackend.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneModelSwitcherActions.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneModelSwitcherWidget.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneOAuthActions.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneOAuthService.integration.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneOAuthService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vsclonePlanModeIntegration.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneProviderConfigurationBridge.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneThreadActions.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneThreadRail.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneThreadRailTree.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneThreadRuntimeApprovalRegression.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneThreadRuntimeService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneThreadRuntimeSidecarCleanup.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneToolExecutionService.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneUnifiedChatBackend.integration.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneUnifiedChatViewPane.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/browser/vscloneUnifiedChatViewPaneApprovalRegression.test.ts`
+
+### Electron main-process files
+
+- `src/vs/workbench/contrib/vsclone/test/electron-main/vscloneLLMMessageBridge.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/electron-main/vscloneOAuthBridge.test.ts`
+- `src/vs/workbench/contrib/vsclone/test/electron-main/vscloneOAuthLoopbackChannel.test.ts`
+
+### Live smoke file
+
+- `src/vs/workbench/contrib/vsclone/test/electron-main/vscloneLLMMessageLiveProviderSmoke.test.ts`
+
+## Shared Backend Integration Harness
+
+The `Run Backend Integration Tests` step in `.github/workflows/run-integration-tests.yml` delegates to `scripts/test-integration.sh`. That script emits the following top-level log headings in order. These are repo-wide VS Code integration suites, not VSClone-owned suites, but they are part of the plan because the VSClone integration job does not pass unless every one of these harness entrypoints succeeds.
+
+| Log heading | Launch command in `scripts/test-integration.sh` | Primary coverage surface |
+| --- | --- | --- |
+| `### node.js integration tests` | `./scripts/test.sh --runGlob **/*.integrationTest.js "$@"` | Shared Electron/node integration tests selected by the `*.integrationTest.js` glob across compiled `out/**`. |
+| `### API tests (folder)` | `"$INTEGRATION_TEST_ELECTRON_PATH" ... --extensionTestsPath=$ROOT/extensions/vscode-api-tests/out/singlefolder-tests ...` | Single-folder extension host API contract coverage. |
+| `### API tests (workspace)` | `"$INTEGRATION_TEST_ELECTRON_PATH" ... --extensionTestsPath=$ROOT/extensions/vscode-api-tests/out/workspace-tests ...` | Multi-root/workspace extension host API contract coverage. |
+| `### Colorize tests` | `npm run test-extension -- -l vscode-colorize-tests` | TextMate grammar and token colorization extension integration. |
+| `### Terminal Suggest tests` | `npm run test-extension -- -l terminal-suggest --enable-proposed-api=vscode.vscode-api-tests` | Terminal completion and shell-integration suggestion workflows. |
+| `### TypeScript tests` | `"$INTEGRATION_TEST_ELECTRON_PATH" ... --extensionDevelopmentPath=$ROOT/extensions/typescript-language-features ...` | TypeScript/JavaScript language feature extension integration. |
+| `### Markdown tests` | `npm run test-extension -- -l markdown-language-features` | Markdown extension rendering and command integration. |
+| `### Emmet tests` | `"$INTEGRATION_TEST_ELECTRON_PATH" ... --extensionDevelopmentPath=$ROOT/extensions/emmet ...` | Emmet editor integration. |
+| `### Git tests` | `"$INTEGRATION_TEST_ELECTRON_PATH" $(mktemp -d 2>/dev/null) --extensionDevelopmentPath=$ROOT/extensions/git ...` | Git extension integration against a temporary workspace. |
+| `### Git Base tests` | `npm run test-extension -- -l git-base` | Shared git-base extension support layer coverage. |
+| `### Ipynb tests` | `npm run test-extension -- -l ipynb` | Notebook document and renderer extension integration for `.ipynb`. |
+| `### Notebook Output tests` | `npm run test-extension -- -l notebook-renderers` | Notebook output renderer integration. |
+| `### Configuration editing tests` | `npm run test-extension -- -l configuration-editing` | Settings editing and JSON configuration extension integration. |
+| `### GitHub Authentication tests` | `npm run test-extension -- -l github-authentication` | GitHub auth provider extension integration. |
+| `### CSS tests` | `cd $ROOT/extensions/css-language-features/server && $ROOT/scripts/node-electron.sh test/index.js` | Standalone CSS language server tests running under Electron's Node runtime. |
+| `### HTML tests` | `cd $ROOT/extensions/html-language-features/server && $ROOT/scripts/node-electron.sh test/index.js` | Standalone HTML language server tests running under Electron's Node runtime. |
+
+The cleaned backend log captures in `github-run-backend-integration-step.txt` and `local-run-backend-integration-step.txt` mirror these exact headings. That log shape is intentional and should remain stable enough to diagnose which harness bucket failed without reopening the raw GitHub Actions export.
+
+## Shared Frontend Integration Harness
+
+The `Run Frontend Integration Tests` step in `.github/workflows/run-integration-tests.yml` delegates to `scripts/test-web-integration.sh`. That browser harness is narrower than the Electron harness, but it is still broader than VSClone-specific tests and remains part of the integration plan because the same transpiled browser assets and extension bundles are involved.
+
+| Log heading | Launch command in `scripts/test-web-integration.sh` | Primary coverage surface |
+| --- | --- | --- |
+| `### API tests (folder)` | `node test/integration/browser/out/index.js --workspacePath $ROOT/extensions/vscode-api-tests/testWorkspace ... --extensionTestsPath=$ROOT/extensions/vscode-api-tests/out/singlefolder-tests "$@"` | Single-folder browser extension host API contract coverage. |
+| `### API tests (workspace)` | `node test/integration/browser/out/index.js --workspacePath $ROOT/extensions/vscode-api-tests/testworkspace.code-workspace ... --extensionTestsPath=$ROOT/extensions/vscode-api-tests/out/workspace-tests "$@"` | Multi-root/workspace browser extension host API contract coverage. |
+| `### TypeScript tests` | `node test/integration/browser/out/index.js --workspacePath $ROOT/extensions/typescript-language-features/test-workspace ...` | Browser-hosted TypeScript/JavaScript language feature extension integration. |
+| `### Markdown tests` | `node test/integration/browser/out/index.js --workspacePath $ROOT/extensions/markdown-language-features/test-workspace ...` | Browser-hosted Markdown extension integration. |
+| `### Emmet tests` | `node test/integration/browser/out/index.js --workspacePath $ROOT/extensions/emmet/test-workspace ...` | Browser-hosted Emmet extension integration. |
+| `### Git tests` | `node test/integration/browser/out/index.js --workspacePath $(mktemp -d 2>/dev/null) --extensionDevelopmentPath=$ROOT/extensions/git ...` | Browser-hosted Git extension integration. |
+| `### Ipynb tests` | `node test/integration/browser/out/index.js --workspacePath $(mktemp -d 2>/dev/null) --extensionDevelopmentPath=$ROOT/extensions/ipynb ...` | Browser-hosted notebook document integration. |
+| `### Configuration editing tests` | `node test/integration/browser/out/index.js --workspacePath $(mktemp -d 2>/dev/null) --extensionDevelopmentPath=$ROOT/extensions/configuration-editing ...` | Browser-hosted configuration editing integration. |
 
 ## Functionality That Must Be Tested
 
@@ -18,6 +134,7 @@ Scope: `src/vs/workbench/contrib/vsclone`. A "frontend/backend pathway" here mea
 - Runtime-owned clear-all must clear unified backend sidecars for every thread after runtime history is reset.
 - Public chat thread lifecycle APIs must clear unified backend sidecars when a thread is deleted.
 - Public chat thread lifecycle APIs must clear unified backend sidecars for every thread when chat history is fully cleared.
+- The dedicated VSClone backend, frontend, backend-integration, and frontend-integration GitHub workflows must continue to execute the suite entrypoints listed above, because those jobs are the concrete CI gates that guard the VSClone shipping path.
 
 ## Test Table
 

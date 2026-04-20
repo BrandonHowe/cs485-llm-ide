@@ -492,7 +492,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.focusInput();
 	}
 
-	override layoutBody(height: number, width: number): void {
+	// Keep the ViewPane lifecycle overrides protected so the production mangler can preserve the
+	// base-class visibility contract while still letting this pane customize layout/rendering.
+	protected override layoutBody(height: number, width: number): void {
 		super.layoutBody(height, width);
 		this.bodyWidth = width;
 		this.applyResponsiveLayout(width);
@@ -624,7 +626,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.focusInput();
 	}
 
-	override renderBody(parent: HTMLElement): void {
+	protected override renderBody(parent: HTMLElement): void {
 		super.renderBody(parent);
 
 		parent.classList.add("vsclone-unified-chat-view-pane");
@@ -1930,20 +1932,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				);
 				break;
 			case "awaiting_user":
-				statusClass = "awaiting";
-				label = state.streamState.approvalType
-					? localize(
-						"vsclone.thread.runtime.status.awaitingApproval",
-						"Approval required for {0} ({1}).",
-						state.streamState.toolName,
-						state.streamState.approvalType,
-					)
-					: localize(
-						"vsclone.thread.runtime.status.awaitingUser",
-						"Approval required for {0}.",
-						state.streamState.toolName,
-					);
-				break;
+				// The inline approval card already communicates the pending tool + Approve/Reject buttons,
+				// so the standalone yellow "Approval required" banner would just be a duplicate prompt.
+				return undefined;
 			case "tool":
 				if (this.hasVisibleRunningRuntimeTool(state.messages)) {
 					return undefined;
@@ -1967,12 +1958,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const badge = document.createElement("div");
 		badge.className = "vsclone-runtime-status-badge";
 		const icon = document.createElement("span");
-		icon.className = "codicon";
-		if (statusClass === "awaiting") {
-			icon.classList.add("codicon-pass");
-		} else {
-			icon.classList.add("codicon-loading", "codicon-modifier-spin");
-		}
+		icon.className = "codicon codicon-loading codicon-modifier-spin";
 		icon.setAttribute("aria-hidden", "true");
 		badge.appendChild(icon);
 		const text = document.createElement("span");
@@ -1996,6 +1982,32 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		state: IVSCloneThreadRuntimeState,
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool" }>,
 	): HTMLElement | undefined {
+		// attempt_completion is the agent's "I'm done" signal, not a real tool call. Cursor/Void
+		// don't have an equivalent — their agent loops stop when the model emits no tool call.
+		// Rendering the tool card made it look like the agent was still working after its final
+		// summary, so we fold the completion text into a final assistant-style row and drop the
+		// intermediate request/running transitions. Rejections/errors still surface as compact
+		// rows for diagnosability.
+		if (message.toolName === "attempt_completion") {
+			if (message.type === "tool_request" || message.type === "running_now") {
+				return undefined;
+			}
+			if (message.type === "success") {
+				const result = message.output?.trim();
+				if (!result) {
+					return undefined;
+				}
+				const item = document.createElement("div");
+				item.className = "vsclone-thread-message assistant runtime runtime-assistant";
+				const body = document.createElement("div");
+				body.className = "vsclone-thread-message-body";
+				this.appendMarkdownSegment(body, result, "vsclone-thread-message-assistant-text");
+				item.appendChild(body);
+				return item;
+			}
+			return this.renderCompactRuntimeToolMessage(message);
+		}
+
 		// Read-only tools (read_file, ls_dir, search_for_files) are high-volume and low-signal:
 		// every call otherwise renders three cards (pending → running → completed) plus the full
 		// tool output. Collapse them to a single italic status line emitted only on the terminal
@@ -2250,6 +2262,31 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}
 		});
 		buttons.appendChild(rejectButton);
+
+		// Edits-only: offer a workspace-scoped trust toggle so the user doesn't have to click Approve
+		// every time the agent wants to touch a file in a project they already trust. Other approval
+		// types (terminal, MCP) still require explicit per-call consent.
+		if (message.approvalType === "edits" && !this.threadRuntimeService.isAutoApproveEdits()) {
+			const alwaysApproveButton = document.createElement("button");
+			alwaysApproveButton.type = "button";
+			alwaysApproveButton.className = "vsclone-runtime-approval-button always-approve";
+			alwaysApproveButton.textContent = localize(
+				"vsclone.thread.runtime.tool.alwaysApproveEdits",
+				"Always approve edits in this project",
+			);
+			alwaysApproveButton.addEventListener(EventType.CLICK, () => {
+				this.threadRuntimeService.setAutoApproveEdits(true);
+				if (!this.threadRuntimeService.approveLatestToolRequest(threadId)) {
+					this.notificationService.warn(
+						localize(
+							"vsclone.thread.runtime.tool.approveMissing",
+							"The pending tool request is no longer available.",
+						),
+					);
+				}
+			});
+			buttons.appendChild(alwaysApproveButton);
+		}
 
 		row.appendChild(buttons);
 		item.appendChild(row);

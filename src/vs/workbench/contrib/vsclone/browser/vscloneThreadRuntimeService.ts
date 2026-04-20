@@ -57,6 +57,9 @@ const defaultPersistedToolExecutionTimeoutMs = 90_000;
 const maxAgentIterations = 25;
 const liveToolExecutionTimeoutMs = 90_000;
 const runtimeStorageKey = 'vsclone.threadRuntime.v2';
+// Workspace-scoped flag. Once enabled, edit_file/create_file approval prompts are auto-approved
+// for the current workspace. Not synced across machines since the user grants trust per checkout.
+const autoApproveEditsStorageKey = 'vsclone.autoApproveEdits.v1';
 
 export interface IVSCloneThreadRuntimeHandle {
 	readonly done: Promise<void>;
@@ -79,6 +82,13 @@ export interface IVSCloneThreadRuntimeService {
 	cancelThread(threadId: string): void;
 	approveLatestToolRequest(threadId: string): boolean;
 	rejectLatestToolRequest(threadId: string, reason?: string): boolean;
+	/**
+	 * When enabled, approvals for `edits` tools (edit_file, create_file) are granted automatically
+	 * for the active workspace. Terminal and MCP tool approvals are unaffected.
+	 */
+	isAutoApproveEdits(): boolean;
+	setAutoApproveEdits(enabled: boolean): void;
+	readonly onDidChangeAutoApproveEdits: Event<boolean>;
 	getThreads(query?: IVSCloneThreadRuntimeCatalogQuery): readonly IVSCloneThreadRuntimeCatalogEntry[];
 	isDeletedThread(threadId: string): boolean;
 	archiveThread(threadId: string, archived: boolean): boolean;
@@ -143,6 +153,9 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 
 	private readonly _onDidChangeState = this._register(new Emitter<IVSCloneThreadRuntimeState>());
 	readonly onDidChangeState = this._onDidChangeState.event;
+
+	private readonly _onDidChangeAutoApproveEdits = this._register(new Emitter<boolean>());
+	readonly onDidChangeAutoApproveEdits = this._onDidChangeAutoApproveEdits.event;
 
 	private readonly states = new Map<string, IVSCloneThreadRuntimeState>();
 	private readonly deletedThreadIds = new Set<string>();
@@ -415,6 +428,22 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		// instead of terminating the restored thread at the approval boundary.
 		this.resumeThreadFromPersistedToolDecision(threadId, pendingToolRequest, 'rejection');
 		return true;
+	}
+
+	isAutoApproveEdits(): boolean {
+		return this.storageService.getBoolean(autoApproveEditsStorageKey, StorageScope.WORKSPACE, false);
+	}
+
+	setAutoApproveEdits(enabled: boolean): void {
+		if (this.isAutoApproveEdits() === enabled) {
+			return;
+		}
+		if (enabled) {
+			this.storageService.store(autoApproveEditsStorageKey, true, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		} else {
+			this.storageService.remove(autoApproveEditsStorageKey, StorageScope.WORKSPACE);
+		}
+		this._onDidChangeAutoApproveEdits.fire(enabled);
 	}
 
 	getThreads(query?: IVSCloneThreadRuntimeCatalogQuery): readonly IVSCloneThreadRuntimeCatalogEntry[] {
@@ -1176,6 +1205,34 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			snapshots: [],
 			run: runContext,
 		}) as IVSCloneThreadRuntimeToolRequestMessage | undefined;
+
+		// Workspace-scoped auto-approve: skip the interactive wait for edits so repeat approvals
+		// don't block an agent that the user has already trusted for this project. Snapshot capture
+		// still runs below via the standard approved-path fall-through so checkpoints remain intact.
+		if (approvalType === 'edits' && this.isAutoApproveEdits() && toolRequestMessage) {
+			this.updateToolRequestSnapshots(threadId, toolRequestMessage.id, []);
+			void this.captureCheckpointSnapshots(toolName, params).then(snapshots => {
+				if (snapshots.length > 0) {
+					pendingCheckpointByToolKey.set(this.getToolInvocationKey(toolName, params), snapshots);
+					this.updateToolRequestSnapshots(threadId, toolRequestMessage.id, snapshots);
+				}
+			}, error => {
+				this.logService.warn('[VSCloneThreadRuntime] Failed to capture checkpoints for auto-approved %s: %s', toolName, error instanceof Error ? error.message : String(error));
+			});
+			this.appendMessage(threadId, {
+				role: 'tool',
+				createdAt: Date.now(),
+				type: 'running_now',
+				toolName,
+				approvalType,
+				params,
+			});
+			this.updateState(threadId, state => ({
+				...state,
+				streamState: { kind: 'tool', toolName },
+			}));
+			return { kind: 'approved' };
+		}
 
 		if (approvalType && toolRequestMessage) {
 			const execution = this.activeExecutions.get(threadId);

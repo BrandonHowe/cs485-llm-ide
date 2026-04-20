@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 concurrency:
   # Only the newest main build should publish because older runs would otherwise
@@ -62,7 +63,26 @@ jobs:
 
       - name: Build Windows Client
         shell: pwsh
-        run: npm run gulp "vscode-win32-x64-min-ci" "vscode-win32-x64-inno-updater" "vscode-win32-x64-user-setup"
+        # Gulp runs multiple CLI task arguments in parallel, but the installer
+        # packaging task reads files produced by the min build. Keep the steps
+        # split so a clean GitHub Actions checkout cannot race on product.json.
+        run: npm run gulp "vscode-win32-x64-min-ci"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Windows Inno Updater
+        shell: pwsh
+        # The updater binary has to land in the built client tree before Inno
+        # Setup packages the user installer, matching the upstream CI sequence.
+        run: npm run gulp "vscode-win32-x64-inno-updater"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package Windows User Setup
+        shell: pwsh
+        # Package the installer only after the application bundle and updater
+        # helper both exist, otherwise the gulp task fails on missing inputs.
+        run: npm run gulp "vscode-win32-x64-user-setup"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -281,6 +301,9 @@ jobs:
     needs:
       - build-windows
       - build-macos-universal
+    # Manual branch runs are useful for validating the release build graph, but
+    # only an actual push to main should move the rolling tag and release.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
