@@ -204,6 +204,10 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 			return { success: false, output: this.invalidPathMessage(path) };
 		}
 
+		if (isEnvFilePath(target.rawPath)) {
+			return { success: false, output: this.envProtectionMessage(target.rawPath) };
+		}
+
 		const stat = await this.safeResolve(target.uri);
 		if (!stat) {
 			return { success: false, output: `File not found: ${target.rawPath}` };
@@ -395,6 +399,10 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 			return { success: false, output: this.invalidPathMessage(path) };
 		}
 
+		if (isEnvFilePath(target.rawPath)) {
+			return { success: false, output: this.envProtectionMessage(target.rawPath) };
+		}
+
 		const stat = await this.safeResolve(target.uri);
 		if (!stat) {
 			return { success: false, output: `File not found: ${target.rawPath}` };
@@ -474,6 +482,10 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		const target = this.resolveWorkspacePath(path);
 		if (!target) {
 			return { success: false, output: this.invalidPathMessage(path) };
+		}
+
+		if (isEnvFilePath(target.rawPath)) {
+			return { success: false, output: this.envProtectionMessage(target.rawPath) };
 		}
 
 		if (await this.fileService.exists(target.uri)) {
@@ -682,6 +694,10 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		return { uri: candidate, rawPath: normalizedPath };
 	}
 
+	private envProtectionMessage(path: string): string {
+		return `Access denied: ${path} is a .env file. .env files are protected from read/write access. They remain visible in directory listings but their contents cannot be read or modified by tools.`;
+	}
+
 	private async readFileContents(resource: URI): Promise<string> {
 		// Open models include unsaved text; prefer them so edits/search operate on what the user sees.
 		const openModel = this.modelService.getModel(resource);
@@ -800,6 +816,17 @@ function parseSearchReplaceBlocks(changes: string): readonly IParsedSearchReplac
 
 function normalizePath(rawPath: string): string {
 	return rawPath.trim().replace(/^`+|`+$/g, '').replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, '');
+}
+
+/**
+ * `.env` files frequently hold secrets (API keys, DB URLs, OAuth credentials) that must never
+ * leave the local machine. The tool runtime enforces this as a hard block on read/write, but
+ * still allows them to appear in directory listings so the agent can reason about project layout.
+ * Matches `.env`, `.env.local`, `.env.production`, etc.
+ */
+function isEnvFilePath(rawPath: string): boolean {
+	const basename = rawPath.split(/[\\/]/).pop() ?? rawPath;
+	return basename === '.env' || basename.startsWith('.env.');
 }
 
 function summarizeEditPayload(changes: string): string {

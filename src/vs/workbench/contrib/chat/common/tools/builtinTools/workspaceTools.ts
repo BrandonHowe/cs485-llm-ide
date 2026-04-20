@@ -708,16 +708,26 @@ export class CreateFileTool extends WorkspaceToolBase implements IToolImpl {
 		}
 
 		if (!target.isInsideWorkspace || exists) {
+			// The NLS extractor only supports literal message strings, so branch before localize(...)
+			// instead of embedding conditional expressions inside the localized message arguments.
+			const invocationAction = exists
+				? localize('workspaceTools.createFile.action.overwrite', 'Overwriting')
+				: localize('workspaceTools.createFile.action.create', 'Creating');
+			const pastTenseAction = exists
+				? localize('workspaceTools.createFile.past.overwrite', 'Overwrote')
+				: localize('workspaceTools.createFile.past.create', 'Created');
+			const confirmationTitle = exists
+				? localize('workspaceTools.createFile.confirm.title.overwrite', 'Allow overwriting this file?')
+				: localize('workspaceTools.createFile.confirm.title.create', 'Allow creating this file?');
+			const confirmationMessage = exists
+				? localize('workspaceTools.createFile.confirm.message.overwrite', 'Overwrite `{0}` with the provided contents.', target.resource.fsPath || target.resource.path)
+				: localize('workspaceTools.createFile.confirm.message.create', 'Create `{0}` with the provided contents.', target.resource.fsPath || target.resource.path);
 			return {
-				invocationMessage: localize('workspaceTools.createFile.action', '{0} {1}', exists ? 'Overwriting' : 'Creating', target.resource.fsPath || target.resource.path),
-				pastTenseMessage: localize('workspaceTools.createFile.past', '{0} {1}', exists ? 'Overwrote' : 'Created', target.resource.fsPath || target.resource.path),
+				invocationMessage: localize('workspaceTools.createFile.action', '{0} {1}', invocationAction, target.resource.fsPath || target.resource.path),
+				pastTenseMessage: localize('workspaceTools.createFile.past', '{0} {1}', pastTenseAction, target.resource.fsPath || target.resource.path),
 				confirmationMessages: {
-					title: localize('workspaceTools.createFile.confirm.title', exists ? 'Allow overwriting this file?' : 'Allow creating this file?'),
-					message: new MarkdownString(localize(
-						'workspaceTools.createFile.confirm.message',
-						exists ? 'Overwrite `{0}` with the provided contents.' : 'Create `{0}` with the provided contents.',
-						target.resource.fsPath || target.resource.path,
-					)),
+					title: confirmationTitle,
+					message: new MarkdownString(confirmationMessage),
 				},
 			};
 		}

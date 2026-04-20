@@ -239,8 +239,11 @@ suite('VSCloneThreadRuntimeService', () => {
 		await handle.done;
 
 		const toolMessages = service.getState('thread-1')?.messages.filter(message => message.role === 'tool') ?? [];
-		const rejectedMessage = toolMessages.find(message => message.type === 'rejected') as Extract<typeof toolMessages[number], { type: 'rejected' }> | undefined;
+		const rejectedMessage = toolMessages.find(message => message.type === 'rejected');
 		assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'rejected']);
-		assert.strictEqual(rejectedMessage?.output, 'Rejected by the test harness.');
+		// Tool terminal states share one result-message interface, so an explicit runtime guard keeps
+		// this assertion aligned with the actual message shape instead of over-constraining the type.
+		assert.ok(rejectedMessage && 'output' in rejectedMessage);
+		assert.strictEqual(rejectedMessage.output, 'Rejected by the test harness.');
 	});
 });

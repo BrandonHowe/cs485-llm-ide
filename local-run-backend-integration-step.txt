@@ -1,0 +1,2448 @@
+Running integration tests out of sources.
+Storing crash reports into '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'.
+Storing log files into '/Users/brandonhowe/Documents/NJIT/vsclone/.build/logs/integration-tests'.
+
+### node.js integration tests
+
+> code-oss-dev@1.110.0 electron
+> node build/lib/electron.ts
+
+(node:930) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[985:0419/210047.034760:INFO:CONSOLE:2] "The vm module of Node.js is unsupported in Electron's renderer process due to incompatibilities with the Blink rendering engine. Crashes are likely and avoiding the module is highly recommended. This module may be removed in a future release.", source: node:electron/js2c/renderer_init (2)
+[985:0419/210047.444752:INFO:CONSOLE:2] "Platform browser has already been set. Overwriting the platform with [object Object].", source: /Users/brandonhowe/Documents/NJIT/vsclone/node_modules/@vscode/vscode-languagedetection/dist/lib/index.js (2)
+(node:1501) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `Code - OSS Helper (Renderer) --trace-deprecation ...` to show where the warning was created)
+(node:1501) [DEP0025] DeprecationWarning: sys is deprecated. Use util instead.
+(node:1501) ExperimentalWarning: WASI is an experimental feature and might change at any time
+
+  Tests are using suiteSetup and setup correctly
+    ✔ assertCleanState - check that registries are clean at the start of test running
+
+  IPC, Child Process
+    ✔ createChannel
+    ✔ events
+    ✔ event dispose
+
+  Storage Library
+    ✔ objects
+    ✔ basics
+    ✔ external changes
+    ✔ close flushes data
+    ✔ explicit flush
+    ✔ conflicting updates
+    ✔ corrupt DB recovers
+
+  SQLite Storage Library
+    ✔ basics
+    ✔ basics (open multiple times)
+    ✔ basics (corrupt DB falls back to empty DB)
+    ✔ basics (corrupt DB restores from previous backup)
+    ✔ basics (corrupt DB falls back to empty DB if backup is corrupt)
+    ✔ basics (DB that becomes corrupt during runtime stores all state from cache on close)
+    ✔ real world example
+    ✔ very large item value (55ms)
+    ✔ multiple concurrent writes execute in sequence
+    ✔ lots of INSERT & DELETE (below inline max)
+    ✔ lots of INSERT & DELETE (above inline max)
+    ✔ invalid path does not hang
+    ✔ optimize (58ms)
+
+  Processes
+    ✔ buffered sending - simple data (164ms)
+    - buffered sending - lots of data (potential deadlock on win32)
+
+  Editor Controller
+    ✔ issue #23913: Greater than 1000+ multi cursor typing replacement text appears inverted, lines begin to drop off selection (99ms)
+
+  Native Modules (all platforms)
+    - kerberos
+    ✔ yauzl
+    ✔ yazl
+    ✔ v8-inspect-profiler
+    ✔ native-is-elevated
+    ✔ native-keymap (44ms)
+    ✔ @vscode/native-watchdog
+    ✔ @vscode/sudo-prompt
+    ✔ @vscode/policy-watcher
+    ✔ node-pty
+    ✔ @vscode/spdlog
+    ✔ @parcel/watcher
+    ✔ @vscode/deviceid
+    ✔ @vscode/ripgrep
+    ✔ vscode-regexpp
+    ✔ @vscode/sqlite3
+    ✔ http-proxy-agent
+    ✔ https-proxy-agent
+    ✔ @vscode/proxy-agent
+
+  Native Modules (Windows)
+    - @vscode/windows-mutex
+    - windows-foreground-love
+    - @vscode/windows-process-tree
+    - @vscode/windows-registry
+
+  IndexedDBFileSystemProvider
+    ✔ root is always present
+    ✔ createFolder
+    ✔ createFolder: creating multiple folders at once
+    ✔ exists
+    ✔ resolve - file
+    ✔ resolve - directory
+    ✔ createFile
+    ✔ createFile (readable)
+    ✔ createFile (stream)
+    ✔ createFile - batch
+    ✔ createFile - batch (mixed parallel/sequential)
+    ✔ rename not existing resource
+    ✔ rename to an existing file without overwrite
+    ✔ rename folder to an existing folder without overwrite
+    ✔ rename file to a folder
+    ✔ rename folder to a file
+    ✔ rename file
+    ✔ rename to an existing file with overwrite
+    ✔ rename folder to a new folder
+    ✔ rename folder to an existing folder
+    ✔ rename a folder that has multiple files and folders
+    ✔ rename a folder to another folder that has some files
+    ✔ deleteFile
+    ✔ deleteFolder (recursive)
+    ✔ deleteFolder (non recursive)
+    ✔ delete empty folder
+    ✔ delete empty folder with reccursive
+    ✔ deleteFolder with folders and files (recursive)
+    ✔ writeFile with append - existing file
+    ✔ writeFile with append - non-existent file
+    ✔ writeFile with append - multiple appends
+    ✔ writeFile without append - overwrites content
+    ✔ writeFile with append - binary content
+    ✔ provider writeFile with append - direct provider API
+
+  Disk File Service
+    ✔ createFolder
+    ✔ createFolder: creating multiple folders at once
+    ✔ exists
+    ✔ resolve - file
+    ✔ resolve - directory
+    ✔ resolve - directory - with metadata
+    ✔ resolve - directory with resolveTo
+    ✔ resolve - directory - resolveTo single directory
+    ✔ resolve directory - resolveTo multiple directories
+    ✔ resolve directory - resolveTo with a URI that has query parameter (https://github.com/microsoft/vscode/issues/128151)
+    ✔ resolve directory - resolveSingleChildFolders
+    ✔ resolves
+    ✔ resolve / realpath - folder symbolic link
+    ✔ resolve - file symbolic link
+    ✔ resolve - symbolic link pointing to nonexistent file does not break
+    ✔ stat - file
+    ✔ stat - directory
+    ✔ stat - executable
+    ✔ deleteFile (non recursive)
+    ✔ deleteFile (recursive)
+    ✔ deleteFile (useTrash)
+    ✔ deleteFile - symbolic link (exists)
+    ✔ deleteFile - symbolic link (pointing to nonexistent file)
+    ✔ deleteFolder (recursive)
+    ✔ deleteFolder (recursive, atomic)
+    ✔ deleteFolder (recursive, useTrash)
+    ✔ deleteFolder (non recursive)
+    ✔ deleteFolder empty folder (recursive)
+    ✔ deleteFolder empty folder (non recursive)
+    ✔ move
+    ✔ move - across providers (buffered => buffered)
+    ✔ move - across providers (unbuffered => unbuffered)
+    ✔ move - across providers (buffered => unbuffered)
+    ✔ move - across providers (unbuffered => buffered)
+    ✔ move - across providers - large (buffered => buffered)
+    ✔ move - across providers - large (unbuffered => unbuffered)
+    ✔ move - across providers - large (buffered => unbuffered)
+    ✔ move - across providers - large (unbuffered => buffered)
+    ✔ move - multi folder
+    ✔ move - directory
+    ✔ move - directory - across providers (buffered => buffered)
+    ✔ move - directory - across providers (unbuffered => unbuffered)
+    ✔ move - directory - across providers (buffered => unbuffered)
+    ✔ move - directory - across providers (unbuffered => buffered)
+    ✔ move - MIX CASE
+    ✔ move - same file
+    ✔ move - same file #2
+    ✔ move - source parent of target
+    ✔ move - FILE_MOVE_CONFLICT
+    ✔ move - overwrite folder with file
+    ✔ copy
+    ✔ copy - unbuffered (FileSystemProviderCapabilities.FileReadWrite)
+    ✔ copy - unbuffered large (FileSystemProviderCapabilities.FileReadWrite)
+    ✔ copy - buffered (FileSystemProviderCapabilities.FileOpenReadWriteClose)
+    ✔ copy - buffered large (FileSystemProviderCapabilities.FileOpenReadWriteClose)
+    ✔ copy - overwrite folder with file
+    ✔ copy - MIX CASE same target - no overwrite
+    ✔ copy - MIX CASE same target - overwrite
+    ✔ copy - MIX CASE different target - overwrite
+    ✔ copy - same file
+    ✔ copy - same file #2
+    ✔ cloneFile - basics
+    ✔ cloneFile - via copy capability
+    ✔ cloneFile - via pipe
+    ✔ readFile - small file - default
+    ✔ readFile - small file - buffered
+    ✔ readFile - small file - buffered / readonly
+    ✔ readFile - small file - unbuffered
+    ✔ readFile - small file - unbuffered / readonly
+    ✔ readFile - small file - streamed
+    ✔ readFile - small file - streamed / readonly
+    ✔ readFile - large file - default
+    ✔ readFile - large file - buffered
+    ✔ readFile - large file - unbuffered
+    ✔ readFile - large file - streamed
+    ✔ readFile - atomic (emulated on service level)
+    ✔ readFile - atomic (natively supported)
+    ✔ readFileStream - small file - default
+    ✔ readFileStream - small file - buffered
+    ✔ readFileStream - small file - unbuffered
+    ✔ readFileStream - small file - streamed
+    ✔ readFile - Files are intermingled #38331 - default
+    ✔ readFile - Files are intermingled #38331 - buffered
+    ✔ readFile - Files are intermingled #38331 - unbuffered
+    ✔ readFile - Files are intermingled #38331 - streamed
+    ✔ readFile - from position (ASCII) - default
+    ✔ readFile - from position (ASCII) - buffered
+    ✔ readFile - from position (ASCII) - unbuffered
+    ✔ readFile - from position (ASCII) - streamed
+    ✔ readFile - from position (with umlaut) - default
+    ✔ readFile - from position (with umlaut) - buffered
+    ✔ readFile - from position (with umlaut) - unbuffered
+    ✔ readFile - from position (with umlaut) - streamed
+    ✔ readFile - 3 bytes (ASCII) - default
+    ✔ readFile - 3 bytes (ASCII) - buffered
+    ✔ readFile - 3 bytes (ASCII) - unbuffered
+    ✔ readFile - 3 bytes (ASCII) - streamed
+    ✔ readFile - 20000 bytes (large) - default
+    ✔ readFile - 20000 bytes (large) - buffered
+    ✔ readFile - 20000 bytes (large) - unbuffered
+    ✔ readFile - 20000 bytes (large) - streamed
+    ✔ readFile - 80000 bytes (large) - default
+    ✔ readFile - 80000 bytes (large) - buffered
+    ✔ readFile - 80000 bytes (large) - unbuffered
+    ✔ readFile - 80000 bytes (large) - streamed
+    ✔ readFile - FILE_IS_DIRECTORY
+    ✔ readFile - FILE_NOT_DIRECTORY
+    ✔ readFile - FILE_NOT_FOUND
+    ✔ readFile - FILE_NOT_MODIFIED_SINCE - default
+    ✔ readFile - FILE_NOT_MODIFIED_SINCE - buffered
+    ✔ readFile - FILE_NOT_MODIFIED_SINCE - unbuffered
+    ✔ readFile - FILE_NOT_MODIFIED_SINCE - streamed
+    ✔ readFile - FILE_NOT_MODIFIED_SINCE does not fire wrongly - https://github.com/microsoft/vscode/issues/72909
+    ✔ readFile - FILE_TOO_LARGE - default
+    ✔ readFile - FILE_TOO_LARGE - buffered
+    ✔ readFile - FILE_TOO_LARGE - unbuffered
+    ✔ readFile - FILE_TOO_LARGE - streamed
+    ✔ readFile - dangling symbolic link - https://github.com/microsoft/vscode/issues/116049
+    ✔ createFile
+    ✔ createFile (readable)
+    ✔ createFile (stream)
+    ✔ createFile (does not overwrite by default)
+    ✔ createFile (allows to overwrite existing)
+    ✔ writeFile - default
+    ✔ writeFile - flush on write
+    ✔ writeFile - buffered
+    ✔ writeFile - unbuffered
+    ✔ writeFile - default (atomic)
+    ✔ writeFile - flush on write (atomic)
+    ✔ writeFile - buffered (atomic)
+    ✔ writeFile - unbuffered (atomic)
+    ✔ writeFile - atomic writing does not break symlinks
+    ✔ writeFile (large file) - default
+    ✔ writeFile (large file) - buffered
+    ✔ writeFile (large file) - unbuffered
+    ✔ writeFile (large file) - default (atomic)
+    ✔ writeFile (large file) - buffered (atomic)
+    ✔ writeFile (large file) - unbuffered (atomic)
+    ✔ writeFile (large file) - unbuffered (atomic) - concurrent writes with multiple services
+    ✔ writeFile - buffered - readonly throws
+    ✔ writeFile - unbuffered - readonly throws
+    ✔ writeFile (large file) - multiple parallel writes queue up and atomic read support (via file service)
+    ✔ provider - write barrier prevents dirty writes
+    ✔ provider - write barrier is partitioned per resource
+    ✔ provider - write barrier not becoming stale
+    ✔ provider - atomic reads (write pending when read starts)
+    ✔ provider - atomic reads (read pending when write starts)
+    ✔ writeFile (readable) - default
+    ✔ writeFile (readable) - buffered
+    ✔ writeFile (readable) - unbuffered
+    ✔ writeFile (large file - readable) - default (52ms)
+    ✔ writeFile (large file - readable) - buffered (46ms)
+    ✔ writeFile (large file - readable) - unbuffered
+    ✔ writeFile (stream) - default
+    ✔ writeFile (stream) - buffered
+    ✔ writeFile (stream) - unbuffered
+    ✔ writeFile (large file - stream) - default
+    ✔ writeFile (large file - stream) - buffered
+    ✔ writeFile (large file - stream) - unbuffered
+    ✔ writeFile (file is created including parents)
+    ✔ writeFile - locked files and unlocking
+    ✔ writeFile (stream) - locked files and unlocking
+    ✔ writeFile - locked files and unlocking throws error when missing capability
+    ✔ writeFile (stream) - locked files and unlocking throws error when missing capability
+    ✔ writeFile (error when folder is encountered)
+    ✔ writeFile (no error when providing up to date etag)
+    ✔ writeFile - error when writing to file that has been updated meanwhile
+    ✔ writeFile - no error when writing to file where size is the same
+    ✔ writeFile - no error when writing to file where content is the same
+    ✔ writeFile - error when writing to file where content is the same length but different
+    ✔ writeFile - no error when writing to same nonexistent folder multiple times different new files
+    ✔ writeFile - error when writing to folder that is a file
+    ✔ appendFile
+    ✔ appendFile - buffered
+    ✔ appendFile (readable)
+    ✔ appendFile (readable) - buffered
+    ✔ appendFile (stream)
+    ✔ appendFile (stream) - buffered
+    ✔ appendFile - creates file if not exists
+    ✔ appendFile - creates file if not exists (buffered)
+    ✔ appendFile - multiple appends
+    ✔ appendFile - multiple appends (buffered)
+    ✔ appendFile - throws when provider does not support append
+    ✔ read - mixed positions
+    ✔ write - mixed positions
+    ✔ readonly - is handled properly for a single resource
+
+  ExtHostAuthentication
+    ✔ createIfNone - true
+    ✔ createIfNone - false
+    ✔ silent - true
+    ✔ forceNewSession - true - existing session
+    ✔ forceNewSession - true - no existing session
+    ✔ forceNewSession - detail
+    ✔ clearSessionPreference - true
+    ✔ silently getting session should return a session (if any) regardless of preference - fixes #137819
+    ✔ createIfNone and forceNewSession
+    ✔ forceNewSession and silent
+    ✔ createIfNone and silent
+    ✔ Can get multiple sessions (with different scopes) in one extension
+    ✔ Can get multiple sessions (from different providers) in one extension
+    ✔ Can get multiple sessions (from different providers) in one extension at the same time
+    ✔ concurrent operations on same provider are serialized (77ms)
+    ✔ provider registration and immediate disposal race condition
+    ✔ provider re-registration after proper disposal
+    ✔ operations on different providers run concurrently
+
+  MainThreadAuthentication
+    ✔ provider registration completes without errors
+    ✔ event suppression during explicit unregistration
+    ✔ concurrent provider registrations complete without errors
+
+  TerminalProfileService
+    ✔ should get profiles from remoteTerminalService when there is a remote authority
+    ✔ should fire onDidChangeAvailableProfiles only when available profiles have changed via user config
+    ✔ should fire onDidChangeAvailableProfiles when available or contributed profiles have changed via remote/localTerminalService
+    ✔ should call refreshAvailableProfiles _onDidChangeExtensions
+    Contributed Profiles
+      ✔ should filter out contributed profiles set to null (Linux)
+      ✔ should filter out contributed profiles set to null (Windows)
+      ✔ should filter out contributed profiles set to null (macOS)
+      ✔ should include contributed profiles
+    Profiles Quickpick
+      ✔ setDefault
+      ✔ setDefault to contributed
+      ✔ createInstance
+      ✔ createInstance with contributed
+
+  Terminal Contrib Shell Integration Recordings
+    ✔ rich_windows11_pwsh7_echo_3_times (255ms)
+    ✔ rich_windows11_pwsh7_ls_one_time (301ms)
+    ✔ rich_windows11_pwsh7_type_foo (38ms)
+    ✔ rich_windows11_pwsh7_type_foo_left_twice (38ms)
+    ✔ rich_macos_zsh_omz_echo_3_times (71ms)
+    ✔ rich_macos_zsh_omz_ls_one_time
+    ✔ basic_macos_zsh_p10k_ls_one_time
+
+  FileSearch-integration
+    ✔ File - simple
+    ✔ File - filepattern
+    ✔ File - exclude
+    ✔ File - multiroot
+    ✔ File - multiroot with folder name
+    ✔ File - multiroot with folder name and sibling exclude
+
+  RawSearchService
+    ✔ Individual results
+    ✔ Batch results
+    ✔ Collect batched results
+    ✔ Multi-root with include pattern and maxResults
+    ✔ Handles maxResults=0 correctly
+    ✔ Multi-root with include pattern and exists
+    ✔ Sorted results
+    ✔ Sorted result batches
+    ✔ Cached results
+
+  FileSearchEngine
+    ✔ Files: *.js
+    ✔ Files: maxResults
+    ✔ Files: maxResults without Ripgrep
+    ✔ Files: exists
+    ✔ Files: not exists
+    ✔ Files: exists without Ripgrep
+    ✔ Files: not exists without Ripgrep
+    ✔ Files: examples/com*
+    ✔ Files: examples (fuzzy)
+    ✔ Files: multiroot
+    ✔ Files: multiroot with includePattern and maxResults
+    ✔ Files: multiroot with includePattern and exists
+    ✔ Files: NPE (CamelCase)
+    ✔ Files: *.*
+    ✔ Files: *.as
+    ✔ Files: *.* without derived
+    ✔ Files: *.* exclude folder without wildcard
+    ✔ Files: exclude folder without wildcard #36438
+    ✔ Files: include folder without wildcard #36438
+    ✔ Files: *.* exclude folder with leading wildcard
+    ✔ Files: *.* exclude folder with trailing wildcard
+    ✔ Files: *.* exclude with unicode
+    ✔ Files: *.* include with unicode
+    ✔ Files: multiroot with exclude
+    ✔ Files: Unicode and Spaces
+    ✔ Files: no results
+    ✔ Files: relative path matched once
+    ✔ Files: Include pattern, single files
+    ✔ Files: extraFiles only
+    ✔ Files: extraFiles only (with include)
+    ✔ Files: extraFiles only (with exclude)
+    ✔ Files: no dupes in nested folders
+
+  FileWalker
+    ✔ Find: exclude subfolder
+    ✔ Find: folder excludes
+    ✔ Find: exclude multiple folders
+    ✔ Find: exclude folder path suffix
+    ✔ Find: exclude subfolder path suffix
+    ✔ Find: exclude folder path
+    ✔ Find: exclude combination of paths
+
+  TextSearch-integration
+    ✔ Text: GameOfLife
+    ✔ Text: GameOfLife (RegExp)
+    ✔ Text: GameOfLife (unicode escape sequences)
+    ✔ Text: GameOfLife (unicode escape sequences, force PCRE2)
+    ✔ Text: GameOfLife (PCRE2 RegExp)
+    ✔ Text: GameOfLife (RegExp to EOL)
+    ✔ Text: GameOfLife (Word Match, Case Sensitive)
+    ✔ Text: GameOfLife (Word Match, Spaces)
+    ✔ Text: GameOfLife (Word Match, Punctuation and Spaces)
+    ✔ Text: Helvetica (UTF 16)
+    ✔ Text: e
+    ✔ Text: e (with excludes)
+    ✔ Text: e (with includes)
+    ✔ Text: sibling exclude
+    ✔ Text: e (with includes and exclude)
+    ✔ Text: a (capped)
+    ✔ Text: a (no results)
+    ✔ Text: -size
+    ✔ Multiroot: Conway
+    ✔ Multiroot: e with partial global exclude
+    ✔ Multiroot: e with global excludes
+    ✔ Multiroot: e with folder exclude
+    ✔ Text: 语
+    ✔ Multiple matches on line: h\d,
+    ✔ Search with context matches
+    error messages
+      ✔ invalid encoding
+      ✔ invalid regex case 1
+      ✔ invalid regex case 2
+
+  Files - TextFileEditorModel (integration)
+    ✔ backup and restore (simple)
+    ✔ backup and restore (large, #121347)
+
+  Encoding
+    ✔ resolve terminal encoding (detect)
+    ✔ resolve terminal encoding (environment)
+
+  Untitled text editors
+    ✔ backup and restore (simple)
+    ✔ backup and restore (large, #121347)
+
+  392 passing (4s)
+  6 pending
+
+### API tests (folder)
+
+> code-oss-dev@1.110.0 electron
+> node build/lib/electron.ts
+
+(node:2030) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[21:00:55] Synchronizing built-in extensions...
+[21:00:55] You can manage built-in extensions with the --builtin flag
+[21:00:55] [github] ms-vscode.js-debug-companion@1.1.3 ✔︎
+[21:00:55] [github] ms-vscode.js-debug@1.105.0 ✔︎
+[21:00:55] [github] ms-vscode.vscode-js-profile-table@1.0.10 ✔︎
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:00:57.750Z] [CSS_DEV] DONE, 301 css modules (81ms)
+[main 2026-04-20T01:00:57.833Z] update#setState disabled
+Started local extension host with pid 2216.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/vscode-api-tests
+No default agent registered
+[1984:0419/210100.238260:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  chat
+[1984:0419/210100.508304:INFO:CONSOLE:0] "ResizeObserver loop completed with undelivered notifications.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/code/electron-browser/workbench/workbench-dev.html (0)
+[1984:0419/210100.563433:INFO:CONSOLE:0] "ResizeObserver loop completed with undelivered notifications.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/code/electron-browser/workbench/workbench-dev.html (0)
+    ✔ participant and slash command history (157ms)
+    ✔ result metadata is returned to the followup provider
+    ✔ isolated participant history (69ms)
+    - workbench.action.chat.open.blockOnResponse defaults to non-blocking for backwards compatibility
+    - workbench.action.chat.open.blockOnResponse resolves when waiting for user confirmation to run a tool
+    - workbench.action.chat.open.blockOnResponse resolves when an error is hit
+    ✔ title provider is called for first request (536ms)
+    ✔ can access node-pty module
+  vscode API - commands
+    ✔ getCommands
+    ✔ command with args
+    ✔ editorCommand with extra args (91ms)
+    ✔ api-command: vscode.diff (55ms)
+    ✔ api-command: vscode.open (88ms)
+    ✔ api-command: vscode.open with untitled supports associated resource (#138925)
+  vscode API - configuration
+    ✔ configurations, language defaults
+    ✔ configuration, defaults
+    ✔ configuration, name vs property
+  vscode API - debug
+    - breakpoints are available before accessing debug extension API
+    ✔ breakpoints
+    ✔ function breakpoint
+    - start debugging
+[1984:0419/210101.769408:INFO:CONSOLE:25] "Error: Configuration 'non existent' is missing in 'launch.json'.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+    ✔ start debugging failure (58ms)
+  vscode API - Copy Paste
+    - Copy should be able to overwrite text/plain
+    - Copy with empty selection should copy entire line
+    - Copy with multiple selections should get all selections
+    - Earlier invoked copy providers should win when writing values
+    - Copy providers should not be able to effect the data transfer of another
+    - One failing provider should not effect other
+  vscode API - editors
+    ✔ insert snippet (45ms)
+    ✔ insert snippet with clipboard variables (66ms)
+    ✔ insert snippet with replacement, editor selection (49ms)
+    ✔ insert snippet with replacement, avoid adjusting indentation (42ms)
+    ✔ insert snippet with replacement, selection as argument (38ms)
+    ✔ make edit
+    ✔ issue #6281: Edits fail to validate ranges correctly before applying (61ms)
+    ✔ issue #16573: Extension API: insertSpaces and tabSize are undefined
+    ✔ issue #20757: Overlapping ranges are not allowed!
+    ✔ throw when using invalid edit
+    ✔ editor contents are correctly read (small file)
+    ✔ editor contents are correctly read (large file)
+    ✔ extEditor.selection can be empty #18075
+  vscode API - env.power
+    ✔ isOnBatteryPower returns a boolean
+    ✔ getSystemIdleState returns valid state
+    ✔ getSystemIdleTime returns a number
+    ✔ getCurrentThermalState returns valid state
+    ✔ power save blocker can be started and disposed
+    ✔ power save blocker with prevent-display-sleep type
+    ✔ events are defined
+    ✔ event listeners can be registered and disposed
+  vscode API - env
+    ✔ env is set
+    ✔ env is readonly
+    ✔ env.remoteName
+    ✔ env.uiKind
+    ✔ env.asExternalUri - with env.uriScheme
+  vscode server cli
+    - extension is installed and enabled when installed by server cli
+  Notebook API tests
+[1984:0419/210102.387472:INFO:CONSOLE:294] "Unrecognized feature: 'local-network-access'.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (294)
+[1984:0419/210102.392539:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210102.532744:INFO:CONSOLE:303] "No service worker controller found. Waiting for controllerchange.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=6524e1c1-d3d7-4a9d-948d-8e99169871c4&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (303)
+[1984:0419/210102.553561:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=6524e1c1-d3d7-4a9d-948d-8e99169871c4&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ notebook open (276ms)
+[1984:0419/210102.698457:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210102.721458:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=27942fb7-21d7-4ab2-8fd2-09f93b26808c&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+[1984:0419/210102.800983:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+    ✔ multiple tabs: different editors with same document (180ms)
+[1984:0419/210102.916575:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210102.933198:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=56e002d2-1607-4b2c-b29c-3739edd29ab0&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ #106657. Opening a notebook from markers view is broken  (63ms)
+[1984:0419/210103.017815:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210103.035463:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=e2b8d948-cab1-4aca-b1d7-231e04ebe548&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ Opening an utitled notebook without content will only open the editor when shown. (62ms)
+    ✔ Opening an untitled notebook with content will open a dirty document.
+[1984:0419/210103.147624:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210103.167456:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=6a18d0e6-5c47-47b1-b5e4-99b385b5e19c&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ Cannot open notebook from cell-uri with vscode.open-command (68ms)
+[1984:0419/210103.259457:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210103.278707:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=7b78ecc1-7171-4ed2-b31c-f8d720af3c0a&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ #97830, #97764. Support switch to other editor types (95ms)
+[1984:0419/210103.376145:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210103.395097:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=7ab3241e-bc6e-4e0e-88ea-27ac0f253cb2&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ #102411 - untitled notebook creation failed (89ms)
+[1984:0419/210103.474909:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210103.586792:INFO:CONSOLE:303] "No service worker controller found. Waiting for controllerchange.", source: vscode-webview://1hu82l6sluj3cr20cusqnqsol4nkk0le2o4q14eloh71pu8cqghs/index.html?id=c8a13114-ec93-4e43-afad-091e80bddc2e&parentId=1&origin=90aaf454-92f8-4c99-a7bd-8a4620aff045&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (303)
+[1984:0419/210103.592556:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1hu82l6sluj3cr20cusqnqsol4nkk0le2o4q14eloh71pu8cqghs/index.html?id=c8a13114-ec93-4e43-afad-091e80bddc2e&parentId=1&origin=90aaf454-92f8-4c99-a7bd-8a4620aff045&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+[1984:0419/210103.727087:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210103.744431:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1hu82l6sluj3cr20cusqnqsol4nkk0le2o4q14eloh71pu8cqghs/index.html?id=1d6dc491-999f-429e-9f19-a690d24ea8ec&parentId=1&origin=90aaf454-92f8-4c99-a7bd-8a4620aff045&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ #207742 - New Untitled notebook failed if previous untilted notebook is modified (330ms)
+    - #115855 onDidSaveNotebookDocument
+  Notebook & LiveShare
+    ✔ command: vscode.resolveNotebookContentProviders
+    ✔ command: vscode.executeDataToNotebook
+    ✔ command: vscode.executeNotebookToData
+  Interactive Window
+    - Can open an interactive window and execute from input box
+[1984:0419/210103.832898:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210103.939657:INFO:CONSOLE:303] "No service worker controller found. Waiting for controllerchange.", source: vscode-webview://1imtb1b9mvkddmiehn0vf75o0q3855d5be98iaffcapr65ffr4p5/index.html?id=e5a9ea6f-9836-46a9-ae7d-32b71fec7e07&parentId=1&origin=2d614a26-3ef5-4fec-95d7-379abfbb8bf0&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (303)
+[1984:0419/210103.945898:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1imtb1b9mvkddmiehn0vf75o0q3855d5be98iaffcapr65ffr4p5/index.html?id=e5a9ea6f-9836-46a9-ae7d-32b71fec7e07&parentId=1&origin=2d614a26-3ef5-4fec-95d7-379abfbb8bf0&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ Interactive window scrolls after execute (516ms)
+    - Interactive window has the correct kernel
+  ipynb NotebookSerializer
+    - Can open an ipynb notebook
+  vscode - automatic language detection
+    - test automatic language detection works
+  vscode API - languages
+    ✔ setTextDocumentLanguage -> close/open event
+    ✔ setTextDocumentLanguage -> error when language does not exist
+    ✔ diagnostics, read & event
+    ✔ link detector
+    ✔ diagnostics & CodeActionProvider
+    ✔ completions with document filters
+    ✔ folding command (234ms)
+  lm
+    ✔ lm request and stream (1011ms)
+BAD: Error: BAD
+    at Object.provideLanguageModelChatResponse (/Users/brandonhowe/Documents/NJIT/vsclone/extensions/vscode-api-tests/src/singlefolder-tests/lm.test.ts:100:11)
+    at ExtHostLanguageModels.$startChatRequest (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/common/extHostLanguageModels.js:261:29)
+    at _RPCProtocol._doInvokeHandler (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:368:19)
+    at _RPCProtocol._invokeHandler (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:354:35)
+    at _RPCProtocol._receiveRequest (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:294:22)
+    at _RPCProtocol._receiveOneMessage (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:235:14)
+    at UniqueContainer.value (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:116:59)
+    at Emitter._deliver (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:745:16)
+    at Emitter.fire (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:770:12)
+    at BufferedEmitter.fire (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/parts/ipc/common/ipc.net.js:427:23)
+    at UniqueContainer.value (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/node/extensionHostProcess.js:214:27)
+    at Emitter._deliver (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:745:16)
+    at Emitter.fire (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:770:12)
+    at BufferedEmitter.fire (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/parts/ipc/common/ipc.net.js:427:23)
+    at MessagePortMain.<anonymous> (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/node/extensionHostProcess.js:123:45)
+    at MessagePortMain.emit (node:events:519:28)
+    at Object.MessagePortMain._internalPort.emit (node:electron/js2c/utility_init:2:2959)
+[CHAT] extension request ERRORED in STREAM BAD: Error: BAD
+    at Object.provideLanguageModelChatResponse (/Users/brandonhowe/Documents/NJIT/vsclone/extensions/vscode-api-tests/src/singlefolder-tests/lm.test.ts:100:11)
+    at ExtHostLanguageModels.$startChatRequest (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/common/extHostLanguageModels.js:261:29)
+    at _RPCProtocol._doInvokeHandler (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:368:19)
+    at _RPCProtocol._invokeHandler (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:354:35)
+    at _RPCProtocol._receiveRequest (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:294:22)
+    at _RPCProtocol._receiveOneMessage (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:235:14)
+    at UniqueContainer.value (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:116:59)
+    at Emitter._deliver (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:745:16)
+    at Emitter.fire (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:770:12)
+    at BufferedEmitter.fire (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/parts/ipc/common/ipc.net.js:427:23)
+    at UniqueContainer.value (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/node/extensionHostProcess.js:214:27)
+    at Emitter._deliver (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:745:16)
+    at Emitter.fire (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:770:12)
+    at BufferedEmitter.fire (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/parts/ipc/common/ipc.net.js:427:23)
+    at MessagePortMain.<anonymous> (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/node/extensionHostProcess.js:123:45)
+    at MessagePortMain.emit (node:events:519:28)
+    at Object.MessagePortMain._internalPort.emit (node:electron/js2c/utility_init:2:2959) vscode.vscode-api-tests 416016
+    ✔ lm request fail
+[CHAT] extension request ERRORED in STREAM STREAM FAIL: Error: STREAM FAIL
+    at Context.<anonymous> (/Users/brandonhowe/Documents/NJIT/vsclone/extensions/vscode-api-tests/src/singlefolder-tests/lm.test.ts:146:15) vscode.vscode-api-tests 385033
+    ✔ lm stream fail
+[CHAT] request FAILED vscode.vscode-api-tests 386129 { name: 'LanguageModelError', message: 'You have been blocked SYNC' }
+    ✔ LanguageModelError instance is not thrown to extensions#235322 (SYNC)
+You have been blocked ASYNC: LanguageModelError: You have been blocked ASYNC
+    at LanguageModelError.tryDeserialize (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/common/extHostTypes.js:2954:12)
+    at MainThreadLanguageModels.$reportResponseDone (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/browser/mainThreadLanguageModels.js:113:42)
+    at _RPCProtocol._doInvokeHandler (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:368:19)
+    at _RPCProtocol._invokeHandler (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:354:35)
+    at _RPCProtocol._receiveRequest (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:297:22)
+    at _RPCProtocol._receiveOneMessage (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:226:14)
+    at UniqueContainer.value (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:116:59)
+    at Emitter._deliver (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:745:16)
+    at Emitter.fire (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:770:12)
+    at BufferedEmitter.fire (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/parts/ipc/common/ipc.net.js:427:23)
+    at MessagePort.<anonymous> (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/electron-browser/localProcessExtensionHost.js:294:23)
+[CHAT] extension request ERRORED in STREAM You have been blocked ASYNC: LanguageModelError: You have been blocked ASYNC
+    at LanguageModelError.tryDeserialize (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/common/extHostTypes.js:2954:12)
+    at MainThreadLanguageModels.$reportResponseDone (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/browser/mainThreadLanguageModels.js:113:42)
+    at _RPCProtocol._doInvokeHandler (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:368:19)
+    at _RPCProtocol._invokeHandler (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:354:35)
+    at _RPCProtocol._receiveRequest (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:297:22)
+    at _RPCProtocol._receiveOneMessage (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:226:14)
+    at UniqueContainer.value (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/common/rpcProtocol.js:116:59)
+    at Emitter._deliver (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:745:16)
+    at Emitter.fire (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/event.js:770:12)
+    at BufferedEmitter.fire (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/parts/ipc/common/ipc.net.js:427:23)
+    at MessagePort.<anonymous> (vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/services/extensions/electron-browser/localProcessExtensionHost.js:294:23) vscode.vscode-api-tests 745365
+    ✔ LanguageModelError instance is not thrown to extensions#235322 (ASYNC)
+  Notebook Document
+    ✔ cannot open unknown types
+    ✔ document basics
+    ✔ notebook open/close, notebook ready when cell-document open event is fired
+    ✔ notebook open/close, all cell-documents are ready
+    ✔ open untitled notebook
+    ✔ open untitled with data
+    ✔ workspace edit API (replaceCells)
+    ✔ workspace edit API (replaceCells, event)
+    ✔ workspace edit API (replaceMetadata)
+    ✔ workspace edit API (replaceMetadata, event)
+    ✔ workspace edit API (notebookMetadata)
+    - setTextDocumentLanguage for notebook cells
+    ✔ setTextDocumentLanguage when notebook editor is not open
+    ✔ dirty state - serializer (72ms)
+    - onDidOpenNotebookDocument - emit event only once when opened in two editors
+  Notebook Editor
+    - Opening a notebook should fire activeNotebook event changed only once
+    - Active/Visible Editor
+    - Notebook Editor Event - onDidChangeVisibleNotebookEditors on open/close
+    - Notebook Editor Event - onDidChangeVisibleNotebookEditors on two editor groups
+  Notebook Kernel API tests
+Step1.cell execute command takes arguments
+Step2.cell execute command takes arguments
+[1984:0419/210105.987815:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210106.094564:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=30a754bb-720f-4778-9689-9ff9c601415d&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+Step3.cell execute command takes arguments
+Step4.cell execute command takes arguments
+Step5.cell execute command takes arguments
+Step6.cell execute command takes arguments
+Step7.cell execute command takes arguments
+Step8.cell execute command takes arguments
+Step9.cell execute command takes arguments
+Step10.cell execute command takes arguments
+Step11.cell execute command takes arguments
+Step12.cell execute command takes arguments
+Step13.cell execute command takes arguments
+Step14.cell execute command takes arguments
+[1984:0419/210106.231123:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+Step15.cell execute command takes arguments
+Step16.cell execute command takes arguments
+Step17.cell execute command takes arguments
+Step18.cell execute command takes arguments
+Step19.cell execute command takes arguments
+    ✔ cell execute command takes arguments (353ms)
+Step1.cell execute command takes arguments 2
+Step2.cell execute command takes arguments 2
+[1984:0419/210106.365449:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210106.381976:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=1e5ff9c2-4190-4483-8f62-85c94de43e6f&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+Step3.cell execute command takes arguments 2
+    ✔ cell execute command takes arguments 2 (144ms)
+[1984:0419/210106.518220:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210106.533917:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=76462de2-ea36-420f-b41d-7968f0b44502&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ document execute command takes arguments (131ms)
+[1984:0419/210106.671924:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210106.687302:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=0a7ce93d-6b1c-4ba8-8c1e-7e867038afe2&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ cell execute and select kernel (126ms)
+[1984:0419/210106.821512:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210106.837573:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=df1cef09-2304-4d2d-9685-60529cb435e6&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ Output changes are applied once the promise resolves (94ms)
+[1984:0419/210106.938833:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210106.956024:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=2055ff1a-ce25-4569-98de-feb3638a3f6e&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ executionSummary (107ms)
+    ✔ initialize executionSummary
+[1984:0419/210107.078969:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210107.094929:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=0d2dc0d4-c7f2-4520-8f08-4d3e1c6aeadd&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ execution cancelled when delete while executing (83ms)
+[1984:0419/210107.185569:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210107.201236:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=1d616722-170e-49e8-aeb5-12df4ac8568e&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ appendOutput to different cell (119ms)
+[1984:0419/210107.331214:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210107.347822:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1frvs3huomv79ftgqvephrpfd0iloice29lpejfdnbngjhh8hmd1/index.html?id=1ed2e85d-44bc-4117-8381-a0fafdd4df95&parentId=1&origin=c180e1ec-ad9a-4d2b-a17d-b39fc60bfcbb&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ replaceOutput to different cell (116ms)
+  vscode API - network proxy support
+    ✔ custom root certificate (213ms)
+    ✔ basic auth (59ms)
+    - separate local / remote proxy settings
+  vscode API - quick input
+    ✔ createQuickPick, select second
+    ✔ createQuickPick, focus second
+    ✔ createQuickPick, select first and second
+    ✔ createQuickPick, selection events
+    ✔ createQuickPick, continue after first accept
+    ✔ createQuickPick, dispose in onDidHide
+    ✔ createQuickPick, hide and dispose
+    ✔ createQuickPick, hide and hide
+    ✔ createQuickPick, hide show hide
+    ✔ createQuickPick, match item by label derived from resourceUri
+    ✔ createQuickPick, match item by description derived from resourceUri
+  vscode API - file system
+    ✔ readonly file system - boolean
+    ✔ readonly file system - markdown
+    ✔ writeable file system
+  vscode
+    ✔ no rpc
+    ✔ no rpc, createDiagnosticCollection()
+    ✔ no rpc, createTextEditorDecorationType(...)
+    ✔ no rpc, createOutputChannel(...)
+Error: Trying to add a disposable to a DisposableStore that has already been disposed of. The added object will be leaked!
+    at _DisposableStore.add (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/lifecycle.js:323:22)
+    at ExtHostOutputService.doCreateOutputChannel (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/common/extHostOutput.js:160:24)
+Error: Trying to add a disposable to a DisposableStore that has already been disposed of. The added object will be leaked!
+    at _DisposableStore.add (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/lifecycle.js:323:22)
+    at file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/common/extHostOutput.js:138:26
+Error: Trying to add a disposable to a DisposableStore that has already been disposed of. The added object will be leaked!
+    at _DisposableStore.add (file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/base/common/lifecycle.js:323:22)
+    at file:///Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/api/common/extHostOutput.js:192:57
+    ✔ no rpc, createDiagnosticCollection(...)
+    ✔ no rpc, createQuickPick(...)
+    ✔ no rpc, createInputBox(...)
+    ✔ no rpc, createStatusBarItem(...)
+    ✔ no rpc, createSourceControl(...)
+    ✔ no rpc, createCommentController(...)
+[1984:0419/210107.898149:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+    ✔ no rpc, createWebviewPanel(...)
+    ✔ no rpc, createTreeView(...)
+    ✔ no rpc, createNotebookController(...)
+    ✔ no rpc, createTerminal(...)
+    ✔ no rpc, createFileSystemWatcher(...)
+    ✔ no rpc, createTestController(...)
+    ✔ no rpc, createLanguageStatusItem(...)
+  vscode API - globalState / workspaceState
+    ✔ state basics
+    ✔ state - handling of objects
+  vscode API - Terminal.shellIntegration
+[1984:0419/210108.223018:INFO:CONSOLE:1] "task queue exceeded allotted deadline by 27ms", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/node_modules/@xterm/addon-webgl/lib/addon-webgl.js (1)
+    ✔ window.onDidChangeTerminalShellIntegration should activate for the default terminal (366ms)
+    - Test if env is set
+[1984:0419/210108.407794:INFO:CONSOLE:25] "TypeError: Activating extension 'vscode.terminal-suggest' failed: Cannot read properties of undefined (reading 'Bash').", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+    ✔ execution events should fire in order when a command runs (699ms)
+    ✔ end execution event should report zero exit code for successful commands (601ms)
+    ✔ end execution event should report non-zero exit code for failed commands (606ms)
+    ✔ TerminalShellExecution.read iterables should be available between the start and end execution events (601ms)
+    ✔ TerminalShellExecution.read events should fire with contents of command (600ms)
+    ✔ TerminalShellExecution.read events should give separate iterables per call (618ms)
+    ✔ executeCommand(commandLine) (597ms)
+    ✔ executeCommand(executable, args) (610ms)
+  vscode API - terminal
+    Terminal
+      ✔ sendText immediately after createTerminal should not throw
+      ✔ echo works in the default shell (70ms)
+      ✔ onDidCloseTerminal event fires when terminal is disposed
+      ✔ processId immediately after createTerminal should fetch the pid (966ms)
+      ✔ name in constructor should set terminal.name
+      ✔ creationOptions should be set and readonly for TerminalOptions terminals
+      ✔ onDidOpenTerminal should fire when a terminal is created
+      ✔ exitStatus.code should be set to undefined after a terminal is disposed
+      ✔ onDidChangeTerminalState should fire with isInteractedWith after writing to a terminal (942ms)
+      ✔ onDidChangeTerminalState should fire with shellType when created (982ms)
+      hideFromUser
+        ✔ should be available to terminals API
+      selection
+        ✔ should be undefined immediately after creation
+        ✔ should be defined after selecting all content (1937ms)
+        ✔ should be undefined after clearing a selection (1980ms)
+      window.onDidWriteTerminalData
+        - should listen to all future terminal data events
+      Extension pty terminals
+        ✔ should fire onDidOpenTerminal and onDidCloseTerminal
+        - should respect dimension overrides
+        ✔ should change terminal name (969ms)
+        ✔ exitStatus.code should be set to the exit code (undefined) (989ms)
+        ✔ exitStatus.code should be set to the exit code (zero) (991ms)
+[1984:0419/210125.046013:INFO:CONSOLE:27] "The terminal process failed to launch (exit code: 22).", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (27)
+        ✔ exitStatus.code should be set to the exit code (non-zero) (1497ms)
+        ✔ creationOptions should be set and readonly for ExtensionTerminalOptions terminals
+      environmentVariableCollection
+        ✔ should have collection variables apply to terminals immediately after setting (3527ms)
+        ✔ should have collection variables apply to environment variables that don't exist (3933ms)
+        ✔ should respect clearing entries (4050ms)
+        ✔ should respect deleting entries (3949ms)
+        ✔ get and forEach should work
+        ✔ get and forEach should work (scope)
+  vscode API - tree
+    ✔ TreeView - element already registered
+[1984:0419/210140.599600:INFO:CONSOLE:27] "No view is registered with id: test.treeRapidRefresh", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (27)
+    ✔ TreeView - element already registered after rapid root refresh
+[1984:0419/210140.612536:INFO:CONSOLE:27] "No view is registered with id: test.treeRefresh", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (27)
+    ✔ TreeView - element already registered after refresh
+  vscode API - types
+    ✔ static properties, es5 compat class
+  vscode API - window
+    ✔ editor, active text editor
+    ✔ editor, opened via resource
+    ✔ editor, assign and check view columns (86ms)
+    ✔ editor, onDidChangeVisibleTextEditors (120ms)
+    ✔ editor, onDidChangeTextEditorViewColumn (close editor) (81ms)
+    ✔ editor, onDidChangeTextEditorViewColumn (move editor group) (58ms)
+    - active editor not always correct... #49125
+    ✔ editor, opening multiple at the same time #134786 (50ms)
+    ✔ default column when opening a file (76ms)
+    ✔ showTextDocument ViewColumn.BESIDE (100ms)
+    ✔ showTextDocument ViewColumn is always defined (even when opening > ViewColumn.Nine) (401ms)
+    ✔ issue #27408 - showTextDocument & vscode.diff always default to ViewColumn.One (83ms)
+    ✔ issue #5362 - Incorrect TextEditor passed by onDidChangeTextEditorSelection (161ms)
+    ✔ Tabs - vscode.open & vscode.diff (195ms)
+[1984:0419/210142.677644:INFO:CONSOLE:356] "An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing.", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/contrib/webview/browser/webviewElement.js (356)
+[1984:0419/210142.780779:INFO:CONSOLE:1060] "Unrecognized feature: 'local-network-access'.", source: vscode-webview://1hu82l6sluj3cr20cusqnqsol4nkk0le2o4q14eloh71pu8cqghs/index.html?id=7c55369f-97d9-453d-8392-636f3e644c1d&parentId=1&origin=90aaf454-92f8-4c99-a7bd-8a4620aff045&swVersion=4&extensionId=&platform=electron&vscode-resource-base-authority=vscode-resource.vscode-cdn.net&parentOrigin=vscode-file%3A%2F%2Fvscode-app&purpose=notebookRenderer (1060)
+    ✔ Tabs - Ensure tabs getter is correct (295ms)
+    ✔ Tabs - ensure active tab is correct (149ms)
+    ✔ #7013 - input without options
+    ✔ showInputBox - undefined on cancel
+    ✔ showInputBox - cancel early
+    ✔ showInputBox - '' on Enter
+    ✔ showInputBox - default value on Enter
+    ✔ showInputBox - `undefined` on Esc
+    ✔ showInputBox - `undefined` on Esc (despite default)
+    ✔ showInputBox - value not empty on second try
+    ✔ showQuickPick, accept first
+    ✔ showQuickPick, accept second
+    ✔ showQuickPick, select first two (111ms)
+    ✔ showQuickPick, keep selection (microsoft/vscode-azure-account#67) (107ms)
+    ✔ showQuickPick, undefined on cancel
+    ✔ showQuickPick, cancel early
+    ✔ showQuickPick, canceled by another picker
+    ✔ showQuickPick, canceled by input
+    ✔ showQuickPick, native promise - #11754
+    ✔ showQuickPick, never resolve promise and cancel - #22453
+    ✔ showWorkspaceFolderPick
+    ✔ Default value for showInput Box not accepted when it fails validateInput, reversing #33691
+    ✔ editor, selection change kind
+    ✔ createStatusBar
+    ✔ createStatusBar - static
+    ✔ createStatusBar - static, CANNOT change some props
+  vscode API - workspace events
+    ✔ onWillCreate/onDidCreate
+    ✔ onWillCreate/onDidCreate, make changes, edit another file
+    ✔ onWillCreate/onDidCreate, make changes, edit new file fails
+    ✔ onWillDelete/onDidDelete
+    ✔ onWillDelete/onDidDelete, make changes
+    ✔ onWillDelete/onDidDelete, make changes, del another file
+    ✔ onWillDelete/onDidDelete, make changes, double delete
+    ✔ onWillRename/onDidRename
+    ✔ onWillRename - make changes (saved file)
+    ✔ onWillRename - make changes (dirty file)
+  vscode API - workspace-fs
+    ✔ fs.stat
+    ✔ fs.stat - bad scheme
+    ✔ fs.stat - missing file
+    ✔ fs.write/stat/read/delete
+    ✔ fs.delete folder
+    ✔ throws FileSystemError (1)
+    ✔ throws FileSystemError (2)
+    ✔ vscode.workspace.fs.remove() (and copy()) succeed unexpectedly. #84177 (1)
+    ✔ vscode.workspace.fs.remove() (and copy()) succeed unexpectedly. #84177 (2)
+    ✔ vscode.workspace.fs error reporting is weird #132981
+    ✔ fs.createFolder creates recursively
+    ✔ fs.writeFile creates parents recursively
+  vscode API - tasks
+    Tasks
+      ShellExecution
+        ✔ Execution from onDidEndTaskProcess and onDidStartTaskProcess are equal to original (422ms)
+        - dependsOn task should start with a different processId (#118256)
+      CustomExecution
+        ✔ task should start and shutdown successfully (513ms)
+        ✔ sync task should flush all data on close (972ms)
+        ✔ A task can be fetched and executed (#100577) (114ms)
+        ✔ A task can be fetched with default task group information (75ms)
+        ✔ Tasks can be run back to back (690ms)
+  vscode API - workspace
+    ✔ MarkdownString
+    ✔ textDocuments
+    ✔ rootPath
+    ✔ workspaceFile
+    ✔ workspaceFolders
+    ✔ getWorkspaceFolder
+    ✔ openTextDocument
+    ✔ openTextDocument, illegal path
+    ✔ openTextDocument, untitled is dirty
+    ✔ openTextDocument, untitled with host
+    ✔ openTextDocument, untitled without path
+    ✔ openTextDocument, untitled without path but language ID
+    ✔ openTextDocument, untitled without path but language ID and content
+    ✔ openTextDocument, untitled closes on save
+    ✔ openTextDocument, uri scheme/auth/path
+    ✔ openTextDocument, actual casing first
+    ✔ eol, read
+    ✔ eol, change via editor (39ms)
+    ✔ eol, change via applyEdit
+    ✔ eol, change via onWillSave
+    ✔ events: onDidOpenTextDocument, onDidChangeTextDocument, onDidSaveTextDocument (40ms)
+    ✔ events: onDidSaveTextDocument fires even for non dirty file when saved (38ms)
+    ✔ openTextDocument, with selection
+    ✔ registerTextDocumentContentProvider, simple
+    ✔ registerTextDocumentContentProvider, constrains
+    ✔ registerTextDocumentContentProvider, multiple
+    ✔ registerTextDocumentContentProvider, evil provider
+    ✔ registerTextDocumentContentProvider, invalid text
+    ✔ registerTextDocumentContentProvider, show virtual document
+    ✔ registerTextDocumentContentProvider, open/open document
+    ✔ registerTextDocumentContentProvider, empty doc
+    ✔ registerTextDocumentContentProvider, change event
+    ✔ findFiles
+    ✔ findFiles - null exclude
+    ✔ findFiles - exclude
+    ✔ findFiles, exclude
+    ✔ findFiles, cancellation
+    ✔ `findFiles2`
+    ✔ findFiles2 - null exclude
+    ✔ findFiles2, exclude
+    ✔ findFiles2, cancellation
+    ✔ findTextInFiles
+    ✔ findTextInFiles, cancellation
+    ✔ applyEdit
+    ✔ applyEdit should fail when editing deleted resource
+    ✔ applyEdit should fail when renaming deleted resource
+    ✔ applyEdit should fail when editing renamed from resource
+    ✔ applyEdit "edit A -> rename A to B -> edit B"
+    ✔ applyEdit "edit A -> rename A to B (different case)" -> edit B
+    ✔ applyEdit "edit A -> rename A to B (same case)" -> edit B
+    ✔ WorkspaceEdit: applying edits before and after rename duplicates resource #42633
+    ✔ WorkspaceEdit: Problem recreating a renamed resource #42634
+    ✔ WorkspaceEdit api - after saving a deleted file, it still shows up as deleted. #42667
+    ✔ WorkspaceEdit: edit and rename parent folder duplicates resource #42641
+    ✔ WorkspaceEdit: rename resource followed by edit does not work #42638
+    ✔ WorkspaceEdit: create & override
+    ✔ WorkspaceEdit: create & ignoreIfExists
+    ✔ WorkspaceEdit: rename & ignoreIfExists
+    ✔ WorkspaceEdit: delete & ignoreIfNotExists
+    ✔ WorkspaceEdit: insert & rename multiple
+    - workspace.applyEdit drops the TextEdit if there is a RenameFile later #77735 (with opened editor)
+    ✔ workspace.applyEdit drops the TextEdit if there is a RenameFile later #77735 (without opened editor) (71ms)
+    ✔ The api workspace.applyEdit failed for some case of mixing resourceChange and textEdit #80688, 1/2
+    ✔ The api workspace.applyEdit failed for some case of mixing resourceChange and textEdit #80688, 2/2
+    ✔ [Bug] Failed to create new test file when in an untitled file #1261
+    ✔ Should send a single FileWillRenameEvent instead of separate events when moving multiple files at once#111867, 1/3
+    ✔ WorkspaceEdit fails when creating then writing to file if file is open in the editor and is not empty #146964 (77ms)
+    ✔ Should send a single FileWillRenameEvent instead of separate events when moving multiple files at once#111867, 2/3
+    ✔ Should send a single FileWillRenameEvent instead of separate events when moving multiple files at once#111867, 3/3
+    - issue #107739 - Redo of rename Java Class name has no effect
+    ✔ SnippetString in WorkspaceEdit
+    ✔ SnippetString in WorkspaceEdit with keepWhitespace (39ms)
+    ✔ Support creating binary files in a WorkspaceEdit
+    ✔ saveAll
+    ✔ save (38ms)
+    ✔ encoding: text document encodings
+    ✔ encoding: openTextDocument
+    ✔ encoding: openTextDocument - throws for dirty documents
+    ✔ encoding: openTextDocument - invalid encoding falls back to default
+    ✔ encoding: openTextDocument - multiple requests with different encoding work
+    ✔ encoding: openTextDocument - can change the encoding of an existing untitled document
+    ✔ encoding: decode (128ms)
+    ✔ encoding: encode (121ms)
+    ✔ encoding: save text document with a different encoding
+    ✔ encoding: utf8bom does not explode (https://github.com/microsoft/vscode/issues/242132)
+  vscode API - workspace-watcher
+    ✔ createFileSystemWatcher
+  316 passing (48s)
+  31 pending
+[main 2026-04-20T01:01:48.211Z] Extension host with pid 2216 exited with code: 0, signal: unknown.
+
+### API tests (workspace)
+
+> code-oss-dev@1.110.0 electron
+> node build/lib/electron.ts
+
+(node:20211) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[21:01:51] Synchronizing built-in extensions...
+[21:01:51] You can manage built-in extensions with the --builtin flag
+[21:01:51] [github] ms-vscode.js-debug-companion@1.1.3 ✔︎
+[21:01:51] [github] ms-vscode.js-debug@1.105.0 ✔︎
+[21:01:51] [github] ms-vscode.vscode-js-profile-table@1.0.10 ✔︎
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:01:53.350Z] [CSS_DEV] DONE, 301 css modules (85ms)
+[main 2026-04-20T01:01:53.433Z] update#setState disabled
+Started local extension host with pid 20502.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/vscode-api-tests
+No default agent registered
+[20165:0419/210155.660294:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  vscode API - workspace
+    ✔ rootPath
+    ✔ workspaceFile
+    ✔ workspaceFolders
+    ✔ getWorkspaceFolder
+  4 passing (27ms)
+[main 2026-04-20T01:01:55.798Z] Extension host with pid 20502 exited with code: 0, signal: unknown.
+
+### Colorize tests
+
+> code-oss-dev@1.110.0 test-extension
+> vscode-test -l vscode-colorize-tests
+
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:01:57.017Z] [CSS_DEV] DONE, 301 css modules (83ms)
+[main 2026-04-20T01:01:57.097Z] update#setState disabled
+Started local extension host with pid 20673.
+Started initializing default profile extensions in extensions installation folder. file:///Users/brandonhowe/Documents/NJIT/vsclone/.vscode-test/extensions
+Completed initializing default profile extensions in extensions installation folder. file:///Users/brandonhowe/Documents/NJIT/vsclone/.vscode-test/extensions
+[/Users/brandonhowe/Documents/NJIT/vsclone/extensions/vscode-colorize-tests]: Version specified in `engines.vscode` (*) is not specific enough. For vscode versions before 1.0.0, please define at a minimum the major and minor desired version. E.g. ^0.10.0, 0.10.x, 0.11.0, etc.
+No default agent registered
+[20588:0419/210159.221041:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  colorization
+    ✔ colorize: 12750.html (247ms)
+    ✔ colorize: 13448.html (83ms)
+    ✔ colorize: 14119.less (102ms)
+    ✔ colorize: 25920.html (211ms)
+    ✔ colorize: COMMIT_EDITMSG (75ms)
+    ✔ colorize: Dockerfile (89ms)
+    ✔ colorize: basic.java (201ms)
+    ✔ colorize: git-rebase-todo (90ms)
+    ✔ colorize: issue-1550.yaml (99ms)
+    ✔ colorize: issue-224862.yaml (98ms)
+    ✔ colorize: issue-28354.php (165ms)
+    ✔ colorize: issue-4008.yaml (122ms)
+    ✔ colorize: issue-6303.yaml (120ms)
+    ✔ colorize: issue-76997.php (111ms)
+    ✔ colorize: makefile (161ms)
+    ✔ colorize: md-math.md (318ms)
+    ✔ colorize: test-13777.go (103ms)
+    ✔ colorize: test-166781.rs (116ms)
+    ✔ colorize: test-173216.sh (119ms)
+    ✔ colorize: test-173224.sh (117ms)
+    ✔ colorize: test-173336.sh (139ms)
+    ✔ colorize: test-23630.cpp (162ms)
+    ✔ colorize: test-23850.cpp (100ms)
+    ✔ colorize: test-241001.ts (574ms)
+    ✔ colorize: test-33886.md (126ms)
+    ✔ colorize: test-4287.pug (102ms)
+    ✔ colorize: test-6611.rs (137ms)
+    ✔ colorize: test-7115.xml (103ms)
+    ✔ colorize: test-78769.cpp (291ms)
+    ✔ colorize: test-80644.cpp (213ms)
+    ✔ colorize: test-brackets.tsx (197ms)
+    ✔ colorize: test-cssvariables.less (140ms)
+    ✔ colorize: test-cssvariables.scss (185ms)
+    ✔ colorize: test-embedding.html (237ms)
+    ✔ colorize: test-freeze-56377.py (142ms)
+    ✔ colorize: test-freeze-56476.ps1 (104ms)
+    ✔ colorize: test-function-inv.ts (198ms)
+    ✔ colorize: test-issue11.ts (397ms)
+    ✔ colorize: test-issue241715.ts (469ms)
+    ✔ colorize: test-issue5431.ts (238ms)
+    ✔ colorize: test-issue5465.ts (206ms)
+    ✔ colorize: test-issue5566.ts (220ms)
+    ✔ colorize: test-jsdoc-multiline-type.ts (206ms)
+    ✔ colorize: test-keywords.ts (253ms)
+    ✔ colorize: test-members.ts (229ms)
+    ✔ colorize: test-object-literals.ts (208ms)
+    ✔ colorize: test-regex.coffee (118ms)
+    ✔ colorize: test-strings.ts (208ms)
+    ✔ colorize: test-this.ts (191ms)
+    ✔ colorize: test-variables.css (296ms)
+    ✔ colorize: test.bat (110ms)
+    ✔ colorize: test.bib (151ms)
+    ✔ colorize: test.c (203ms)
+    ✔ colorize: test.cc (259ms)
+    ✔ colorize: test.clj (231ms)
+    ✔ colorize: test.code-snippets (240ms)
+    ✔ colorize: test.coffee (170ms)
+    ✔ colorize: test.cpp (356ms)
+    ✔ colorize: test.cs (182ms)
+    ✔ colorize: test.cshtml (231ms)
+    ✔ colorize: test.css (680ms)
+    ✔ colorize: test.cu (2037ms)
+    ✔ colorize: test.dart (109ms)
+    ✔ colorize: test.diff (88ms)
+    ✔ colorize: test.env (77ms)
+    ✔ colorize: test.fs (169ms)
+    ✔ colorize: test.go (133ms)
+    ✔ colorize: test.groovy (334ms)
+    ✔ colorize: test.handlebars (120ms)
+    ✔ colorize: test.hbs (95ms)
+    ✔ colorize: test.hlsl (88ms)
+    ✔ colorize: test.html (197ms)
+    ✔ colorize: test.ini (175ms)
+    ✔ colorize: test.jl (167ms)
+    ✔ colorize: test.js (334ms)
+    ✔ colorize: test.json (167ms)
+    ✔ colorize: test.jsx (438ms)
+    ✔ colorize: test.less (277ms)
+    ✔ colorize: test.log (98ms)
+    ✔ colorize: test.lua (86ms)
+    ✔ colorize: test.m (362ms)
+    ✔ colorize: test.md (241ms)
+    ✔ colorize: test.mm (380ms)
+    ✔ colorize: test.p6 (105ms)
+    ✔ colorize: test.php (209ms)
+    ✔ colorize: test.pl (140ms)
+    ✔ colorize: test.ps1 (200ms)
+    ✔ colorize: test.pug (322ms)
+    ✔ colorize: test.py (273ms)
+    ✔ colorize: test.r (112ms)
+    ✔ colorize: test.rb (176ms)
+    ✔ colorize: test.regexp.ts (206ms)
+    ✔ colorize: test.rs (113ms)
+    ✔ colorize: test.rst (135ms)
+    ✔ colorize: test.scss (1360ms)
+    ✔ colorize: test.sh (230ms)
+    ✔ colorize: test.shader (90ms)
+    ✔ colorize: test.sql (99ms)
+    ✔ colorize: test.sty (104ms)
+    ✔ colorize: test.swift (184ms)
+    ✔ colorize: test.tex (171ms)
+    ✔ colorize: test.ts (1041ms)
+    ✔ colorize: test.vb (176ms)
+    ✔ colorize: test.xml (108ms)
+    ✔ colorize: test.yaml (171ms)
+    ✔ colorize: test2.pl (142ms)
+    ✔ colorize: test6916.js (155ms)
+    ✔ colorize: tsconfig_off.json (97ms)
+  108 passing (25s)
+[main 2026-04-20T01:02:23.959Z] Extension host with pid 20673 exited with code: 0, signal: unknown.
+Exit code:   0
+Done
+
+### Terminal Suggest tests
+
+> code-oss-dev@1.110.0 test-extension
+> vscode-test -l terminal-suggest --enable-proposed-api=vscode.vscode-api-tests
+
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:02:25.110Z] [CSS_DEV] DONE, 301 css modules (81ms)
+[main 2026-04-20T01:02:25.191Z] update#setState disabled
+Started local extension host with pid 21563.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/terminal-suggest
+No default agent registered
+[21488:0419/210227.349235:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  Terminal Suggest
+    ✔ simple command
+    ✔ simple argument
+    ✔ simple command, cursor mid text
+    ✔ simple argument, cursor mid text
+    reset to command
+      ✔ |
+      ✔ ;
+      ✔ &&
+      ✔ ||
+    pwsh
+      ✔ simple command
+      ✔ simple argument
+      ✔ reset char
+      ✔ arguments after reset char
+      ✔ ; reset char
+      multiple commands on the line
+        ✔ multiple commands, cursor at end
+        ✔ multiple commands, cursor mid text
+        ✔ multiple commands, cursor at end with reset char
+        ✔ multiple commands, cursor mid text with reset char
+  Terminal Suggest
+    Fallback to default completions
+      ✔ '|' -> [] + both
+      ✔ '|.' -> [] + both
+      ✔ '|./' -> [] + both
+      ✔ 'fakecommand |' -> [] + both
+    Fig name and description only
+      ✔ '|' -> ['[object Object]'] + both
+      ✔ 'f|' -> ['[object Object]'] + both
+      ✔ 'fo|' -> ['[object Object]'] + both
+      ✔ 'foo|' -> ['[object Object]'] + both
+      ✔ 'foo |' -> [] + both
+    Fig top-level args files only
+      ✔ 'foo |' -> [] + files
+    Fig top-level args folders only
+      ✔ 'foo |' -> [] + folders
+    Fig top-level args files and folders
+      ✔ 'foo |' -> [] + both
+    Fig top-level options
+      ✔ 'foo |' -> ['--bar', '--baz']
+      ✔ 'foo bar|' -> ['--bar', '--baz']
+      ✔ 'foo --bar |' -> ['--baz']
+      ✔ 'foo --baz |' -> ['--bar']
+    Fig top-level option values
+      ✔ 'foo |' -> ['--bar <baz>']
+      ✔ 'foo --bar |' -> ['a', 'b', 'c']
+      ✔ 'foo --bar a|' -> ['a', 'b', 'c']
+      ✔ 'foo --bar b|' -> ['a', 'b', 'c']
+      ✔ 'foo --bar c|' -> ['a', 'b', 'c']
+    Fig script generator
+      ✔ 'foo |' -> ['e', 'c', 'h', 'o', ' ', 'a', 'b', 'c', 'd']
+      ✔ 'foo a|' -> ['e', 'c', 'h', 'o', ' ', 'a', 'b', 'c', 'd']
+      ✔ 'foo b|' -> ['e', 'c', 'h', 'o', ' ', 'a', 'b', 'c', 'd']
+      ✔ 'foo c|' -> ['e', 'c', 'h', 'o', ' ', 'a', 'b', 'c', 'd']
+    Fig custom generator
+      ✔ 'foo |' -> ['foo']
+      ✔ 'foo a|' -> ['a', 'foo']
+      ✔ 'foo b|' -> ['b', 'foo']
+      ✔ 'foo c|' -> ['c', 'foo']
+    Fig persistent options
+      ✔ 'foo |' -> ['--help', '--docs', '--version', 'bar', 'baz']
+      ✔ 'foo bar |' -> ['--help', '--local']
+      ✔ 'foo baz |' -> ['--help', '--another', 'nested']
+      ✔ 'foo baz nested |' -> ['--help']
+      ✔ 'foo bar --local |' -> ['--help']
+    cd
+      ✔ '.|' -> ['[object Object]'] + both
+      ✔ './|' -> ['[object Object]'] + both
+      ✔ './.|' -> ['[object Object]'] + both
+      ✔ 'c|' -> ['[object Object]'] + both
+      ✔ 'cd|' -> ['[object Object]'] + both
+      ✔ 'cd |' -> ['-'] + folders
+      ✔ 'cd -|' -> ['-'] + folders
+      ✔ 'cd c|' -> ['-'] + folders
+      ✔ 'cd child|' -> ['-'] + folders
+      ✔ 'cd .|' -> ['-'] + folders
+      ✔ 'cd ./|' -> ['-'] + folders
+      ✔ 'cd ./child|' -> ['-'] + folders
+      ✔ 'cd ..|' -> ['-'] + folders
+      ✔ 'cd child/|' -> ['-'] + folders @ child/
+      ✔ 'cd ../|' -> ['-'] + folders
+      ✔ 'cd ../sibling|' -> ['-'] + folders
+    code
+      ✔ 'c|' -> ['[object Object]'] + both
+      ✔ 'co|' -> ['[object Object]'] + both
+      ✔ 'cod|' -> ['[object Object]'] + both
+      ✔ 'code |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code --remove |' -> [] + folders
+      ✔ 'code --add-mcp |' -> []
+      ✔ 'code --update-extensions |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code --disable-lcd-text |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code --disable-chromium-sandbox |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code --enable-proposed-api |' -> ['code']
+      ✔ 'code --log |' -> ['critical', 'error', 'warn', 'info', 'debug', 'trace', 'off']
+      ✔ 'code --locale |' -> ['bg', 'de', 'en', 'es', 'fr', 'hu', 'it', 'ja', 'ko', 'pt-br', 'ru', 'tr', 'zh-CN', 'zh-TW']
+      ✔ 'code --diff |' -> [] + files
+      ✔ 'code --diff ./file1 |' -> [] + files
+      ✔ 'code --merge |' -> [] + files
+      ✔ 'code --merge ./file1 ./file2 |' -> [] + files
+      ✔ 'code --merge ./file1 ./file2 ./base |' -> [] + files
+      ✔ 'code --goto |' -> [] + files
+      ✔ 'code --user-data-dir |' -> [] + folders
+      ✔ 'code --profile |' -> []
+      ✔ 'code --install-extension |' -> ['code'] + both
+      ✔ 'code --uninstall-extension |' -> ['code']
+      ✔ 'code --disable-extension |' -> ['code']
+      ✔ 'code --log |' -> ['critical', 'error', 'warn', 'info', 'debug', 'trace', 'off']
+      ✔ 'code --sync |' -> ['on', 'off']
+      ✔ 'code --extensions-dir |' -> [] + folders
+      ✔ 'code --list-extensions |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code --show-versions |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code --category |' -> ['azure', 'data science', 'debuggers', 'extension packs', 'education', 'formatters', 'keymaps', 'language packs', 'linters', 'machine learning', 'notebooks', 'programming languages', 'scm providers', 'snippets', 'testing', 'themes', 'visualization', 'other']
+      ✔ 'code --category a|' -> ['azure', 'data science', 'debuggers', 'extension packs', 'education', 'formatters', 'keymaps', 'language packs', 'linters', 'machine learning', 'notebooks', 'programming languages', 'scm providers', 'snippets', 'testing', 'themes', 'visualization', 'other']
+      ✔ 'code chat |' -> ['--add-file <file>', '--help', '--maximize', '--mode <mode>', '--new-window', '--reuse-window', '-a <file>', '-h', '-m <mode>', '-n', '-r']
+      ✔ 'code chat --mode |' -> ['agent', 'ask', 'edit']
+      ✔ 'code chat --add-file |' -> [] + files
+      ✔ 'code | --locale' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+    code-insiders
+      ✔ 'c|' -> ['[object Object]'] + both
+      ✔ 'co|' -> ['[object Object]'] + both
+      ✔ 'cod|' -> ['[object Object]'] + both
+      ✔ 'code|' -> ['[object Object]'] + both
+      ✔ 'code-|' -> ['[object Object]'] + both
+      ✔ 'code-i|' -> ['[object Object]'] + both
+      ✔ 'code-in|' -> ['[object Object]'] + both
+      ✔ 'code-ins|' -> ['[object Object]'] + both
+      ✔ 'code-insi|' -> ['[object Object]'] + both
+      ✔ 'code-insid|' -> ['[object Object]'] + both
+      ✔ 'code-inside|' -> ['[object Object]'] + both
+      ✔ 'code-insider|' -> ['[object Object]'] + both
+      ✔ 'code-insiders |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code-insiders --remove |' -> [] + folders
+      ✔ 'code-insiders --add-mcp |' -> []
+      ✔ 'code-insiders --update-extensions |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code-insiders --disable-lcd-text |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code-insiders --disable-chromium-sandbox |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code-insiders --enable-proposed-api |' -> ['code-insiders']
+      ✔ 'code-insiders --log |' -> ['critical', 'error', 'warn', 'info', 'debug', 'trace', 'off']
+      ✔ 'code-insiders --locale |' -> ['bg', 'de', 'en', 'es', 'fr', 'hu', 'it', 'ja', 'ko', 'pt-br', 'ru', 'tr', 'zh-CN', 'zh-TW']
+      ✔ 'code-insiders --diff |' -> [] + files
+      ✔ 'code-insiders --diff ./file1 |' -> [] + files
+      ✔ 'code-insiders --merge |' -> [] + files
+      ✔ 'code-insiders --merge ./file1 ./file2 |' -> [] + files
+      ✔ 'code-insiders --merge ./file1 ./file2 ./base |' -> [] + files
+      ✔ 'code-insiders --goto |' -> [] + files
+      ✔ 'code-insiders --user-data-dir |' -> [] + folders
+      ✔ 'code-insiders --profile |' -> []
+      ✔ 'code-insiders --install-extension |' -> ['code-insiders'] + both
+      ✔ 'code-insiders --uninstall-extension |' -> ['code-insiders']
+      ✔ 'code-insiders --disable-extension |' -> ['code-insiders']
+      ✔ 'code-insiders --log |' -> ['critical', 'error', 'warn', 'info', 'debug', 'trace', 'off']
+      ✔ 'code-insiders --sync |' -> ['on', 'off']
+      ✔ 'code-insiders --extensions-dir |' -> [] + folders
+      ✔ 'code-insiders --list-extensions |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code-insiders --show-versions |' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+      ✔ 'code-insiders --category |' -> ['azure', 'data science', 'debuggers', 'extension packs', 'education', 'formatters', 'keymaps', 'language packs', 'linters', 'machine learning', 'notebooks', 'programming languages', 'scm providers', 'snippets', 'testing', 'themes', 'visualization', 'other']
+      ✔ 'code-insiders --category a|' -> ['azure', 'data science', 'debuggers', 'extension packs', 'education', 'formatters', 'keymaps', 'language packs', 'linters', 'machine learning', 'notebooks', 'programming languages', 'scm providers', 'snippets', 'testing', 'themes', 'visualization', 'other']
+      ✔ 'code-insiders chat |' -> ['--add-file <file>', '--help', '--maximize', '--mode <mode>', '--new-window', '--reuse-window', '-a <file>', '-h', '-m <mode>', '-n', '-r']
+      ✔ 'code-insiders chat --mode |' -> ['agent', 'ask', 'edit']
+      ✔ 'code-insiders chat --add-file |' -> [] + files
+      ✔ 'code-insiders | --locale' -> ['-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', '-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir <dir>', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log <level>', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--user-data-dir <dir>', '--verbose', '--version', '--wait', 'tunnel', 'chat [<prompt>]', 'serve-web', 'help', 'status', 'version'] + both
+    code-tunnel
+      ✔ 'c|' -> ['[object Object]'] + both
+      ✔ 'co|' -> ['[object Object]'] + both
+      ✔ 'cod|' -> ['[object Object]'] + both
+      ✔ 'code|' -> ['[object Object]'] + both
+      ✔ 'code-|' -> ['[object Object]'] + both
+      ✔ 'code-t|' -> ['[object Object]'] + both
+      ✔ 'code-tu|' -> ['[object Object]'] + both
+      ✔ 'code-tun|' -> ['[object Object]'] + both
+      ✔ 'code-tunn|' -> ['[object Object]'] + both
+      ✔ 'code-tunne|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel |' -> ['-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--cli-data-dir <cli_data_dir>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir [<extensions_dir>]', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log [<log>]', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--use-version [<use_version>]', '--user-data-dir [<user_data_dir>]', '--verbose', '--version', '--wait', '-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', 'chat [<prompt>]', 'ext', 'help', 'serve-web', 'status', 'tunnel', 'version'] + both
+      ✔ 'code-tunnel tunnel |' -> ['--accept-server-license-terms', '--cli-data-dir <cli_data_dir>', '--extensions-dir [<extensions_dir>]', '--help', '--install-extension [<install_extension>]', '--log [<log>]', '--name [<name>]', '--no-sleep', '--random-name', '--server-data-dir [<server_data_dir>]', '--use-version [<use_version>]', '--user-data-dir [<user_data_dir>]', '--verbose', '-h', 'help', 'kill', 'prune', 'rename <name>', 'restart', 'service', 'status', 'unregister', 'user']
+      ✔ 'code-tunnel tunnel user |' -> ['help', 'login', 'logout', 'show']
+      ✔ 'code-tunnel tunnel prune |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel tunnel kill |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel tunnel restart |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel tunnel status |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel tunnel rename |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel tunnel unregister |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel tunnel service |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h', 'help', 'install', 'log', 'uninstall']
+      ✔ 'code-tunnel tunnel help |' -> ['help', 'kill', 'prune', 'rename', 'restart', 'service', 'status', 'unregister', 'user']
+      ✔ 'code-tunnel chat |' -> ['--mode <mode>', '--add-file <file>', '--help', '--maximize', '--new-window', '--reuse-window', '-m <mode>', '-a <file>', '-h', '-n', '-r']
+      ✔ 'code-tunnel chat --mode |' -> ['agent', 'ask', 'edit']
+      ✔ 'code-tunnel chat --add-file |' -> [] + files
+      ✔ 'code-tunnel serve-web |' -> ['--accept-server-license-terms', '--cli-data-dir <cli_data_dir>', '--connection-token [<connection_token>]', '--connection-token-file [<connection_token_file>]', '--help', '--host [<host>]', '--log [<log>]', '--port [<port>]', '--server-base-path [<server_base_path>]', '--server-data-dir [<server_data_dir>]', '--socket-path [<socket_path>]', '--verbose', '--without-connection-token', '-h']
+      ✔ 'code-tunnel ext |' -> ['install [<ext-id | id>]', 'list', 'uninstall [<ext-id | id>]', 'update']
+      ✔ 'code-tunnel ext list |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h', '--category [<category>]', '--show-versions']
+      ✔ 'code-tunnel ext install |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h', '--pre-release', '--donot-include-pack-and-dependencies', '--force']
+      ✔ 'code-tunnel ext update |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel status |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel version |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+    code-tunnel-insiders
+      ✔ 'c|' -> ['[object Object]'] + both
+      ✔ 'co|' -> ['[object Object]'] + both
+      ✔ 'cod|' -> ['[object Object]'] + both
+      ✔ 'code|' -> ['[object Object]'] + both
+      ✔ 'code-|' -> ['[object Object]'] + both
+      ✔ 'code-t|' -> ['[object Object]'] + both
+      ✔ 'code-tu|' -> ['[object Object]'] + both
+      ✔ 'code-tun|' -> ['[object Object]'] + both
+      ✔ 'code-tunn|' -> ['[object Object]'] + both
+      ✔ 'code-tunne|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel-|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel-i|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel-in|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel-ins|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel-insi|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel-insid|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel-inside|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel-insider|' -> ['[object Object]'] + both
+      ✔ 'code-tunnel-insiders |' -> ['-', '--add <folder>', '--add-mcp <json>', '--category <category>', '--cli-data-dir <cli_data_dir>', '--diff <file> <file>', '--disable-chromium-sandbox', '--disable-extension <extension-id>', '--disable-extensions', '--disable-gpu', '--disable-lcd-text', '--enable-proposed-api <extension-id>', '--extensions-dir [<extensions_dir>]', '--goto <file:line[:character]>', '--help', '--inspect-brk-extensions <port>', '--inspect-extensions <port>', '--install-extension <extension-id[@version] | path-to-vsix>', '--list-extensions', '--locale <locale>', '--locate-shell-integration-path <shell>', '--log [<log>]', '--max-memory <memory>', '--merge <file> <file> <base> <result>', '--new-window', '--pre-release', '--prof-startup', '--profile <profileName>', '--remove <folder>', '--reuse-window', '--show-versions', '--status', '--sync <sync>', '--telemetry', '--transient', '--uninstall-extension <extension-id>', '--update-extensions', '--use-version [<use_version>]', '--user-data-dir [<user_data_dir>]', '--verbose', '--version', '--wait', '-a <folder>', '-d <file> <file>', '-g <file:line[:character]>', '-h', '-m <file> <file> <base> <result>', '-n', '-r', '-s', '-v', '-w', 'chat [<prompt>]', 'ext', 'help', 'serve-web', 'status', 'tunnel', 'version'] + both
+      ✔ 'code-tunnel-insiders tunnel |' -> ['--accept-server-license-terms', '--cli-data-dir <cli_data_dir>', '--extensions-dir [<extensions_dir>]', '--help', '--install-extension [<install_extension>]', '--log [<log>]', '--name [<name>]', '--no-sleep', '--random-name', '--server-data-dir [<server_data_dir>]', '--use-version [<use_version>]', '--user-data-dir [<user_data_dir>]', '--verbose', '-h', 'help', 'kill', 'prune', 'rename <name>', 'restart', 'service', 'status', 'unregister', 'user']
+      ✔ 'code-tunnel-insiders tunnel user |' -> ['help', 'login', 'logout', 'show']
+      ✔ 'code-tunnel-insiders tunnel prune |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel-insiders tunnel kill |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel-insiders tunnel restart |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel-insiders tunnel status |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel-insiders tunnel rename |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel-insiders tunnel unregister |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel-insiders tunnel service |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h', 'help', 'install', 'log', 'uninstall']
+      ✔ 'code-tunnel-insiders tunnel help |' -> ['help', 'kill', 'prune', 'rename', 'restart', 'service', 'status', 'unregister', 'user']
+      ✔ 'code-tunnel-insiders chat |' -> ['--mode <mode>', '--add-file <file>', '--help', '--maximize', '--new-window', '--reuse-window', '-m <mode>', '-a <file>', '-h', '-n', '-r']
+      ✔ 'code-tunnel-insiders chat --mode |' -> ['agent', 'ask', 'edit']
+      ✔ 'code-tunnel-insiders chat --add-file |' -> [] + files
+      ✔ 'code-tunnel-insiders serve-web |' -> ['--accept-server-license-terms', '--cli-data-dir <cli_data_dir>', '--connection-token [<connection_token>]', '--connection-token-file [<connection_token_file>]', '--help', '--host [<host>]', '--log [<log>]', '--port [<port>]', '--server-base-path [<server_base_path>]', '--server-data-dir [<server_data_dir>]', '--socket-path [<socket_path>]', '--verbose', '--without-connection-token', '-h']
+      ✔ 'code-tunnel-insiders ext |' -> ['install [<ext-id | id>]', 'list', 'uninstall [<ext-id | id>]', 'update']
+      ✔ 'code-tunnel-insiders ext list |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h', '--category [<category>]', '--show-versions']
+      ✔ 'code-tunnel-insiders ext install |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h', '--pre-release', '--donot-include-pack-and-dependencies', '--force']
+      ✔ 'code-tunnel-insiders ext update |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel-insiders status |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+      ✔ 'code-tunnel-insiders version |' -> ['--cli-data-dir <cli_data_dir>', '--log [<log>]', '--verbose', '--help', '-h']
+    echo
+      ✔ '|' -> ['[object Object]'] + both
+      ✔ 'e|' -> ['[object Object]'] + both
+      ✔ 'ec|' -> ['[object Object]'] + both
+      ✔ 'ech|' -> ['[object Object]'] + both
+      ✔ 'echo|' -> ['[object Object]'] + both
+      ✔ 'echo |' -> ['-E', '-e', '-n']
+    ls
+      ✔ '|' -> ['[object Object]'] + both
+      ✔ 'l|' -> ['[object Object]'] + both
+      ✔ 'ls|' -> ['[object Object]'] + both
+      ✔ 'ls |' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls -|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls -a|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x']
+      ✔ 'ls -a -|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls c|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls child|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls .|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls ./|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls ./child|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls ..|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls child/|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both @ child/
+      ✔ 'ls ../|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+      ✔ 'ls ../sibling|' -> ['-%', '-,', '--color <when>', '-1', '-@', '-A', '-B', '-C', '-F', '-G', '-H', '-L', '-O', '-P', '-R', '-S', '-T', '-U', '-W', '-a', '-b', '-c', '-d', '-e', '-f', '-g', '-h', '-i', '-k', '-l', '-m', '-n', '-o', '-p', '-q', '-r', '-s', '-t', '-u', '-v', '-w', '-x'] + both
+    mkdir
+      ✔ '|' -> ['[object Object]'] + both
+      ✔ 'm|' -> ['[object Object]'] + both
+      ✔ 'mkdir|' -> ['[object Object]'] + both
+      ✔ 'mkdir |' -> ['--context <context>', '--help', '--mode <mode>', '--parents', '--verbose', '--version', '-Z <context>', '-m <mode>', '-p', '-v'] + folders
+    rm
+      ✔ '|' -> ['[object Object]'] + both
+      ✔ 'r|' -> ['[object Object]'] + both
+      ✔ 'rm|' -> ['[object Object]'] + both
+      ✔ 'rm |' -> ['-P', '-R', '-d', '-f', '-i', '-r', '-v'] + both
+    rmdir
+      ✔ '|' -> ['[object Object]'] + both
+      ✔ 'r|' -> ['[object Object]'] + both
+      ✔ 'rmdir|' -> ['[object Object]'] + both
+      ✔ 'rmdir |' -> ['-p'] + folders
+    touch
+      ✔ '|' -> ['[object Object]'] + both
+      ✔ 't|' -> ['[object Object]'] + both
+      ✔ 'touch|' -> ['[object Object]'] + both
+      ✔ 'touch |' -> ['-A <time>', '-a', '-c', '-f', '-h', '-m', '-r <file>', '-t <timestamp>'] + folders
+    git
+      ✔ '|' -> ['[object Object]'] + both
+      ✔ 'g|' -> ['[object Object]'] + both
+      ✔ 'gi|' -> ['[object Object]'] + both
+      ✔ 'git|' -> ['[object Object]'] + both
+  PathExecutableCache
+    ✔ cache should return empty for empty PATH
+    ✔ results are the same on successive calls (87ms)
+    ✔ refresh clears the cache (94ms)
+    ✔ cache should include executables found via symbolic links
+  Git Branch Completions
+    ✔ postProcessBranches should parse git for-each-ref output with commit details
+    ✔ postProcessBranches should handle remote branches
+    ✔ postProcessBranches should filter out HEAD branches
+    ✔ postProcessBranches should handle empty input
+    ✔ postProcessBranches should handle git error output
+    ✔ postProcessBranches should deduplicate branches
+  fig/shell-parser/ fixtures
+    basic
+      ✔ Case 1
+      ✔ Case 2
+      ✔ Case 3
+      ✔ Case 4
+      ✔ Case 5
+      ✔ Case 6
+      ✔ Case 7
+      ✔ Case 8
+      ✔ Case 9
+      ✔ Case 10
+    multipleStatements
+      ✔ Case 1
+      ✔ Case 2
+      ✔ Case 3
+      ✔ Case 4
+      ✔ Case 5
+      ✔ Case 6
+      ✔ Case 7
+      ✔ Case 8
+      ✔ Case 9
+      ✔ Case 10
+      ✔ Case 11
+      ✔ Case 12
+      ✔ Case 13
+      ✔ Case 14
+      ✔ Case 15
+      ✔ Case 16
+    primaryExpressions
+      ✔ Case 1
+      ✔ Case 2
+      ✔ Case 3
+      ✔ Case 4
+      ✔ Case 5
+      ✔ Case 6
+      ✔ Case 7
+      ✔ Case 8
+      ✔ Case 9
+      ✔ Case 10
+      ✔ Case 11
+      ✔ Case 12
+    variables
+      ✔ Case 1
+      ✔ Case 2
+      ✔ Case 3
+      ✔ Case 4
+      ✔ Case 5
+      ✔ Case 6
+      ✔ Case 7
+      ✔ Case 8
+      ✔ Case 9
+      ✔ Case 10
+      ✔ Case 11
+      ✔ Case 12
+      ✔ Case 13
+      ✔ Case 14
+      ✔ Case 15
+      ✔ Case 16
+      ✔ Case 17
+      ✔ Case 18
+      ✔ Case 19
+      ✔ Case 20
+      ✔ Case 21
+      ✔ Case 22
+      ✔ Case 23
+      ✔ Case 24
+      ✔ Case 25
+      ✔ Case 26
+  fig/shell-parser/ getCommand
+    ✔ works without matching aliases
+    ✔ works with regular aliases
+  fig/shared/ fieldsAreEqual
+    ✔ should return immediately if two values are the same
+    ✔ should return true if fields are equal
+    ✔ should return false if any field is not equal or fields are not specified
+  fig/shared/ makeArray
+    ✔ should transform an object into an array
+    ✔ should not transform arrays with one value
+    ✔ should not transform arrays with multiple values
+  fig/shared/ makeArrayIfExists
+    ✔ works
+  fig/shared/ longestCommonPrefix
+    ✔ should return the shared match
+    ✔ should return nothing if not all items starts by the same chars
+  fig/shared/ compareNamedObjectsAlphabetically
+    ✔ should return 1 to sort alphabetically z against b for string
+    ✔ should return 1 to sort alphabetically z against b for object with name
+    ✔ should return 1 to sort alphabetically c against x for object with name
+    ✔ should return 1 to sort alphabetically z against b for object with name array
+    ✔ should return 1 to sort alphabetically c against x for object with name array
+  347 passing (446ms)
+[main 2026-04-20T01:02:28.007Z] Extension host with pid 21563 exited with code: 0, signal: unknown.
+Exit code:   0
+Done
+
+### TypeScript tests
+
+> code-oss-dev@1.110.0 electron
+> node build/lib/electron.ts
+
+(node:21657) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[21:02:30] Synchronizing built-in extensions...
+[21:02:30] You can manage built-in extensions with the --builtin flag
+[21:02:30] [github] ms-vscode.js-debug-companion@1.1.3 ✔︎
+[21:02:30] [github] ms-vscode.js-debug@1.105.0 ✔︎
+[21:02:30] [github] ms-vscode.vscode-js-profile-table@1.0.10 ✔︎
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:02:32.942Z] [CSS_DEV] DONE, 301 css modules (83ms)
+[main 2026-04-20T01:02:33.027Z] update#setState disabled
+Started local extension host with pid 21843.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/typescript-language-features
+No default agent registered
+[21593:0419/210235.182072:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  CachedResponse
+    ✔ should cache simple response for same document
+    ✔ should invalidate cache for new document (137ms)
+    ✔ should not cache cancelled responses
+    ✔ should not care if subsequent requests are cancelled if first request is resolved ok
+    ✔ should not cache cancelled responses with document changes
+  typescript function call snippets
+    ✔ Should use label as function name
+    ✔ Should use insertText string to override function name
+    ✔ Should return insertText as-is if it is already a snippet
+    ✔ Should return insertText as-is if it is already a snippet
+    ✔ Should extract parameter from display parts
+    ✔ Should extract all parameters from display parts
+    ✔ Should create empty placeholder at rest parameter
+    ✔ Should skip over inline function and object types when extracting parameters
+    ✔ Should skip over return type while extracting parameters
+    ✔ Should skip over prefix type while extracting parameters
+    ✔ Should complete property names
+    ✔ Should escape snippet syntax in method name
+    ✔ Should not include object key signature in completion, #66297
+    ✔ Should skip over this parameter
+    ✔ Should not skip mid-list optional parameter
+    ✔ Should skip end-of-list optional parameters
+    ✔ Should skip end-of-list optional params but should not skip start-of-list and mid-list ones
+  typescript.jsDocSnippet
+    ✔ Should do nothing for single line input
+    ✔ Should put cursor inside multiline line input
+    ✔ Should add placeholders after each parameter
+    ✔ Should add placeholders for types
+    ✔ Should properly escape dollars in parameter names
+  OnEnter
+    - should indent after if block with braces
+    - should indent within empty object literal
+    - should indent after simple jsx tag with attributes
+    - should not indent after a multi-line comment block 1
+    - should not indent after a multi-line comment block 2
+    - should indent within a multi-line comment block
+    - should indent after if block followed by comment with quote
+  RequestQueue
+    ✔ should be empty on creation
+    ✔ should queue normal requests in first in first out order
+    ✔ should put normal requests in front of low priority requests
+    ✔ should not push fence requests front of low priority requests
+    RequestQueue.createRequest
+      ✔ should create items with increasing sequence numbers
+  Server
+    - should send requests with increasing sequence numbers
+  typescript.previewer
+    ✔ Should ignore hyphens after a param tag
+    ✔ Should parse url jsdoc @link
+    ✔ Should parse url jsdoc @link with text
+    ✔ Should treat @linkcode jsdocs links as monospace
+    ✔ Should parse url jsdoc @link in param tag
+    ✔ Should support non-ascii characters in parameter name (#90108)
+    ✔ Should render @example blocks as code
+    ✔ Should not render @example blocks as code as if they contain a codeblock
+    ✔ Should render @example blocks as code if they contain a <caption>
+    ✔ Should not render @example blocks as code if they contain a <caption> and a codeblock
+    ✔ Should not render @link inside of @example #187768
+    ✔ Should render @linkcode symbol name as code
+    ✔ Should render @linkcode text as code
+  45 passing (167ms)
+  8 pending
+[main 2026-04-20T01:02:35.469Z] Extension host with pid 21843 exited with code: 0, signal: unknown.
+
+### Markdown tests
+
+> code-oss-dev@1.110.0 test-extension
+> vscode-test -l markdown-language-features
+
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:02:36.482Z] [CSS_DEV] DONE, 301 css modules (81ms)
+[main 2026-04-20T01:02:36.565Z] update#setState disabled
+Started local extension host with pid 22115.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/markdown-language-features
+No default agent registered
+[21950:0419/210238.681189:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  urlToUri
+    ✔ Absolute File
+    ✔ Relative File
+    ✔ Http Basic
+    ✔ Http Encoded Chars
+  createEditAddingLinksForUriList
+    ✔ Markdown Link Pasting should occur for a valid link (end to end)
+    validateLink
+      ✔ Markdown pasting should occur for a valid link
+      ✔ Markdown pasting should occur for a valid link preceded by a new line
+      ✔ Markdown pasting should occur for a valid link followed by a new line
+      ✔ Markdown pasting should not occur for a valid hostname and invalid protool
+      ✔ Markdown pasting should not occur for plain text
+      ✔ Markdown pasting should not occur for plain text including a colon
+      ✔ Markdown pasting should not occur for plain text including a slashes
+      ✔ Markdown pasting should not occur for a link followed by text
+      ✔ Markdown pasting should occur for a link preceded or followed by spaces
+      ✔ Markdown pasting should not occur for a link with an invalid scheme
+      ✔ Markdown pasting should not occur for multiple links being pasted
+      ✔ Markdown pasting should not occur for multiple links with spaces being pasted
+      ✔ Markdown pasting should not occur for just a valid uri scheme
+    createInsertUriListEdit
+      ✔ Should create snippet with < > when pasted link has an mismatched parentheses
+      ✔ Should create Markdown link snippet when pasteAsMarkdownLink is true
+      ✔ Should use an unencoded URI string in Markdown link when passing in an external browser link
+      ✔ Should not decode an encoded URI string when passing in an external browser link
+      ✔ Should not encode an unencoded URI string when passing in an external browser link
+      ✔ Should add image for image file by default
+      ✔ Should be able to override insert style to use link
+      ✔ Should be able to override insert style to use images
+    shouldInsertMarkdownLinkByDefault
+      ✔ Smart should be enabled for selected plain text (113ms)
+      ✔ Smart should be enabled in headers
+      ✔ Smart should be enabled in lists
+      ✔ Smart should be enabled in blockquotes
+      ✔ Smart should be disabled in indented code blocks
+      ✔ Smart should be disabled in fenced code blocks
+      ✔ Smart should be disabled in math blocks
+      ✔ Smart should be disabled in link definitions
+      ✔ Smart should be disabled in html blocks
+      ✔ Smart should be disabled in html blocks where paste creates the block
+      ✔ Smart should be disabled in Markdown links
+      ✔ Smart should be disabled in Markdown images
+      ✔ Smart should be disabled in inline code
+      ✔ Smart should be enabled when pasting over inline code
+      ✔ Smart should be disabled in inline math
+      ✔ Smart should be enabled for empty selection
+      ✔ SmartWithSelection should disable for empty selection
+      ✔ Smart should disable for selected link
+      ✔ Smart should disable for selected link with trailing whitespace
+      ✔ Should evaluate pasteAsMarkdownLink as true for a link pasted in square brackets
+      ✔ Should evaluate pasteAsMarkdownLink as false for selected whitespace and new lines
+      ✔ Smart should be disabled inside of autolinks
+      ✔ Smart should be disabled in frontmatter
+      ✔ Smart should enabled after frontmatter
+  markdown.engine
+    rendering
+      ✔ Renders a document
+      ✔ Renders a string
+    image-caching
+      ✔ Extracts all images
+  Markdown Document links
+    ✔ Should navigate to markdown file (294ms)
+    ✔ Should navigate to markdown file with leading ./ (114ms)
+    ✔ Should navigate to markdown file with leading / (66ms)
+    ✔ Should navigate to markdown file without file extension (83ms)
+    ✔ Should navigate to markdown file in directory (65ms)
+    ✔ Should navigate to fragment by title in file (93ms)
+    ✔ Should navigate to fragment by line (63ms)
+    ✔ Should navigate to line number within non-md file (84ms)
+    ✔ Should navigate to fragment within current file (60ms)
+    - Should navigate to fragment within current untitled file
+  resolveCopyDestination
+    ✔ Relative destinations should resolve next to document
+    ✔ Destination starting with / should go to workspace root
+    ✔ If there is no workspace root, / should resolve to document dir
+    ✔ If path ends in /, we should automatically add the fileName
+    ✔ Basic transform
+    ✔ Transforms should support capture groups
+    ✔ Should support escaping snippet variables
+    ✔ Transforms should support escaped slashes
+  70 passing (2s)
+  1 pending
+[main 2026-04-20T01:02:40.459Z] Extension host with pid 22115 exited with code: 0, signal: unknown.
+Exit code:   0
+Done
+
+### Emmet tests
+
+> code-oss-dev@1.110.0 electron
+> node build/lib/electron.ts
+
+(node:22323) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[21:02:43] Synchronizing built-in extensions...
+[21:02:43] You can manage built-in extensions with the --builtin flag
+[21:02:43] [github] ms-vscode.js-debug-companion@1.1.3 ✔︎
+[21:02:43] [github] ms-vscode.js-debug@1.105.0 ✔︎
+[21:02:43] [github] ms-vscode.vscode-js-profile-table@1.0.10 ✔︎
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:02:45.324Z] [CSS_DEV] DONE, 301 css modules (87ms)
+[main 2026-04-20T01:02:45.412Z] update#setState disabled
+Started local extension host with pid 22521.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/emmet
+No default agent registered
+[22267:0419/210247.581467:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  Tests for Expand Abbreviations (HTML)
+    ✔ Expand snippets (HTML) (222ms)
+    ✔ Expand snippets in completion list (HTML)
+    ✔ Expand snippets when no parent node (HTML) (54ms)
+    ✔ Expand snippets when no parent node in completion list (HTML)
+    ✔ Expand abbreviation (HTML) (57ms)
+    ✔ Expand abbreviation in completion list (HTML)
+    ✔ Expand text that is neither an abbreviation nor a snippet to tags (HTML) (58ms)
+    ✔ Do not Expand text that is neither an abbreviation nor a snippet to tags in completion list (HTML)
+    ✔ Expand abbreviation with repeaters (HTML) (57ms)
+    ✔ Expand abbreviation with repeaters in completion list (HTML)
+    ✔ Expand abbreviation with numbered repeaters (HTML) (57ms)
+    ✔ Expand abbreviation with numbered repeaters in completion list (HTML)
+    ✔ Expand abbreviation with numbered repeaters with offset (HTML) (65ms)
+    ✔ Expand abbreviation with numbered repeaters with offset in completion list (HTML)
+    ✔ Expand abbreviation with numbered repeaters in groups (HTML) (55ms)
+    ✔ Expand abbreviation with numbered repeaters in groups in completion list (HTML)
+    ✔ Expand abbreviation with numbered repeaters in groups with sibling in the end (HTML) (58ms)
+    ✔ Expand abbreviation with numbered repeaters in groups with sibling in the end in completion list (HTML)
+    ✔ Expand abbreviation with nested groups (HTML) (65ms)
+    ✔ Expand abbreviation with nested groups in completion list (HTML)
+    ✔ Expand tag that is opened, but not closed (HTML) (49ms)
+    ✔ Do not Expand tag that is opened, but not closed in completion list (HTML)
+    ✔ No expanding text inside open tag (HTML)
+    ✔ No expanding text inside open tag in completion list (HTML)
+    ✔ No expanding text inside open tag when there is no closing tag (HTML)
+    ✔ No expanding text inside open tag when there is no closing tag in completion list (HTML)
+    ✔ No expanding text inside open tag when there is no closing tag when there is no parent node (HTML)
+    ✔ No expanding text in completion list inside open tag when there is no closing tag when there is no parent node (HTML)
+    ✔ Expand css when inside style tag (HTML) (54ms)
+    ✔ Expand css when inside style tag in completion list (HTML)
+    ✔ No expanding text inside style tag if position is not for property name (HTML)
+    ✔ Expand css when inside style attribute (HTML) (65ms)
+    ✔ Expand css when inside style attribute in completion list (HTML)
+    ✔ Expand html when inside script tag with html type (HTML) (76ms)
+    ✔ Expand html in completion list when inside script tag with html type (HTML)
+    ✔ No expanding text inside script tag with javascript type (HTML)
+    ✔ No expanding text in completion list inside script tag with javascript type (HTML)
+    ✔ Expand html when inside script tag with javascript type if js is mapped to html (HTML) (214ms)
+    ✔ Expand html in completion list when inside script tag with javascript type if js is mapped to html (HTML) (89ms)
+    ✔ No expanding when html is excluded in the settings in completion list (84ms)
+  Tests for jsx, xml and xsl
+    ✔ Expand abbreviation with className instead of class in jsx (45ms)
+    ✔ Expand abbreviation with self closing tags for jsx (52ms)
+    ✔ Expand abbreviation with single quotes for jsx (89ms)
+    ✔ Expand abbreviation with self closing tags for xml (47ms)
+    ✔ Expand abbreviation with no self closing tags for html (45ms)
+    ✔ Expand abbreviation with condition containing less than sign for jsx (47ms)
+    ✔ No expanding text inside open tag in completion list (jsx) (94ms)
+    ✔ No expanding tag that is opened, but not closed in completion list (jsx)
+    ✔ No expanding text inside open tag when there is no closing tag in completion list (jsx)
+    ✔ No expanding text in completion list inside open tag when there is no closing tag when there is no parent node (jsx)
+  Tests for completion in CSS embedded in HTML
+    ✔ style attribute & attribute value in html (123ms)
+    ✔ microsoft/vscode#79766, correct region determination
+    ✔ microsoft/vscode#86941, widows should be completed after width (177ms)
+    ✔ microsoft/vscode#117020, ! at end of abbreviation should have completion
+    ✔ microsoft/vscode#138461, JSX array noise (121ms)
+    ✔ microsoft/vscode-emmet-helper#90
+  Tests for Expand Abbreviations (CSS)
+    ✔ Expand abbreviation (CSS) (95ms)
+    ✔ No emmet when cursor inside comment (CSS)
+    ✔ No emmet when cursor in selector of a rule (CSS)
+    ✔ Skip when typing property values when there is a property in the next line (CSS)
+    ✔ Skip when typing the last property value in single line rules (CSS)
+    ✔ Allow hex color or !important when typing property values when there is a property in the next line (CSS) (65ms)
+    ✔ Skip when typing property values when there is a property in the previous line (CSS)
+    ✔ Allow hex color or !important when typing property values when there is a property in the previous line (CSS) (62ms)
+    ✔ Skip when typing property values when it is the only property in the rule (CSS)
+    ✔ Allow hex colors or !important when typing property values when it is the only property in the rule (CSS) (59ms)
+    ✔ # shouldnt expand to hex color when in selector (CSS)
+    ✔ Expand abbreviation in completion list (CSS)
+    ✔ Expand abbreviation (SCSS) (140ms)
+    ✔ Expand abbreviation in completion list (SCSS)
+    ✔ Invalid locations for abbreviations in scss
+    ✔ Invalid locations for abbreviations in scss in completion list
+    ✔ Skip when typing property values when there is a nested rule in the next line (SCSS)
+  Tests for Next/Previous Select/Edit point and Balance actions
+    ✔ Emmet Next/Prev Edit point in html file
+    ✔ Emmet Select Next/Prev Item in html file
+    ✔ Emmet Select Next/Prev item at boundary
+    ✔ Emmet Next/Prev Item in html template
+    ✔ Emmet Select Next/Prev Item in css file
+    ✔ Emmet Select Next/Prev Item in scss file with nested rules (39ms)
+    ✔ Emmet Balance Out in html file
+    ✔ Emmet Balance In using the same stack as Balance out in html file
+    ✔ Emmet Balance In when selection doesnt span entire node or its inner contents
+    ✔ Emmet Balance In/Out in html template
+  Tests for Evaluate Math Expression
+    ✔ Selected sanity check (82ms)
+    ✔ Selected with surrounding text (47ms)
+    ✔ Selected with number not part of selection (54ms)
+    ✔ Non-selected sanity check (46ms)
+    ✔ Non-selected midway (46ms)
+    ✔ Non-selected with surrounding text (50ms)
+  Tests for Increment/Decrement Emmet Commands
+    ✔ incrementNumberByOne (54ms)
+    ✔ incrementNumberByTen (47ms)
+    ✔ incrementNumberByOneTenth (51ms)
+    ✔ decrementNumberByOne (48ms)
+    ✔ decrementNumberByTen (52ms)
+    ✔ decrementNumberByOneTenth (46ms)
+  Tests for partial parse of Stylesheets
+    ✔ Ignore block comment inside rule
+    ✔ Ignore commented braces
+    ✔ Block comment between selector and open brace
+    ✔ Nested and consecutive rulesets with errors
+    ✔ One liner sass
+    ✔ Variables and interpolation (38ms)
+    ✔ Comments in sass
+  Tests for Emmet: Reflect CSS Value command
+    ✔ Reflect Css Value in css file (70ms)
+    ✔ Reflect Css Value in css file, selecting entire property (54ms)
+    ✔ Reflect Css Value in html file (70ms)
+    ✔ Reflect Css Value in html file, selecting entire property (54ms)
+  Tests for Emmet actions on html tags
+    ✔ update tag with multiple cursors (63ms)
+    ✔ update tag with entire node selected (53ms)
+    ✔ update tag with template (53ms)
+    ✔ remove tag with multiple cursors (53ms)
+    ✔ remove tag with boundary conditions (48ms)
+    ✔ remove tag with template (54ms)
+    ✔ remove tag with extra trim (53ms)
+    ✔ split/join tag with multiple cursors (56ms)
+    ✔ split/join tag with boundary selection (69ms)
+    ✔ split/join tag with templates (48ms)
+    ✔ split/join tag in jsx with xhtml self closing tag (96ms)
+    ✔ match tag with multiple cursors
+    ✔ match tag with template scripts
+    ✔ merge lines of tag with children when empty selection (56ms)
+    ✔ merge lines of tag with children when full node selection (52ms)
+    ✔ merge lines is no-op when start and end nodes are on the same line
+  Tests for Toggle Comment action from Emmet (HTML)
+    ✔ toggle comment with multiple cursors, but no selection (HTML) (57ms)
+    ✔ toggle comment with multiple cursors and whole node selected (HTML) (63ms)
+    ✔ toggle comment when multiple nodes are completely under single selection (HTML) (54ms)
+    ✔ toggle comment when multiple nodes are partially under single selection (HTML) (57ms)
+    ✔ toggle comment with multiple cursors selecting parent and child nodes (56ms)
+    ✔ toggle comment within script template (51ms)
+  Tests for Toggle Comment action from Emmet (CSS)
+    ✔ toggle comment with multiple cursors, but no selection (CSS) (53ms)
+    ✔ toggle comment with multiple cursors and whole node selected (CSS) (53ms)
+    ✔ toggle comment when multiple nodes of same parent are completely under single selection (CSS) (53ms)
+    ✔ toggle comment when start and end of selection is inside properties of separate rules (CSS) (52ms)
+    ✔ toggle comment when selection spans properties of separate rules, with start in whitespace and end inside the property (CSS) (53ms)
+    ✔ toggle comment when selection spans properties of separate rules, with end in whitespace and start inside the property (CSS) (54ms)
+    ✔ toggle comment when selection spans properties of separate rules, with both start and end in whitespace (CSS) (53ms)
+    ✔ toggle comment when multiple nodes of same parent are partially under single selection (CSS) (59ms)
+  Tests for Toggle Comment action from Emmet in nested css (SCSS)
+    ✔ toggle comment with multiple cursors selecting nested nodes (SCSS) (46ms)
+    ✔ toggle comment with multiple cursors selecting several nested nodes (SCSS) (54ms)
+    ✔ toggle comment with multiple cursors, but no selection (SCSS) (53ms)
+    ✔ toggle comment with multiple cursors and whole node selected (CSS) (58ms)
+    ✔ toggle comment when multiple nodes are completely under single selection (CSS) (46ms)
+    ✔ toggle comment when multiple nodes are partially under single selection (CSS) (54ms)
+    ✔ toggle comment doesn't fail when start and end nodes differ HTML (50ms)
+  Tests for Emmet actions on html tags
+    ✔ update image css with multiple cursors in css file (55ms)
+    ✔ update image size in css in html file with multiple cursors (53ms)
+    ✔ update image size in img tag in html file with multiple cursors (52ms)
+  Tests for Wrap with Abbreviations
+    ✔ Wrap with block element using multi cursor (80ms)
+    ✔ Wrap with inline element using multi cursor (68ms)
+    ✔ Wrap with snippet using multi cursor (53ms)
+    ✔ Wrap with multi line abbreviation using multi cursor (55ms)
+    ✔ Wrap with block element using multi cursor selection (53ms)
+    ✔ Wrap with inline element using multi cursor selection (53ms)
+    ✔ Wrap with snippet using multi cursor selection (53ms)
+    ✔ Wrap with multi line abbreviation using multi cursor selection (55ms)
+    ✔ Wrap with block element using multi cursor full line selection (52ms)
+    ✔ Wrap with inline element using multi cursor full line selection (54ms)
+    ✔ Wrap with snippet using multi cursor full line selection (54ms)
+    ✔ Wrap with multi line abbreviation using multi cursor full line selection (54ms)
+    ✔ Wrap with abbreviation and comment filter (50ms)
+    ✔ Wrap with abbreviation link (53ms)
+    ✔ Wrap with abbreviation entire node when cursor is on opening tag (47ms)
+    ✔ Wrap with abbreviation entire node when cursor is on closing tag (53ms)
+    ✔ Wrap with abbreviation inner node in cdata (48ms)
+    ✔ Wrap with abbreviation inner node in script in cdata (48ms)
+    ✔ Wrap with abbreviation inner node in cdata one-liner (53ms)
+    ✔ Wrap with multiline abbreviation doesnt add extra spaces (48ms)
+    ✔ Wrap individual lines with abbreviation (54ms)
+    ✔ Wrap individual lines with abbreviation with extra space selected (52ms)
+    ✔ Wrap individual lines with abbreviation with comment filter (50ms)
+    ✔ Wrap individual lines with abbreviation and trim (53ms)
+    ✔ Wrap with abbreviation and format set to false (99ms)
+    ✔ Wrap multi line selections with abbreviation (49ms)
+    ✔ Wrap multiline with abbreviation uses className for jsx files (55ms)
+    ✔ Wrap individual line with abbreviation uses className for jsx files (54ms)
+    ✔ Wrap with abbreviation merge overlapping computed ranges (45ms)
+    ✔ Wrap with abbreviation ignore invalid abbreviation
+  176 passing (11s)
+[main 2026-04-20T01:02:58.228Z] Extension host with pid 22521 exited with code: 0, signal: unknown.
+
+### Git tests
+
+> code-oss-dev@1.110.0 electron
+> node build/lib/electron.ts
+
+(node:23161) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[21:03:00] Synchronizing built-in extensions...
+[21:03:00] You can manage built-in extensions with the --builtin flag
+[21:03:00] [github] ms-vscode.js-debug-companion@1.1.3 ✔︎
+[21:03:00] [github] ms-vscode.js-debug@1.105.0 ✔︎
+[21:03:00] [github] ms-vscode.vscode-js-profile-table@1.0.10 ✔︎
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:03:03.145Z] [CSS_DEV] DONE, 301 css modules (90ms)
+[main 2026-04-20T01:03:03.233Z] update#setState disabled
+Started local extension host with pid 23377.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/git
+No default agent registered
+[23110:0419/210305.390701:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  askpassManager
+    ✔ garbage collection removes old directories
+    ✔ garbage collection skips non-directory entries
+    ✔ mtime is updated on existing directory (108ms)
+    ✔ garbage collection handles empty askpass directory
+    ✔ current content-addressed directory is not removed
+  git
+    GitStatusParser
+      ✔ empty parser
+      ✔ empty parser 2
+      ✔ simple
+      ✔ simple 2
+      ✔ empty lines
+      ✔ combined
+      ✔ split 1
+      ✔ split 2
+      ✔ split 3
+      ✔ rename
+      ✔ rename split
+      ✔ rename split 3
+    parseGitmodules
+      ✔ empty
+      ✔ sample
+      ✔ big
+      ✔ whitespace #74844
+      ✔ whitespace again #108371
+    parseGitRemotes
+      ✔ empty
+      ✔ single remote
+      ✔ single remote (multiple urls)
+      ✔ multiple remotes
+      ✔ remotes (white space)
+      ✔ remotes (invalid section)
+    parseGitCommit
+      ✔ single parent commit
+      ✔ multiple parent commits
+      ✔ no parent commits
+      ✔ commit with shortstat
+      ✔ commit with shortstat (no insertions)
+      ✔ commit with shortstat (no deletions)
+      ✔ commit list
+      ✔ commit list with shortstat
+    parseLsTree
+      ✔ sample
+    parseLsFiles
+      ✔ sample
+    splitInChunks
+      ✔ unit tests
+  RepositoryCache
+    ✔ set & get basic
+    ✔ inner LRU capped at 10 entries
+    ✔ outer LRU capped at 30 repos
+    ✔ delete removes folder and prunes empty repo
+    ✔ normalizes URLs with trailing .git
+    ✔ normalizes URLs with trailing slashes and .git
+    ✔ handles URLs without .git correctly
+  git smoke test
+    ✔ reflects working tree changes (347ms)
+    ✔ opens diff editor (130ms)
+    ✔ stages correctly (138ms)
+    ✔ stages, commits changes and verifies outgoing change (294ms)
+    ✔ rename/delete conflict (411ms)
+  51 passing (2s)
+[main 2026-04-20T01:03:07.176Z] Extension host with pid 23377 exited with code: 0, signal: unknown.
+
+### Git Base tests
+
+> code-oss-dev@1.110.0 test-extension
+> vscode-test -l git-base
+
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:03:08.237Z] [CSS_DEV] DONE, 301 css modules (82ms)
+[main 2026-04-20T01:03:08.316Z] update#setState disabled
+Started local extension host with pid 23701.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/git-base
+No default agent registered
+[23632:0419/210310.382261:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  GitCommitFoldingProvider
+    ✔ empty document returns no folding ranges
+    ✔ single line document returns no folding ranges
+    ✔ single comment line returns no folding ranges
+    ✔ two comment lines create one folding range
+    ✔ multiple comment lines create one folding range
+    ✔ comment block followed by content
+    ✔ comment block at end of document
+    ✔ multiple separated comment blocks
+    ✔ single diff line returns no folding ranges
+    ✔ diff block with content creates folding range
+    ✔ multiple diff blocks
+    ✔ diff block at end of document
+    ✔ realistic git commit message with comments and verbose diff
+    ✔ mixed comment and diff content
+  14 passing (18ms)
+[main 2026-04-20T01:03:10.462Z] Extension host with pid 23701 exited with code: 0, signal: unknown.
+Exit code:   0
+Done
+
+### Ipynb tests
+
+> code-oss-dev@1.110.0 test-extension
+> vscode-test -l ipynb
+
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:03:11.640Z] [CSS_DEV] DONE, 301 css modules (84ms)
+[main 2026-04-20T01:03:11.716Z] update#setState disabled
+Started local extension host with pid 23871.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/ipynb
+No default agent registered
+[23784:0419/210313.911469:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  ipynb serializer
+    ✔ Deserialize
+    ✔ Deserialize cells without metadata field
+    ✔ Serialize
+    Outputs
+      ✔ Empty output
+      ✔ Stream output
+      ✔ Stream output and line endings
+      ✔ Multi-line Stream output
+      ✔ Multi-line Stream output (last empty line should not be saved in ipynb)
+      ✔ Streamed text with Ansi characters
+      ✔ Streamed text with angle bracket characters
+      ✔ Streamed text with angle bracket characters and ansi chars
+      ✔ Error
+      Rich output for output_type = display_data
+        ✔ Text mimeType output
+        ✔ png,jpeg images
+        ✔ png image with a light background
+        ✔ png image with a dark background
+        ✔ png image with custom dimensions
+        ✔ png allowed to scroll
+      Rich output for output_type = execute_result
+        ✔ Text mimeType output
+        ✔ png,jpeg images
+        ✔ png image with a light background
+        ✔ png image with a dark background
+        ✔ png image with custom dimensions
+        ✔ png allowed to scroll
+    Output Order
+      ✔ Verify order of outputs
+  Notebook Model Store Sync
+    ✔ Empty cell will not result in any updates
+    ✔ Adding cell for non Jupyter Notebook will not result in any updates
+    ✔ Adding cell to nbformat 4.2 notebook will result in adding empty metadata
+    ✔ Added cell will have a cell id if nbformat is 4.5
+    ✔ Do not add cell id if one already exists
+    ✔ Do not perform any updates if cell id and metadata exists
+    ✔ Store language id in custom metadata, whilst preserving existing metadata
+    ✔ No changes when language is javascript
+    ✔ Remove language from metadata when cell language matches kernel language
+    ✔ Update language in metadata
+    ✔ Will save event without any changes
+    ✔ Wait for pending updates to complete when saving
+  ipynb Clear Outputs
+    - Clear outputs after opening Notebook
+  37 passing (53ms)
+  1 pending
+[main 2026-04-20T01:03:14.078Z] Extension host with pid 23871 exited with code: 0, signal: unknown.
+Exit code:   0
+Done
+
+### Notebook Output tests
+
+> code-oss-dev@1.110.0 test-extension
+> vscode-test -l notebook-renderers
+
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:03:15.151Z] [CSS_DEV] DONE, 301 css modules (91ms)
+[main 2026-04-20T01:03:15.220Z] update#setState disabled
+Started local extension host with pid 23999.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/notebook-renderers
+No default agent registered
+[23931:0419/210317.244852:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  StackTraceHelper
+    ✔ Non Ipython stack trace is left alone
+    ✔ IPython stack line numbers are linkified for IPython 8.3.6
+    ✔ IPython stack line numbers are linkified for IPython 9.0.0
+    ✔ Does not have catastrophic backtracking https://github.com/microsoft/vscode/issues/251731
+    ✔ Stack trace is not linkified when HTML is not trusted
+    ✔ IPython stack line numbers are linkified for IPython 8.3
+    ✔ IPython stack trace lines without associated location are not linkified
+    ✔ IPython stack without line numbers are not linkified
+    ✔ background (40-49) ANSI colors are removed
+  Notebook builtin output renderer
+    ✔ Render with wordwrap and scrolling for mimetype application/vnd.code.notebook.stdout
+    ✔ Render without wordwrap or scrolling for mimetype application/vnd.code.notebook.stdout
+    ✔ Replace content in element for mimetype application/vnd.code.notebook.stdout
+    ✔ Render with wordwrap and scrolling for mimetype application/vnd.code.notebook.stderr
+    ✔ Render without wordwrap or scrolling for mimetype application/vnd.code.notebook.stderr
+    ✔ Replace content in element for mimetype application/vnd.code.notebook.stderr
+    ✔ Render with wordwrap and scrolling for mimetype text/plain
+    ✔ Render without wordwrap or scrolling for mimetype text/plain
+    ✔ Replace content in element for mimetype text/plain
+    ✔ Append streaming output
+    ✔ Appending multiple streaming outputs
+    ✔ Append large streaming outputs (77ms)
+    ✔ Streaming outputs larger than the line limit are truncated
+    ✔ Render filepath links in text output when enabled
+    ✔ No filepath links in text output when disabled
+    ✔ Render with wordwrap and scrolling for error output
+    ✔ Replace content in element for error output
+    ✔ Multiple adjacent streaming outputs should be consolidated one element
+    ✔ Consolidated streaming outputs should replace matching outputs correctly
+    ✔ Consolidated streaming outputs should append matching outputs correctly
+    ✔ Streaming outputs interleaved with other mime types will produce separate outputs
+    ✔ Multiple adjacent streaming outputs, rerendering the first should erase the rest
+    ✔ Rendered output will wrap on settings change event
+    ✔ Settings event change listeners should not grow if output is re-rendered
+    ✔ Should clean up raw IPython error stack traces
+  Notebook builtin output link detection
+    ✔ no links
+    ✔ web link detection
+    ✔ html link detection
+    ✔ html link without trust
+  38 passing (174ms)
+[main 2026-04-20T01:03:17.739Z] Extension host with pid 23999 exited with code: 0, signal: unknown.
+Exit code:   0
+Done
+
+### Configuration editing tests
+
+> code-oss-dev@1.110.0 test-extension
+> vscode-test -l configuration-editing
+
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:03:18.711Z] [CSS_DEV] DONE, 301 css modules (104ms)
+[main 2026-04-20T01:03:18.777Z] update#setState disabled
+Started local extension host with pid 24167.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/configuration-editing
+No default agent registered
+[24098:0419/210320.828315:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  Completions in settings.json
+    ✔ window.title (223ms)
+    ✔ files.associations
+    ✔ files.exclude
+    ✔ files.defaultLanguage
+    ✔ remote.extensionKind
+    ✔ remote.portsAttributes
+  Completions in extensions.json
+    ✔ change recommendation (55ms)
+    ✔ add recommendation
+  Completions in launch.json
+    ✔ variable completions (44ms)
+  Completions in tasks.json
+    ✔ variable completions (42ms)
+  Completions in keybindings.json
+    ✔ context key insertion (44ms)
+    ✔ context key replace
+  12 passing (507ms)
+[main 2026-04-20T01:03:21.401Z] Extension host with pid 24167 exited with code: 0, signal: unknown.
+Exit code:   0
+Done
+
+### GitHub Authentication tests
+
+> code-oss-dev@1.110.0 test-extension
+> vscode-test -l github-authentication
+
+Found --crash-reporter-directory argument. Setting crashDumps directory to be '/Users/brandonhowe/Documents/NJIT/vsclone/.build/crashes'
+[main 2026-04-20T01:03:22.360Z] [CSS_DEV] DONE, 301 css modules (87ms)
+[main 2026-04-20T01:03:22.425Z] update#setState disabled
+Started local extension host with pid 24419.
+Loading development extension at /Users/brandonhowe/Documents/NJIT/vsclone/extensions/github-authentication
+No default agent registered
+[24268:0419/210324.704554:INFO:CONSOLE:25] "ReferenceError: Activating extension 'vscode.github' failed: module is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and '/Users/brandonhowe/Documents/NJIT/vsclone/extensions/github/package.json' contains "type": "module". To treat it as a CommonJS script, rename it to use the '.cjs' file extension..", source: vscode-file://vscode-app/Users/brandonhowe/Documents/NJIT/vsclone/out/vs/workbench/browser/parts/notifications/notificationsAlerts.js (25)
+
+  getFlows
+    ✔ gives the correct flows - VS Code Desktop. Local filesystem. GitHub.com
+    ✔ gives the correct flows - VS Code Desktop. Local filesystem. GitHub Hosted Enterprise
+    ✔ gives the correct flows - VS Code Desktop. Local filesystem. GitHub Enterprise Server
+    ✔ gives the correct flows - vscode.dev. serverful. GitHub.com
+    ✔ gives the correct flows - vscode.dev. serverful. GitHub Hosted Enterprise
+    ✔ gives the correct flows - vscode.dev. serverful. GitHub Enterprise
+    ✔ gives the correct flows - vscode.dev. serverless. GitHub.com
+    ✔ gives the correct flows - vscode.dev. serverless. GitHub Hosted Enterprise
+    ✔ gives the correct flows - vscode.dev. serverless. GitHub Enterprise Server
+    ✔ gives the correct flows - Code - OSS. Local filesystem. GitHub.com
+    ✔ gives the correct flows - Code - OSS. Local filesystem. GitHub Hosted Enterprise
+    ✔ gives the correct flows - Code - OSS. Local filesystem. GitHub Enterprise Server
+    preferDeviceCodeFlow configuration
+      ✔ returns device code flow first when preferDeviceCodeFlow is true - VS Code Desktop (108ms)
+      ✔ returns device code flow first when preferDeviceCodeFlow is true - Remote
+      ✔ returns normal flows when preferDeviceCodeFlow is true but device code flow is not supported - WebWorker
+  fetching
+    ✔ should use Electron fetch
+    ✔ should use Electron fetch 2
+    ✔ should fall back to Node.js fetch (79ms)
+    ✔ should fall back to Node.js fetch 2
+    ✔ should fall back to Node.js http/s
+    ✔ should fail with first error
+    ✔ should not retry with other fetchers on 429 status
+  LoopbackAuthServer
+    ✔ should redirect to starting redirect on /signin
+    ✔ should return 400 on /callback with missing parameters
+    ✔ should resolve with code and state on /callback with valid parameters
+  LoopbackAuthServer (portable mode)
+    ✔ should redirect to success page without redirect_uri on /callback
+  26 passing (346ms)
+[main 2026-04-20T01:03:25.125Z] Extension host with pid 24419 exited with code: 0, signal: unknown.
+Exit code:   0
+Done
+
+### CSS tests
+
+~/Documents/NJIT/vsclone ~/Documents/NJIT/vsclone/extensions/css-language-features/server
+
+> code-oss-dev@1.110.0 electron
+> node build/lib/electron.ts
+
+(node:25647) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+~/Documents/NJIT/vsclone/extensions/css-language-features/server
+
+  Completions
+    ✔ CSS url() Path completion
+    ✔ CSS url() Path Completion - Unquoted url
+    ✔ CSS @import Path completion
+    ✔ SCSS @import Path completion
+    ✔ Completion should ignore files/folders starting with dot
+
+  Links
+    ✔ url links
+    ✔ url links - untitled
+    ✔ node module resolving
+    ✔ node module subfolder resolving
+
+  9 passing (31ms)
+
+### HTML tests
+
+~/Documents/NJIT/vsclone ~/Documents/NJIT/vsclone/extensions/html-language-features/server
+
+> code-oss-dev@1.110.0 electron
+> node build/lib/electron.ts
+
+(node:26231) [DEP0180] DeprecationWarning: fs.Stats constructor is deprecated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+~/Documents/NJIT/vsclone/extensions/html-language-features/server
+
+  HTML Completion
+    ✔ HTML JavaScript Completions (455ms)
+
+  HTML Path Completion
+    ✔ Basics - Correct label/kind/result/command
+    ✔ Basics - Single Quote
+    ✔ No completion for remote paths
+    ✔ Relative Path
+    ✔ Absolute Path
+    ✔ Empty Path Value
+    ✔ Incomplete Path
+    ✔ No leading dot or slash
+    ✔ Trigger completion in middle of path
+    ✔ Trigger completion in middle of path and with whitespaces
+    ✔ Completion should ignore files/folders starting with dot
+    ✔ Unquoted Path
+
+  HTML Document Context
+    ✔ Context
+
+  HTML Embedded Support
+    ✔ Styles
+    ✔ Styles - Incomplete HTML
+    ✔ Style in attribute
+    ✔ Style content
+    ✔ Scripts
+    ✔ Scripts in attribute
+    ✔ Script content
+    ✔ Script content - HTML escape characters
+
+  HTML Folding
+    ✔ Embedded JavaScript
+    ✔ Embedded JavaScript - multiple areas
+    ✔ Embedded JavaScript - incomplete
+    ✔ Embedded JavaScript - regions
+    ✔ Embedded CSS
+    ✔ Embedded CSS - multiple areas
+    ✔ Embedded CSS - regions
+    ✔ Test limit
+
+  HTML Embedded Formatting
+    ✔ HTML only
+    ✔ HTML & Scripts
+    ✔ HTLM & Scripts - Fixtures
+    ✔ Script end tag
+    ✔ HTML & Multiple Scripts
+    ✔ HTML & Styles
+    ✔ EndWithNewline
+    ✔ Inside script
+    ✔ Range after new line
+    ✔ bug 36574
+    ✔ bug 48049
+    ✔ #58435
+
+  HTML Javascript Rename
+    ✔ Rename Variable (108ms)
+    ✔ Rename Function (99ms)
+    ✔ Rename Function Params (93ms)
+    ✔ Rename Class (95ms)
+    ✔ Cannot Rename literal (181ms)
+
+  HTML SelectionRange
+    ✔ Embedded JavaScript
+    ✔ Embedded CSS
+    ✔ Embedded style
+
+  HTML Semantic Tokens
+    ✔ Variables (93ms)
+    ✔ Functions (103ms)
+    ✔ Members (94ms)
+    ✔ Interfaces (91ms)
+    ✔ Readonly (91ms)
+    ✔ Type aliases and type parameters (90ms)
+    ✔ TS and JS (178ms)
+    ✔ Ranges (187ms)
+
+  HTML Language Configuration
+    ✔ Words Basic
+    ✔ Words Multiline
+    ✔ OnEnter Before
+
+  61 passing (2s)

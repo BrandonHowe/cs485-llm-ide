@@ -36,9 +36,11 @@ type VSCloneAnthropicTool = import('@anthropic-ai/sdk').default.Messages.Tool;
 type VSCloneAnthropicToolInputSchema = VSCloneAnthropicTool['input_schema'];
 type VSCloneGoogleCandidate = NonNullable<import('@google/genai').GenerateContentResponse['candidates']>[number];
 type VSCloneGoogleFunctionDeclaration = import('@google/genai').FunctionDeclaration;
+type VSCloneGoogleFunctionCallingConfigMode = import('@google/genai').FunctionCallingConfigMode;
+type VSCloneGoogleSchema = import('@google/genai').Schema;
+type VSCloneGoogleSchemaType = import('@google/genai').Type;
 type VSCloneFIMEndpointMode = 'sse';
 type VSCloneGoogleGenAIConstructor = typeof import('@google/genai').GoogleGenAI;
-type VSCloneGoogleAuthClient = NonNullable<NonNullable<ConstructorParameters<VSCloneGoogleGenAIConstructor>[0]['googleAuthOptions']>['authClient']>;
 type VSCloneOpenAIFunctionTool = import('openai').default.Responses.FunctionTool;
 type VSCloneOpenAIResponse = import('openai').default.Responses.Response;
 type VSCloneOpenAIResponseOutputItem = import('openai').default.Responses.ResponseOutputItem;
@@ -70,9 +72,9 @@ const googleModelMap: Record<string, string> = {
 
 // Mirror the SDK enum payloads locally so the request builders stay serializable without forcing
 // renderer-imported tests to eagerly parse the Google SDK just to read constant values.
-const googleFunctionCallingConfigModeAuto = 'AUTO';
-const googleSchemaTypeObject = 'OBJECT';
-const googleSchemaTypeString = 'STRING';
+const googleFunctionCallingConfigModeAuto = 'AUTO' as VSCloneGoogleFunctionCallingConfigMode;
+const googleSchemaTypeObject = 'OBJECT' as VSCloneGoogleSchemaType;
+const googleSchemaTypeString = 'STRING' as VSCloneGoogleSchemaType;
 
 const supportedAnthropicOAuthMessagesModelIds = new Set<string>([
 	'claude-haiku-4-5-20251001',
@@ -449,7 +451,7 @@ async function sendGoogleChatMessage(
 		// having to resolve the Node-only `google-auth-library` package before any Google request runs.
 		googleAuthOptions: {
 			authClient: await createGooglePassThroughAuthClient(),
-		},
+		} as never,
 		httpOptions: buildGoogleHttpOptions(auth.headers),
 	});
 	// Google's SDK request types are also nominally separate from the local prepared-message union,
@@ -506,12 +508,12 @@ async function sendGoogleChatMessage(
 	});
 }
 
-async function createGooglePassThroughAuthClient(): Promise<VSCloneGoogleAuthClient> {
+async function createGooglePassThroughAuthClient(): Promise<unknown> {
 	// The IPC bridge tests execute inside Electron's renderer process while importing the real
 	// main-process request code. Keeping this dependency behind a dynamic import avoids tripping the
 	// renderer ESM loader on a server-only package in tests that never exercise the Google path.
 	const { PassThroughClient } = await import('google-auth-library');
-	return new PassThroughClient() as unknown as VSCloneGoogleAuthClient;
+	return new PassThroughClient();
 }
 
 /**
@@ -1022,20 +1024,32 @@ function buildAnthropicTools(mode: IVSCloneLLMPreparedChatPayload['mode']): VSCl
 }
 
 function buildGoogleTools(mode: IVSCloneLLMPreparedChatPayload['mode']): Array<{ functionDeclarations: VSCloneGoogleFunctionDeclaration[] }> {
-	const functionDeclarations: VSCloneGoogleFunctionDeclaration[] = getVSCloneVisibleToolDefinitions(mode).map(tool => ({
-		name: tool.name,
-		description: tool.description,
-		parameters: {
-			type: googleSchemaTypeObject,
-			properties: Object.fromEntries(tool.parameters.map(parameter => [parameter.name, {
+	const functionDeclarations: VSCloneGoogleFunctionDeclaration[] = getVSCloneVisibleToolDefinitions(mode).map(tool => {
+		// Build the schema imperatively so TypeScript keeps the Google SDK's schema shape instead of
+		// widening `Object.fromEntries(...)` to a loose `{ type: "STRING" }` record.
+		const properties: Record<string, VSCloneGoogleSchema> = {};
+		for (const parameter of tool.parameters) {
+			properties[parameter.name] = {
 				type: googleSchemaTypeString,
 				description: parameter.description,
-			}])),
-			...(tool.parameters.some(parameter => parameter.required)
-				? { required: tool.parameters.filter(parameter => parameter.required).map(parameter => parameter.name) }
-				: {}),
-		},
-	}));
+			};
+		}
+
+		const required = tool.parameters
+			.filter(parameter => parameter.required)
+			.map(parameter => parameter.name);
+		const parameters: VSCloneGoogleSchema = {
+			type: googleSchemaTypeObject,
+			properties,
+			...(required.length > 0 ? { required } : {}),
+		};
+
+		return {
+			name: tool.name,
+			description: tool.description,
+			parameters,
+		};
+	});
 
 	return functionDeclarations.length > 0 ? [{ functionDeclarations }] : [];
 }

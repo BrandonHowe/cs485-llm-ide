@@ -188,6 +188,19 @@
 	gap: 0;
 }
 
+/* Approval rows always stretch to the full conversation column so the diff preview and Approve/Reject
+ * buttons have room to breathe; the narrower max-width from .vsclone-thread-message.runtime would
+ * otherwise squeeze them into a centered card. */
+.vsclone-thread-message.runtime-tool-approval {
+	align-self: stretch;
+	width: 100%;
+	max-width: 100%;
+}
+
+.vsclone-thread-message.runtime-tool-approval .vsclone-runtime-approval {
+	width: 100%;
+}
+
 /* Final assistant answer renders as flat prose, matching Void/Codex. The outer card chrome was
  * redundant on top of already-bubbled message styling elsewhere in the transcript. */
 .vsclone-thread-message.runtime-assistant {
@@ -205,11 +218,6 @@
 	gap: 8px;
 	font-size: 12px;
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 82%, transparent 18%);
-}
-
-.vsclone-thread-message.runtime.runtime-status.status-awaiting {
-	border-color: color-mix(in srgb, var(--vscode-testing-iconQueued) 52%, transparent 48%);
-	background: color-mix(in srgb, var(--vscode-testing-iconQueued) 10%, var(--vscode-editorWidget-background) 90%);
 }
 
 .vsclone-thread-message.runtime.runtime-status.status-running {
@@ -864,6 +872,18 @@
 
 .vsclone-runtime-approval-button.reject:hover {
 	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.vsclone-runtime-approval-button.always-approve {
+	background: transparent;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 70%, transparent 30%);
+	border-color: color-mix(in srgb, var(--vscode-panel-border) 70%, transparent 30%);
+	margin-left: auto;
+}
+
+.vsclone-runtime-approval-button.always-approve:hover {
+	background: color-mix(in srgb, var(--vscode-button-secondaryBackground, var(--vscode-editorWidget-background)) 60%, transparent 40%);
+	color: var(--vscode-editor-foreground);
 }
 
 .vsclone-runtime-approval-button:focus-visible {
