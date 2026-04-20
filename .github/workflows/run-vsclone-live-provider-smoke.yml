@@ -98,6 +98,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build VSClone Preact Bundles
+        # Keep the compiled out/ tree complete on clean CI checkouts so VSClone browser imports
+        # stay aligned with the package scripts that already build these bundles up front.
+        run: npm run build-vsclone-preact
+
       - name: Transpile Client and Extensions
         # The token minting helper imports the compiled VSClone OAuth registry from out/, so keep
         # this step ahead of token refresh instead of duplicating provider endpoints in CI YAML.

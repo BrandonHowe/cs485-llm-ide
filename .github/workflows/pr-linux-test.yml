@@ -129,6 +129,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build VSClone Preact Bundles
+        # VSClone imports these generated browser bundles directly from source, so clean PR jobs
+        # must emit them before the client transpile step assembles the runnable out/ tree.
+        run: npm run build-vsclone-preact
+
       - name: Transpile client and extensions
         run: npm run gulp transpile-client-esbuild transpile-extensions
 

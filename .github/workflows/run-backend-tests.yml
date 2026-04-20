@@ -82,6 +82,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build VSClone Preact Bundles
+        # VSClone workbench surfaces import these generated browser entrypoints directly, so a
+        # clean-checkout CI job has to materialize them before the transpile step snapshots src/ into out/.
+        run: npm run build-vsclone-preact
+
       - name: Transpile Backend Test Targets
         # The node and Electron runners both execute the compiled out/ tree, so CI must
         # transpile the VSClone sources before either backend test slice can resolve imports.

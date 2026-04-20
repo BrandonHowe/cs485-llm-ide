@@ -110,6 +110,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build VSClone Preact Bundles
+        # Clean Windows checkouts do not carry the generated VSClone preact files, so emit them
+        # before the shared transpile step produces the out/ tree used by integration launches.
+        shell: pwsh
+        run: npm run build-vsclone-preact
+
       - name: Transpile client and extensions
         shell: pwsh
         run: npm run gulp "transpile-client-esbuild" "transpile-extensions"

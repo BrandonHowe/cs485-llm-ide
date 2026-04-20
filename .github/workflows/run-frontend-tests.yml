@@ -83,6 +83,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build VSClone Preact Bundles
+        # VSClone imports these generated browser bundles from source, so the clean CI checkout
+        # must create them before transpile-client-esbuild copies the browser tree into out/.
+        run: npm run build-vsclone-preact
+
       - name: Transpile Browser Test Targets
         # VSClone browser tests execute against transpiled output instead of ts-node-style sources.
         run: npm run gulp transpile-client-esbuild transpile-extensions

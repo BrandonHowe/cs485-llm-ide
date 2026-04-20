@@ -80,6 +80,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build VSClone Preact Bundles
+        # The integration workbench imports these generated VSClone surfaces directly, so the
+        # clean runner must build them before the transpile step populates out/ for Electron.
+        run: npm run build-vsclone-preact
+
       - name: Transpile Client and Extensions
         run: npm run gulp transpile-client-esbuild transpile-extensions
 
@@ -191,6 +196,11 @@ jobs:
         run: node build/lib/builtInExtensions.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build VSClone Preact Bundles
+        # The browser integration server serves the transpiled out/ tree, so generate VSClone's
+        # source-side preact bundles before the client transpile step snapshots them into out/.
+        run: npm run build-vsclone-preact
 
       - name: Transpile Client and Extensions
         run: npm run gulp transpile-client-esbuild transpile-extensions

@@ -103,6 +103,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build VSClone Preact Bundles
+        # Web and desktop VSClone surfaces rely on these generated bundles, so build them before
+        # the Darwin client transpile step snapshots the clean checkout into out/.
+        run: npm run build-vsclone-preact
+
       - name: Transpile client and extensions
         run: npm run gulp transpile-client-esbuild transpile-extensions
 

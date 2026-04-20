@@ -17,6 +17,7 @@ suite('VSClone build scripts', () => {
 	const repositoryRoot = join(currentDirectory, '..', '..', '..');
 	const packageJsonPath = join(repositoryRoot, 'package.json');
 	const devScriptPath = join(repositoryRoot, 'scripts', 'dev.sh');
+	const workflowsDirectory = join(repositoryRoot, '.github', 'workflows');
 
 	function readPackageScripts(): Record<string, string | undefined> {
 		// This test intentionally locks the package-script wiring because the generated VSClone Preact
@@ -33,6 +34,37 @@ suite('VSClone build scripts', () => {
 		// Keeping those paths under test prevents silent hangs where startup blocks forever
 		// on a renamed VSClone surface that is no longer part of the active bundle graph.
 		return readFileSync(devScriptPath, 'utf8');
+	}
+
+	function readWorkflow(name: string): string {
+		// CI runs from clean checkouts where the VSClone preact bundles do not exist until the build
+		// script emits them. Lock the workflow wiring so transpile steps cannot drift ahead of that build.
+		return readFileSync(join(workflowsDirectory, name), 'utf8');
+	}
+
+	function assertWorkflowBuildsVSClonePreactBeforeTranspile(name: string): void {
+		const workflow = readWorkflow(name);
+		const buildMatches = Array.from(workflow.matchAll(/build-vsclone-preact/g));
+		const transpileMatches = Array.from(workflow.matchAll(/transpile-client-esbuild["']?\s+["']?transpile-extensions/g));
+
+		assert.ok(
+			transpileMatches.length > 0,
+			`Expected ${name} to transpile the client and extensions.`,
+		);
+		assert.strictEqual(
+			buildMatches.length,
+			transpileMatches.length,
+			`Expected ${name} to build the VSClone preact bundles once per client transpile step.`,
+		);
+
+		for (let index = 0; index < transpileMatches.length; index++) {
+			const buildIndex = buildMatches[index]?.index ?? -1;
+			const transpileIndex = transpileMatches[index]?.index ?? -1;
+			assert.ok(
+				buildIndex >= 0 && buildIndex < transpileIndex,
+				`Expected ${name} to build the VSClone preact bundles before transpile step ${index + 1}.`,
+			);
+		}
 	}
 
 	test('compile builds the vsclone preact bundle before gulp compile', () => {
@@ -132,5 +164,15 @@ suite('VSClone build scripts', () => {
 			!devScript.includes('preact/out/chat-history-rail/index.js'),
 			'Expected scripts/dev.sh to stop waiting on the deleted chat history rail bundle.',
 		);
+	});
+
+	test('CI workflows build the VSClone preact bundles before transpiling clean checkouts', () => {
+		assertWorkflowBuildsVSClonePreactBeforeTranspile('run-backend-tests.yml');
+		assertWorkflowBuildsVSClonePreactBeforeTranspile('run-frontend-tests.yml');
+		assertWorkflowBuildsVSClonePreactBeforeTranspile('run-integration-tests.yml');
+		assertWorkflowBuildsVSClonePreactBeforeTranspile('run-vsclone-live-provider-smoke.yml');
+		assertWorkflowBuildsVSClonePreactBeforeTranspile('pr-linux-test.yml');
+		assertWorkflowBuildsVSClonePreactBeforeTranspile('pr-darwin-test.yml');
+		assertWorkflowBuildsVSClonePreactBeforeTranspile('pr-win32-test.yml');
 	});
 });
