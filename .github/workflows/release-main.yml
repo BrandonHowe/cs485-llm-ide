@@ -369,7 +369,7 @@ jobs:
               -f tag_name="$TAG" \
               -f target_commitish="$GITHUB_SHA" \
               -f name="$TITLE" \
-              -F body@"$NOTES_FILE" \
+              -F "body=@$NOTES_FILE" \
               -F draft=false \
               -F prerelease=false \
               -F make_latest=true \
