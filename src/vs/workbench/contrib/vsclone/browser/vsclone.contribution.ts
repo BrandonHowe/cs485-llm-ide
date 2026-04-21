@@ -34,6 +34,7 @@ import { IVSCloneSettingsService, VSCloneSettingsService } from '../common/vsclo
 import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
 import { VSCloneAutocompleteService, VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from './vscloneAutocompleteService.js';
 import { IVSCloneLLMMessageService, VSCloneLLMMessageService } from './vscloneLLMMessageService.js';
+import { IVSCloneMentionSearchService, VSCloneMentionSearchService } from './vscloneMentionSearchService.js';
 import { IVSCloneThreadRuntimeService, VSCloneThreadRuntimeService } from './vscloneThreadRuntimeService.js';
 import { IVSCloneUnifiedChatBackendService, VSCloneUnifiedChatBackendService } from '../common/backend/vscloneUnifiedChatBackendService.js';
 import { VSCloneChatRailWidthSetting } from '../common/vscloneChatViewSettings.js';
@@ -95,6 +96,7 @@ function registerVSCloneContribution(): void {
 	registerSingleton(IVSCloneTerminalToolService, VSCloneTerminalToolService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneThreadRuntimeService, VSCloneThreadRuntimeService as never, InstantiationType.Delayed);
 	registerSingleton(IVSCloneChatThreadService, VSCloneChatThreadService, InstantiationType.Delayed);
+	registerSingleton(IVSCloneMentionSearchService, VSCloneMentionSearchService, InstantiationType.Delayed);
 	registerSingleton(IVSCloneOAuthService, VSCloneOAuthService, InstantiationType.Delayed);
 
 	registerVSCloneThreadActions();

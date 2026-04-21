@@ -78,6 +78,7 @@ export interface IVSCloneThreadRuntimeService {
 		mode: IVSCloneThreadRuntimeRunOptions['mode'];
 		reason: string;
 		imageAttachments?: IVSCloneThreadRuntimeRunOptions['imageAttachments'];
+		contextSelections?: IVSCloneThreadRuntimeRunOptions['contextSelections'];
 	}): void;
 	cancelThread(threadId: string): void;
 	approveLatestToolRequest(threadId: string): boolean;
@@ -192,6 +193,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				createdAt: Date.now(),
 				content: options.promptText,
 				imageAttachments: options.imageAttachments,
+				contextSelections: options.contextSelections,
 			})];
 		const nextMessages = [...(baseState?.messages ?? []), ...promptMessage];
 		this.setState(options.threadId, {
@@ -233,6 +235,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			reasoningEffort: options.reasoningEffort,
 			systemMessage: options.systemMessage,
 			imageAttachments: options.imageAttachments,
+			contextSelections: options.contextSelections,
 		};
 		const pendingCheckpointByToolKey = new Map<string, readonly IVSCloneThreadRuntimeSnapshot[]>();
 		const done = new DeferredPromise<void>();
@@ -283,6 +286,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		mode: IVSCloneThreadRuntimeRunOptions['mode'];
 		reason: string;
 		imageAttachments?: IVSCloneThreadRuntimeRunOptions['imageAttachments'];
+		contextSelections?: IVSCloneThreadRuntimeRunOptions['contextSelections'];
 	}): void {
 		const baseState = this.states.get(options.threadId);
 		const userMessage = this.createMessage({
@@ -291,6 +295,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			createdAt: Date.now(),
 			content: options.promptText,
 			imageAttachments: options.imageAttachments,
+			contextSelections: options.contextSelections,
 		});
 		const assistantMessage = this.createMessage({
 			role: 'assistant',
@@ -840,6 +845,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				role: 'user',
 				content: options.promptText,
 				imageAttachments: options.imageAttachments,
+				contextSelections: options.contextSelections,
 			});
 		}
 		let assistantResponseText = '';
@@ -1574,6 +1580,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		// Spreading an Omit<Union, 'id'> loses discriminant narrowing, so build each variant by role
 		// and cast each branch back into its concrete union member.
 		const id = generateUuid();
+		// eslint-disable-next-line local/code-no-dangerous-type-assertions
 		const withId = { id, ...message } as IVSCloneThreadRuntimeMessage;
 		if (withId.role === 'assistant') {
 			// Assistant messages pick up durable edit-apply metadata at creation time so the pane can
@@ -1845,19 +1852,20 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		const latestConversationMessage = [...state.messages].reverse().find((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'user' | 'assistant' }> =>
 			message.role === 'user' || message.role === 'assistant',
 		);
-			// Titles should be stable once a thread exists, but pre-catalog payloads still need a
-			// deterministic fallback sourced from the first real conversation message rather than a
-			// truthy/falsey precedence bug.
-			const lastToolOutput = lastMessage?.role === 'tool' && 'output' in lastMessage
-				? lastMessage.output
-				: undefined;
-			const titleSource = fallbackCatalog?.title
-				|| firstConversationMessage?.content
-				|| threadId;
-			const previewSource = latestConversationMessage?.content
-				|| fallbackCatalog?.lastTurnPreview
-				|| lastToolOutput
-				|| titleSource;
+		// Titles should be stable once a thread exists, but pre-catalog payloads still need a
+		// deterministic fallback sourced from the first real conversation message rather than a
+		// truthy/falsey precedence bug.
+		// eslint-disable-next-line local/code-no-in-operator
+		const lastToolOutput = lastMessage?.role === 'tool' && 'output' in lastMessage
+			? lastMessage.output
+			: undefined;
+		const titleSource = fallbackCatalog?.title
+			|| firstConversationMessage?.content
+			|| threadId;
+		const previewSource = latestConversationMessage?.content
+			|| fallbackCatalog?.lastTurnPreview
+			|| lastToolOutput
+			|| titleSource;
 		const archived = state.catalog?.archived ?? previous?.catalog.archived ?? false;
 		return {
 			threadId,
@@ -1946,18 +1954,16 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		const messages: IVSCloneChatTransportConversationMessage[] = [];
 		for (const message of state.messages) {
 			switch (message.role) {
-				case 'user':
-					messages.push(message.imageAttachments
-						? {
-							role: 'user',
-							content: message.content,
-							imageAttachments: message.imageAttachments,
-						}
-						: {
-							role: 'user',
-							content: message.content,
-						});
+				case 'user': {
+					const userMessage: IVSCloneChatTransportConversationMessage = {
+						role: 'user',
+						content: message.content,
+						...(message.imageAttachments ? { imageAttachments: message.imageAttachments } : {}),
+						...(message.contextSelections ? { contextSelections: message.contextSelections } : {}),
+					};
+					messages.push(userMessage);
 					break;
+				}
 				case 'assistant':
 					messages.push({ role: 'assistant', content: message.content });
 					break;

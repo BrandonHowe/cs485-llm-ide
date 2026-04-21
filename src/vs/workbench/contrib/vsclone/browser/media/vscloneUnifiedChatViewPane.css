@@ -2473,3 +2473,155 @@
 	color: var(--vscode-errorForeground);
 	border: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 50%, transparent 50%);
 }
+
+.vsclone-composer-context-strip {
+	display: flex;
+	gap: 4px;
+	flex-wrap: wrap;
+	padding: 4px 0 2px;
+}
+
+.vsclone-composer-context-strip.hidden {
+	display: none;
+}
+
+.vsclone-transcript-context-strip {
+	margin-bottom: 4px;
+}
+
+.vsclone-composer-context-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 6px 2px 6px;
+	border-radius: 4px;
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+	font-size: 11px;
+	line-height: 16px;
+	max-width: 240px;
+}
+
+.vsclone-composer-context-chip.kind-folder {
+	background: color-mix(in srgb, var(--vscode-badge-background) 80%, var(--vscode-editorInfo-foreground) 20%);
+}
+
+.vsclone-composer-context-chip.kind-codeSelection {
+	background: color-mix(in srgb, var(--vscode-badge-background) 80%, var(--vscode-editorWarning-foreground) 20%);
+}
+
+.vsclone-composer-context-chip-icon {
+	font-size: 12px;
+	flex-shrink: 0;
+}
+
+.vsclone-composer-context-chip-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.vsclone-composer-context-chip-remove {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	width: 14px;
+	height: 14px;
+	border: none;
+	background: transparent;
+	color: inherit;
+	opacity: 0.7;
+	cursor: pointer;
+	border-radius: 2px;
+}
+
+.vsclone-composer-context-chip-remove:hover {
+	opacity: 1;
+	background: color-mix(in srgb, currentColor 20%, transparent 80%);
+}
+
+.vsclone-composer-input-wrap {
+	position: relative;
+}
+
+.vsclone-mention-menu {
+	position: absolute;
+	bottom: calc(100% + 4px);
+	left: 0;
+	right: 0;
+	max-height: 240px;
+	overflow-y: auto;
+	background: var(--vscode-editorWidget-background);
+	border: 1px solid var(--vscode-editorWidget-border);
+	border-radius: 6px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+	z-index: 20;
+	padding: 4px;
+}
+
+.vsclone-mention-menu.hidden {
+	display: none;
+}
+
+.vsclone-mention-menu-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 6px;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	border-bottom: 1px solid var(--vscode-editorWidget-border);
+	margin-bottom: 4px;
+}
+
+.vsclone-mention-menu-header-query {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.vsclone-mention-menu-empty {
+	padding: 8px;
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	text-align: center;
+}
+
+.vsclone-mention-menu-list {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+.vsclone-mention-menu-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 6px;
+	background: transparent;
+	border: none;
+	text-align: left;
+	color: var(--vscode-foreground);
+	cursor: pointer;
+	border-radius: 3px;
+	font-size: 12px;
+	width: 100%;
+}
+
+.vsclone-mention-menu-item.active,
+.vsclone-mention-menu-item:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+.vsclone-mention-menu-item-label {
+	flex-shrink: 0;
+}
+
+.vsclone-mention-menu-item-detail {
+	color: var(--vscode-descriptionForeground);
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}

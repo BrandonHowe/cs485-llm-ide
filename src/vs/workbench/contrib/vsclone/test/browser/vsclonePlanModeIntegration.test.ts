@@ -11,6 +11,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { VSCloneChatThreadService } from '../../browser/vscloneChatThreadService.js';
 import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
+import { createVSCloneTestFileService } from '../common/vscloneTestFileService.js';
 import { IVSCloneContextGatheringService } from '../../browser/vscloneContextGatheringService.js';
 import { IVSCloneThreadRuntimeHandle, IVSCloneThreadRuntimeRunOptions, IVSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
 import { VSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
@@ -157,6 +158,7 @@ suite('VSClonePlanModeIntegration', () => {
 			threadRuntimeService,
 			contextGatheringService,
 			backendService,
+			createVSCloneTestFileService(),
 		));
 
 		await planModeService.setModeForThread('thread-1', 'plan');

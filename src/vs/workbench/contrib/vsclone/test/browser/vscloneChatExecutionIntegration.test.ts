@@ -19,6 +19,7 @@ import { IVSCloneSettingsService } from '../../common/vscloneSettingsService.js'
 import type { IVSCloneSettingsState } from '../../common/vscloneSettingsTypes.js';
 import { IVSCloneThreadRuntimeState } from '../../common/vscloneThreadRuntimeTypes.js';
 import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
+import { createVSCloneTestFileService } from '../common/vscloneTestFileService.js';
 
 class StaticSettingsService implements IVSCloneSettingsService {
 	declare readonly _serviceBrand: undefined;
@@ -169,6 +170,7 @@ suite('VSCloneChatExecutionIntegration', () => {
 			threadRuntimeService,
 			new StaticContextGatheringService(),
 			new TestVSCloneUnifiedChatBackendService(),
+			createVSCloneTestFileService(),
 		));
 
 		const result = await chatThreadService.sendMessage('Follow up on the earlier answer', {

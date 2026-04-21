@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { IVSCloneContextSelection } from './vscloneContextSelectionTypes.js';
 import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
@@ -32,6 +33,12 @@ export type IVSCloneChatTransportConversationMessage =
 		readonly role: 'user';
 		readonly content: string;
 		readonly imageAttachments?: readonly IVSCloneImageAttachment[];
+		/**
+		 * User-picked context (files, folders, code selections) attached to this turn. Preserved on the
+		 * transport message so replay of previous turns keeps chip metadata without re-parsing the
+		 * serialized SELECTIONS block back out of `content`.
+		 */
+		readonly contextSelections?: readonly IVSCloneContextSelection[];
 	}
 	| {
 		readonly role: 'assistant';

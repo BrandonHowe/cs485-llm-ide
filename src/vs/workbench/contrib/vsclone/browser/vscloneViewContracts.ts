@@ -204,11 +204,29 @@ export interface IVSCloneReasoningEffortOptionView {
 	label: string;
 }
 
+export interface IVSCloneContextChipView {
+	key: string;
+	kind: 'file' | 'folder' | 'codeSelection';
+	label: string;
+	title: string;
+	iconClass: string;
+	removeAriaLabel: string;
+	onRemove: () => void;
+}
+
+export interface IVSCloneMentionMenuItemView {
+	key: string;
+	label: string;
+	detail: string;
+	iconClass: string;
+}
+
 export interface IVSCloneConversationSurfaceProps {
 	modelSwitcherEnabled: boolean;
 	composerHintId: string;
 	conversationItems: readonly IVSCloneConversationItemView[];
 	pendingImages: readonly IVSCloneConversationImageView[];
+	pendingContextChips: readonly IVSCloneContextChipView[];
 	emptyStateHidden: boolean;
 	addContextMenuOpen: boolean;
 	planModeEnabled: boolean;
@@ -223,6 +241,12 @@ export interface IVSCloneConversationSurfaceProps {
 	reasoningEffortDisabled: boolean;
 	reasoningEffortOptions: readonly IVSCloneReasoningEffortOptionView[];
 	reasoningEffortValue?: string;
+	mentionMenuOpen: boolean;
+	mentionMenuQuery: string;
+	mentionMenuItems: readonly IVSCloneMentionMenuItemView[];
+	mentionMenuActiveIndex: number;
+	mentionMenuLoading: boolean;
+	mentionMenuEmptyLabel: string;
 	conversationListRef: (element: HTMLElement | null) => void;
 	conversationEmptyStateRef: (element: HTMLElement | null) => void;
 	composerInputRef: (element: HTMLTextAreaElement | null) => void;
@@ -236,6 +260,8 @@ export interface IVSCloneConversationSurfaceProps {
 	addContextButtonRef: (element: HTMLButtonElement | null) => void;
 	addContextMenuRef: (element: HTMLElement | null) => void;
 	composerImageStripRef: (element: HTMLElement | null) => void;
+	composerContextStripRef: (element: HTMLElement | null) => void;
+	mentionMenuRef: (element: HTMLElement | null) => void;
 	imageFileInputRef: (element: HTMLInputElement | null) => void;
 	onHistoryClick: () => void;
 	onOverflowClick: (event: MouseEvent) => void;
@@ -245,7 +271,10 @@ export interface IVSCloneConversationSurfaceProps {
 	onComposerSendClick: () => void;
 	onAddContextClick: () => void;
 	onAddImageClick: () => void;
+	onAddCodeSelectionClick: () => void;
 	onPlanModeClick: () => void;
 	onReasoningEffortChange: () => void;
 	onImageFileInputChange: () => void;
+	onMentionItemSelect: (index: number) => void;
+	onMentionItemHover: (index: number) => void;
 }

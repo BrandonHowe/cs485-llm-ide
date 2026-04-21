@@ -5,6 +5,7 @@
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IVSCloneContextGatheringService } from './vscloneContextGatheringService.js';
@@ -12,11 +13,12 @@ import { IVSCloneThreadRuntimeService } from './vscloneThreadRuntimeService.js';
 import { IVSCloneUnifiedChatBackendService } from '../common/backend/vscloneUnifiedChatBackendService.js';
 import type { IVSCloneModelSelection } from '../common/vscloneModelSelectionTypes.js';
 import type { IVSCloneChatTransportConversationMessage } from '../common/vscloneChatTransportTypes.js';
+import type { IVSCloneContextSelection } from '../common/vscloneContextSelectionTypes.js';
 import type { IVSCloneImageAttachment } from '../common/vscloneImageAttachmentTypes.js';
 import { VSCloneModelVendor } from '../common/vscloneOAuthTypes.js';
 import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
 import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
-import { assembleVSCloneSystemMessage } from '../common/vsclonePrompts.js';
+import { assembleVSCloneSystemMessage, buildVSCloneUserMessageContent } from '../common/vsclonePrompts.js';
 import { IVSCloneSettingsService } from '../common/vscloneSettingsService.js';
 import { deriveVSCloneThreadId } from '../common/vscloneThreadIds.js';
 import { formatToolResult } from '../common/vscloneToolDefinitions.js';
@@ -34,6 +36,7 @@ export interface IVSCloneChatThreadSubmitOptions {
 	sessionResource?: string;
 	modelSelection?: IVSCloneModelSelection;
 	imageAttachments?: readonly IVSCloneImageAttachment[];
+	contextSelections?: readonly IVSCloneContextSelection[];
 }
 
 export interface IVSCloneChatThreadSubmitResult {
@@ -75,6 +78,7 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 		@IVSCloneThreadRuntimeService private readonly threadRuntimeService: IVSCloneThreadRuntimeService,
 		@IVSCloneContextGatheringService private readonly contextGatheringService: IVSCloneContextGatheringService,
 		@IVSCloneUnifiedChatBackendService private readonly unifiedChatBackendService: IVSCloneUnifiedChatBackendService,
+		@IFileService private readonly fileService: IFileService,
 	) {
 		super();
 	}
@@ -184,6 +188,13 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 			this.logService.warn('[VSCloneChatThreadService] Failed to gather prompt context; continuing without enriched system prompt', error);
 		}
 
+		// The LLM sees the user instructions followed by a serialized SELECTIONS block so @-mentions
+		// and code selections travel as part of the turn itself. We keep the raw selections on the
+		// runtime message too so the sidebar can re-render chips after reload. Previous turns already
+		// stored their enriched content on send, so replay forwards `content` as-is.
+		const enrichedPromptText = await buildVSCloneUserMessageContent(promptText, options.contextSelections, this.fileService);
+		const previousTurns = this.getPreviousTurnsForThread(threadId);
+
 		const runtimeOptions: IVSCloneThreadRuntimeRunOptions = {
 			threadId,
 			turnId: `${threadId}:api:${Date.now()}`,
@@ -191,15 +202,16 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 			// continue from the active branch. A thread with no runtime state is simply new chat.
 			sequence: this.getNextSequenceForThread(threadId),
 			sessionResource,
-			promptText,
+			promptText: enrichedPromptText,
 			mode,
 			vendor,
 			modelId: resolvedSelection?.modelId ?? '',
 			modelIdentifier: resolvedSelection?.modelIdentifier ?? '',
 			reasoningEffort: resolvedSelection?.reasoningEffort,
-			previousTurns: this.getPreviousTurnsForThread(threadId),
+			previousTurns,
 			systemMessage,
 			imageAttachments: options.imageAttachments,
+			contextSelections: options.contextSelections,
 		};
 
 		this.threadRuntimeService.runThread(runtimeOptions);
@@ -233,7 +245,7 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 		return this.settingsService.getCurrentSelectionForFeature(threadId, 'chat') ?? nextSelection;
 	}
 
-	private async injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string; mode: VSCloneChatMode; modelSelection?: IVSCloneModelSelection; imageAttachments?: readonly IVSCloneImageAttachment[] }): Promise<void> {
+	private async injectRejectedTurn(options: { threadId: string; sessionResource: string; promptText: string; reason: string; mode: VSCloneChatMode; modelSelection?: IVSCloneModelSelection; imageAttachments?: readonly IVSCloneImageAttachment[]; contextSelections?: readonly IVSCloneContextSelection[] }): Promise<void> {
 		const turnId = `${options.threadId}:rejected:${Date.now()}`;
 		await this.ensureThreadSelectionBinding(options.threadId, options.modelSelection);
 		this.threadRuntimeService.recordRejectedTurn({
@@ -244,6 +256,7 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 			mode: options.mode,
 			reason: options.reason,
 			imageAttachments: options.imageAttachments,
+			contextSelections: options.contextSelections,
 		});
 	}
 
@@ -280,6 +293,7 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 			mode,
 			modelSelection,
 			imageAttachments: options.imageAttachments,
+			contextSelections: options.contextSelections,
 		});
 
 		return { threadId, sessionResource };
@@ -297,18 +311,16 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 		const messages: IVSCloneChatTransportConversationMessage[] = [];
 		for (const message of runtimeState.messages) {
 			switch (message.role) {
-				case 'user':
-					messages.push(message.imageAttachments
-						? {
-							role: 'user',
-							content: message.content,
-							imageAttachments: message.imageAttachments,
-						}
-						: {
-							role: 'user',
-							content: message.content,
-						});
+				case 'user': {
+					const userMessage: IVSCloneChatTransportConversationMessage = {
+						role: 'user',
+						content: message.content,
+						...(message.imageAttachments ? { imageAttachments: message.imageAttachments } : {}),
+						...(message.contextSelections ? { contextSelections: message.contextSelections } : {}),
+					};
+					messages.push(userMessage);
 					break;
+				}
 				case 'assistant':
 					messages.push({ role: 'assistant', content: message.content });
 					break;

@@ -24,6 +24,7 @@ import { IVSCloneSettingsService } from '../../common/vscloneSettingsService.js'
 import type { IVSCloneSettingsState } from '../../common/vscloneSettingsTypes.js';
 import { VSCloneUnifiedChatBackendService } from '../../common/backend/vscloneUnifiedChatBackendService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
+import { createVSCloneTestFileService } from '../common/vscloneTestFileService.js';
 
 function createThreadSelection(threadId: string): IVSCloneModelSelection {
 	return {
@@ -179,6 +180,7 @@ suite('VSCloneChatThread lifecycle integration', () => {
 			runtimeService,
 			new UnusedContextGatheringService(),
 			backendService,
+			createVSCloneTestFileService(),
 		));
 
 		// The public delete API is the seam that matters here because it owns the contract between
@@ -230,6 +232,7 @@ suite('VSCloneChatThread lifecycle integration', () => {
 			runtimeService,
 			new UnusedContextGatheringService(),
 			backendService,
+			createVSCloneTestFileService(),
 		));
 
 		await chatThreadService.clearAll();

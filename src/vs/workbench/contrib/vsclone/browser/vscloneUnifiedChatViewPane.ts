@@ -83,6 +83,11 @@ import {
 	type IVSCloneThreadRuntimeMessage,
 	type IVSCloneThreadRuntimeState,
 } from "../common/vscloneThreadRuntimeTypes.js";
+import type { IVSCloneContextSelection } from "../common/vscloneContextSelectionTypes.js";
+import { IVSCloneMentionSearchService, type IVSCloneMentionResult } from "./vscloneMentionSearchService.js";
+import { CancellationTokenSource } from "../../../../base/common/cancellation.js";
+import { ILanguageService } from "../../../../editor/common/languages/language.js";
+import { ICodeEditorService } from "../../../../editor/browser/services/codeEditorService.js";
 
 const railWidthSetting = VSCloneChatRailWidthSetting;
 const modelSwitcherEnabledSetting = "vsclone.modelSwitcher.enabled";
@@ -101,6 +106,25 @@ const COMPACT_RUNTIME_TOOL_NAMES = new Set<string>([
 
 function isCompactRuntimeTool(toolName: string): boolean {
 	return COMPACT_RUNTIME_TOOL_NAMES.has(toolName);
+}
+
+/**
+ * The runtime stores user content with the serialized `---\nSELECTIONS\n...` block so the LLM sees
+ * the attached files on every replay. For the transcript we strip that block off because chips
+ * already represent the attachment visually, keeping the bubble focused on the typed instructions.
+ */
+function stripSelectionsBlock(content: string): string {
+	const marker = '\n---\nSELECTIONS\n';
+	const markerIndex = content.indexOf(marker);
+	if (markerIndex === -1) {
+		// Covers the edge case of a turn whose instructions were empty; the serialized block then
+		// begins at the very start of the stored content without a preceding newline.
+		if (content.startsWith('---\nSELECTIONS\n')) {
+			return '';
+		}
+		return content;
+	}
+	return content.slice(0, markerIndex);
 }
 
 // Edit-producing tools get their own flattened treatment: the final diff card renders inline
@@ -319,6 +343,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private reasoningEffortSelect: HTMLSelectElement | undefined;
 	private composerImageStrip: HTMLElement | undefined;
 	private pendingImages: IPendingImageAttachment[] = [];
+	private composerContextStrip: HTMLElement | undefined;
+	private pendingContextSelections: IVSCloneContextSelection[] = [];
+	private mentionMenuRoot: HTMLElement | undefined;
+	private mentionMenuList: HTMLElement | undefined;
+	private mentionMenuHeaderQuery: HTMLElement | undefined;
+	private mentionMenuOpen = false;
+	private mentionMenuQuery = '';
+	private mentionMenuItems: IVSCloneMentionResult[] = [];
+	private mentionMenuActiveIndex = 0;
+	private mentionMenuTriggerStart = -1;
+	private mentionSearchCts: CancellationTokenSource | undefined;
 
 	private readonly rail = this._register(
 		this.instantiationService.createInstance(VSCloneThreadRail),
@@ -376,6 +411,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IEditorService private readonly editorService: IEditorService,
 		@IMarkdownRendererService
 		private readonly markdownRendererService: IMarkdownRendererService,
+		@IVSCloneMentionSearchService
+		private readonly mentionSearchService: IVSCloneMentionSearchService,
+		@ILanguageService private readonly languageService: ILanguageService,
+		@ICodeEditorService private readonly codeEditorService: ICodeEditorService,
 	) {
 		super(
 			options,
@@ -621,6 +660,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		// of silently dropping the visual context that the original request depended on.
 		this.pendingImages = this.toPendingImages(latestPrompt.imageAttachments);
 		this.renderImageStrip();
+		this.pendingContextSelections = this.toPendingContextSelections(latestPrompt.contextSelections);
+		this.renderContextChipStrip();
 		this.updateComposerMetrics();
 		this.focusInput();
 	}
@@ -760,6 +801,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.addContextMenuToggle = undefined;
 		this.reasoningEffortContainer = undefined;
 		this.reasoningEffortSelect = undefined;
+		this.composerContextStrip = undefined;
+		this.mentionMenuRoot = undefined;
+		this.mentionMenuList = undefined;
+		this.mentionMenuHeaderQuery = undefined;
+		this.mentionMenuOpen = false;
+		this.mentionMenuItems = [];
+		this.mentionMenuActiveIndex = 0;
+		this.mentionMenuTriggerStart = -1;
 
 		const modelSwitcherEnabled =
 			this.configurationService.getValue<boolean>(
@@ -830,6 +879,16 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		addImageItem.appendChild(addImageIcon);
 		addImageItem.appendChild(document.createTextNode(localize("vsclone.composer.addImage", "Add Image")));
 
+		const addCodeSelectionItem = document.createElement('button');
+		addCodeSelectionItem.type = 'button';
+		addCodeSelectionItem.className = 'vsclone-add-context-menu-item';
+		addCodeSelectionItem.setAttribute('role', 'menuitem');
+		const addCodeSelectionIcon = document.createElement('span');
+		addCodeSelectionIcon.className = 'codicon codicon-selection';
+		addCodeSelectionIcon.setAttribute('aria-hidden', 'true');
+		addCodeSelectionItem.appendChild(addCodeSelectionIcon);
+		addCodeSelectionItem.appendChild(document.createTextNode(localize("vsclone.composer.addCodeSelection", "Add Code Selection")));
+
 		const planModeItem = document.createElement('button');
 		planModeItem.type = 'button';
 		planModeItem.className = 'vsclone-add-context-menu-item';
@@ -844,6 +903,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		planModeItem.appendChild(planModeToggle);
 
 		addContextMenu.appendChild(addImageItem);
+		addContextMenu.appendChild(addCodeSelectionItem);
 		addContextMenu.appendChild(planModeItem);
 		addContextRoot.appendChild(addContextMenu);
 
@@ -867,6 +927,35 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		imageStrip.className = 'vsclone-composer-image-strip hidden';
 		this.composerImageStrip = imageStrip;
 
+		const contextStrip = document.createElement('div');
+		contextStrip.className = 'vsclone-composer-context-strip hidden';
+		this.composerContextStrip = contextStrip;
+
+		const inputWrap = document.createElement('div');
+		inputWrap.className = 'vsclone-composer-input-wrap';
+		inputWrap.appendChild(input);
+
+		const mentionMenu = document.createElement('div');
+		mentionMenu.className = 'vsclone-mention-menu hidden';
+		mentionMenu.setAttribute('role', 'listbox');
+		const mentionMenuHeader = document.createElement('div');
+		mentionMenuHeader.className = 'vsclone-mention-menu-header';
+		const mentionMenuHeaderIcon = document.createElement('span');
+		mentionMenuHeaderIcon.className = 'codicon codicon-mention vsclone-mention-menu-header-icon';
+		mentionMenuHeaderIcon.setAttribute('aria-hidden', 'true');
+		const mentionMenuHeaderQuery = document.createElement('span');
+		mentionMenuHeaderQuery.className = 'vsclone-mention-menu-header-query';
+		mentionMenuHeader.appendChild(mentionMenuHeaderIcon);
+		mentionMenuHeader.appendChild(mentionMenuHeaderQuery);
+		const mentionMenuList = document.createElement('div');
+		mentionMenuList.className = 'vsclone-mention-menu-list';
+		mentionMenu.appendChild(mentionMenuHeader);
+		mentionMenu.appendChild(mentionMenuList);
+		inputWrap.appendChild(mentionMenu);
+		this.mentionMenuRoot = mentionMenu;
+		this.mentionMenuList = mentionMenuList;
+		this.mentionMenuHeaderQuery = mentionMenuHeaderQuery;
+
 		const imageFileInput = document.createElement('input');
 		imageFileInput.type = 'file';
 		imageFileInput.accept = 'image/png,image/jpeg,image/gif,image/webp';
@@ -874,7 +963,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		imageFileInput.className = 'vsclone-composer-image-file-input';
 
 		composer.appendChild(imageStrip);
-		composer.appendChild(input);
+		composer.appendChild(contextStrip);
+		composer.appendChild(inputWrap);
 		composer.appendChild(toolbar);
 		composer.appendChild(hint);
 
@@ -949,6 +1039,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			addDisposableListener(input, EventType.INPUT, () => {
 				this.updateComposerMetrics();
 				this.updateComposerState();
+				this.handleMentionInput();
 			}),
 		);
 
@@ -957,6 +1048,33 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				input,
 				EventType.KEY_DOWN,
 				(event: KeyboardEvent) => {
+					if (this.mentionMenuOpen) {
+						if (event.key === 'ArrowDown') {
+							event.preventDefault();
+							this.moveMentionActiveIndex(1);
+							return;
+						}
+						if (event.key === 'ArrowUp') {
+							event.preventDefault();
+							this.moveMentionActiveIndex(-1);
+							return;
+						}
+						if (event.key === 'Enter' && !event.shiftKey) {
+							event.preventDefault();
+							this.acceptActiveMention();
+							return;
+						}
+						if (event.key === 'Escape') {
+							event.preventDefault();
+							this.closeMentionMenu();
+							return;
+						}
+						if (event.key === 'Tab') {
+							event.preventDefault();
+							this.acceptActiveMention();
+							return;
+						}
+					}
 					if (
 						event.key !== "Enter" ||
 						event.shiftKey ||
@@ -1038,6 +1156,24 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			addDisposableListener(addImageItem, EventType.CLICK, () => {
 				toggleAddContextMenu(false);
 				imageFileInput.click();
+			}),
+		);
+		this._register(
+			addDisposableListener(addCodeSelectionItem, EventType.CLICK, () => {
+				toggleAddContextMenu(false);
+				this.addActiveEditorCodeSelectionAsContext();
+			}),
+		);
+		this._register(
+			addDisposableListener(targetWindow.document, EventType.MOUSE_DOWN, (event: MouseEvent) => {
+				if (!this.mentionMenuOpen) {
+					return;
+				}
+				const clickTarget = event.target as Node | null;
+				if (clickTarget && (inputWrap.contains(clickTarget))) {
+					return;
+				}
+				this.closeMentionMenu();
 			}),
 		);
 		this._register(
@@ -1125,11 +1261,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			const imageAttachments = this.pendingImages.length > 0
 				? this.pendingImages.map(img => ({ mimeType: img.mimeType, base64Data: img.base64Data }))
 				: undefined;
+			const contextSelections = this.pendingContextSelections.length > 0
+				? this.pendingContextSelections.map(selection => ({ ...selection }))
+				: undefined;
 			const submission = await this.chatThreadService.sendMessage(promptText, {
 				threadId: activeThreadId,
 				sessionResource: existingThread?.sessionResource,
 				modelSelection: selectedModel,
 				imageAttachments,
+				contextSelections,
 			});
 			if (!submission) {
 				return;
@@ -1150,6 +1290,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.composerInput.value = "";
 			this.pendingImages = [];
 			this.renderImageStrip();
+			this.pendingContextSelections = [];
+			this.renderContextChipStrip();
+			this.closeMentionMenu();
 			this.updateComposerMetrics();
 			this.refreshModelControls();
 			this.refreshConversation();
@@ -1279,6 +1422,245 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			thumb.appendChild(removeBtn);
 			this.composerImageStrip.appendChild(thumb);
 		}
+	}
+
+	private handleMentionInput(): void {
+		if (!this.composerInput) {
+			return;
+		}
+		const value = this.composerInput.value;
+		const caret = this.composerInput.selectionStart ?? value.length;
+		const before = value.slice(0, caret);
+		// Match the active `@token` only when it sits at the start of the input or after whitespace.
+		// Without that anchor, typing `@` inside an email address would pop the picker open.
+		const match = /(?:^|\s)@([\w./-]*)$/.exec(before);
+		if (!match) {
+			if (this.mentionMenuOpen) {
+				this.closeMentionMenu();
+			}
+			return;
+		}
+		const queryStartIndex = caret - match[1].length - 1; // position of the `@`
+		this.mentionMenuTriggerStart = queryStartIndex;
+		this.mentionMenuQuery = match[1];
+		this.mentionMenuOpen = true;
+		this.renderMentionMenu();
+		void this.runMentionSearch(this.mentionMenuQuery);
+	}
+
+	private async runMentionSearch(query: string): Promise<void> {
+		this.mentionSearchCts?.cancel();
+		this.mentionSearchCts?.dispose();
+		const cts = new CancellationTokenSource();
+		this.mentionSearchCts = cts;
+		try {
+			const results = await this.mentionSearchService.search(query, 12, cts.token);
+			if (cts.token.isCancellationRequested) {
+				return;
+			}
+			this.mentionMenuItems = [...results];
+			this.mentionMenuActiveIndex = 0;
+			this.renderMentionMenu();
+		} catch {
+			if (!cts.token.isCancellationRequested) {
+				this.mentionMenuItems = [];
+				this.renderMentionMenu();
+			}
+		}
+	}
+
+	private moveMentionActiveIndex(delta: number): void {
+		if (this.mentionMenuItems.length === 0) {
+			return;
+		}
+		const length = this.mentionMenuItems.length;
+		this.mentionMenuActiveIndex = ((this.mentionMenuActiveIndex + delta) % length + length) % length;
+		this.renderMentionMenu();
+	}
+
+	private acceptActiveMention(): void {
+		const item = this.mentionMenuItems[this.mentionMenuActiveIndex];
+		if (!item || !this.composerInput) {
+			return;
+		}
+		const value = this.composerInput.value;
+		const caret = this.composerInput.selectionStart ?? value.length;
+		const start = this.mentionMenuTriggerStart;
+		if (start < 0) {
+			this.closeMentionMenu();
+			return;
+		}
+		const before = value.slice(0, start);
+		const after = value.slice(caret);
+		const trimmedBefore = before.length > 0 && !/\s$/.test(before) ? before : before;
+		const next = `${trimmedBefore}${after}`;
+		this.composerInput.value = next;
+		const nextCaret = trimmedBefore.length;
+		this.composerInput.setSelectionRange(nextCaret, nextCaret);
+		this.addContextSelection(this.mentionResultToSelection(item));
+		this.closeMentionMenu();
+		this.composerInput.focus();
+		this.updateComposerMetrics();
+		this.updateComposerState();
+	}
+
+	private mentionResultToSelection(result: IVSCloneMentionResult): IVSCloneContextSelection {
+		if (result.kind === 'folder') {
+			return { kind: 'folder', uri: result.uri };
+		}
+		const languageId = this.languageService.guessLanguageIdByFilepathOrFirstLine(result.uri) ?? 'plaintext';
+		return { kind: 'file', uri: result.uri, languageId };
+	}
+
+	private closeMentionMenu(): void {
+		if (!this.mentionMenuOpen) {
+			return;
+		}
+		this.mentionMenuOpen = false;
+		this.mentionMenuQuery = '';
+		this.mentionMenuItems = [];
+		this.mentionMenuActiveIndex = 0;
+		this.mentionMenuTriggerStart = -1;
+		this.mentionSearchCts?.cancel();
+		this.mentionSearchCts?.dispose();
+		this.mentionSearchCts = undefined;
+		this.renderMentionMenu();
+	}
+
+	private renderMentionMenu(): void {
+		if (!this.mentionMenuRoot || !this.mentionMenuList || !this.mentionMenuHeaderQuery) {
+			return;
+		}
+		this.mentionMenuRoot.classList.toggle('hidden', !this.mentionMenuOpen);
+		this.mentionMenuHeaderQuery.textContent = this.mentionMenuQuery.length > 0
+			? this.mentionMenuQuery
+			: localize("vsclone.mention.menu.hint", "Type to search files and folders");
+		this.mentionMenuList.replaceChildren();
+		if (!this.mentionMenuOpen) {
+			return;
+		}
+		if (this.mentionMenuItems.length === 0) {
+			const empty = document.createElement('div');
+			empty.className = 'vsclone-mention-menu-empty';
+			empty.textContent = localize("vsclone.mention.menu.empty", "No matches");
+			this.mentionMenuList.appendChild(empty);
+			return;
+		}
+		for (let index = 0; index < this.mentionMenuItems.length; index++) {
+			const item = this.mentionMenuItems[index];
+			const button = document.createElement('button');
+			button.type = 'button';
+			button.setAttribute('role', 'option');
+			button.className = index === this.mentionMenuActiveIndex
+				? 'vsclone-mention-menu-item active'
+				: 'vsclone-mention-menu-item';
+			button.setAttribute('aria-selected', String(index === this.mentionMenuActiveIndex));
+			const icon = document.createElement('span');
+			icon.className = `codicon ${item.kind === 'folder' ? 'codicon-folder' : 'codicon-file'} vsclone-mention-menu-item-icon`;
+			icon.setAttribute('aria-hidden', 'true');
+			const label = document.createElement('span');
+			label.className = 'vsclone-mention-menu-item-label';
+			label.textContent = item.label;
+			const detail = document.createElement('span');
+			detail.className = 'vsclone-mention-menu-item-detail';
+			detail.textContent = item.relativePath;
+			button.appendChild(icon);
+			button.appendChild(label);
+			button.appendChild(detail);
+			const itemIndex = index;
+			button.addEventListener('mouseenter', () => {
+				this.mentionMenuActiveIndex = itemIndex;
+				this.renderMentionMenu();
+			});
+			button.addEventListener('mousedown', event => {
+				// `mousedown` fires before the textarea blur so the picker selection lands without losing
+				// the caret context that drives `acceptActiveMention`.
+				event.preventDefault();
+				this.mentionMenuActiveIndex = itemIndex;
+				this.acceptActiveMention();
+			});
+			this.mentionMenuList.appendChild(button);
+		}
+	}
+
+	private addContextSelection(selection: IVSCloneContextSelection): void {
+		this.pendingContextSelections.push(selection);
+		this.renderContextChipStrip();
+	}
+
+	private renderContextChipStrip(): void {
+		if (!this.composerContextStrip) {
+			return;
+		}
+		this.composerContextStrip.replaceChildren();
+		if (this.pendingContextSelections.length === 0) {
+			this.composerContextStrip.classList.add('hidden');
+			return;
+		}
+		this.composerContextStrip.classList.remove('hidden');
+		for (let i = 0; i < this.pendingContextSelections.length; i++) {
+			const selection = this.pendingContextSelections[i];
+			const chip = document.createElement('div');
+			chip.className = `vsclone-composer-context-chip kind-${selection.kind}`;
+			const iconClass = selection.kind === 'folder'
+				? 'codicon-folder'
+				: selection.kind === 'codeSelection'
+					? 'codicon-selection'
+					: 'codicon-file';
+			const icon = document.createElement('span');
+			icon.className = `codicon ${iconClass} vsclone-composer-context-chip-icon`;
+			icon.setAttribute('aria-hidden', 'true');
+			const label = document.createElement('span');
+			label.className = 'vsclone-composer-context-chip-label';
+			const baseName = selection.uri.path.split('/').pop() || selection.uri.fsPath;
+			label.textContent = selection.kind === 'codeSelection'
+				? `${baseName}:${selection.startLine}-${selection.endLine}`
+				: baseName;
+			chip.title = selection.uri.fsPath;
+			const removeBtn = document.createElement('button');
+			removeBtn.type = 'button';
+			removeBtn.className = 'vsclone-composer-context-chip-remove';
+			removeBtn.setAttribute('aria-label', localize("vsclone.composer.removeContext", "Remove context"));
+			const removeIcon = document.createElement('span');
+			removeIcon.className = 'codicon codicon-close';
+			removeIcon.setAttribute('aria-hidden', 'true');
+			removeBtn.appendChild(removeIcon);
+			const index = i;
+			removeBtn.addEventListener(EventType.CLICK, event => {
+				event.stopPropagation();
+				this.pendingContextSelections.splice(index, 1);
+				this.renderContextChipStrip();
+			});
+			chip.appendChild(icon);
+			chip.appendChild(label);
+			chip.appendChild(removeBtn);
+			this.composerContextStrip.appendChild(chip);
+		}
+	}
+
+	private addActiveEditorCodeSelectionAsContext(): void {
+		const editor = this.codeEditorService.getActiveCodeEditor() ?? this.codeEditorService.getFocusedCodeEditor();
+		const model = editor?.getModel();
+		const selection = editor?.getSelection();
+		if (!editor || !model || !selection || selection.isEmpty()) {
+			this.notificationService.info(localize("vsclone.composer.codeSelection.empty", "Select some code in the editor first to add it as context."));
+			return;
+		}
+		const languageId = model.getLanguageId();
+		this.addContextSelection({
+			kind: 'codeSelection',
+			uri: model.uri,
+			languageId,
+			startLine: selection.startLineNumber,
+			endLine: selection.endLineNumber,
+		});
+	}
+
+	private toPendingContextSelections(selections: readonly IVSCloneContextSelection[] | undefined): IVSCloneContextSelection[] {
+		if (!selections || selections.length === 0) {
+			return [];
+		}
+		return selections.map(selection => ({ ...selection }));
 	}
 
 	private showImagePreviewOverlay(dataUrl: string): void {
@@ -1697,10 +2079,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const body = document.createElement('div');
 		body.className = 'vsclone-thread-message-body';
-		if (message.content.trim().length > 0) {
+		if (message.contextSelections && message.contextSelections.length > 0) {
+			body.appendChild(this.renderTranscriptContextChipStrip(message.contextSelections));
+		}
+		// The stored content has the serialized SELECTIONS block appended so the LLM sees the full
+		// context on replay. The transcript only shows the original instructions because the chips
+		// already communicate which files/folders were attached.
+		const displayText = stripSelectionsBlock(message.content);
+		if (displayText.trim().length > 0) {
 			const promptText = document.createElement('div');
 			promptText.className = 'vsclone-thread-message-user-text';
-			promptText.textContent = message.content;
+			promptText.textContent = displayText;
 			body.appendChild(promptText);
 		}
 		if (message.imageAttachments && message.imageAttachments.length > 0) {
@@ -1708,6 +2097,34 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		item.appendChild(body);
 		return item;
+	}
+
+	private renderTranscriptContextChipStrip(selections: readonly IVSCloneContextSelection[]): HTMLElement {
+		const strip = document.createElement('div');
+		strip.className = 'vsclone-composer-context-strip vsclone-transcript-context-strip';
+		for (const selection of selections) {
+			const chip = document.createElement('div');
+			chip.className = `vsclone-composer-context-chip kind-${selection.kind}`;
+			chip.title = selection.uri.fsPath;
+			const iconClass = selection.kind === 'folder'
+				? 'codicon-folder'
+				: selection.kind === 'codeSelection'
+					? 'codicon-selection'
+					: 'codicon-file';
+			const icon = document.createElement('span');
+			icon.className = `codicon ${iconClass} vsclone-composer-context-chip-icon`;
+			icon.setAttribute('aria-hidden', 'true');
+			const label = document.createElement('span');
+			label.className = 'vsclone-composer-context-chip-label';
+			const baseName = selection.uri.path.split('/').pop() || selection.uri.fsPath;
+			label.textContent = selection.kind === 'codeSelection'
+				? `${baseName}:${selection.startLine}-${selection.endLine}`
+				: baseName;
+			chip.appendChild(icon);
+			chip.appendChild(label);
+			strip.appendChild(chip);
+		}
+		return strip;
 	}
 
 	private renderRuntimeAssistantMessage(
@@ -4245,6 +4662,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private getLatestConversationPrompt(threadId?: string): {
 		content: string;
 		imageAttachments?: readonly IVSCloneImageAttachment[];
+		contextSelections?: readonly IVSCloneContextSelection[];
 	} | undefined {
 		const candidateThreadId =
 			threadId ?? this.activeThreadId ?? this.rail.getSelectedThread();
@@ -4260,6 +4678,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 					return {
 						content: message.content,
 						imageAttachments: message.imageAttachments,
+						contextSelections: message.contextSelections,
 					};
 				}
 			}

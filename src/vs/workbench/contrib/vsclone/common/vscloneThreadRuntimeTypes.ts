@@ -5,6 +5,7 @@
 
 import { URI } from '../../../../base/common/uri.js';
 import type { IVSCloneChatTransportConversationMessage } from './vscloneChatTransportTypes.js';
+import type { IVSCloneContextSelection } from './vscloneContextSelectionTypes.js';
 import type { IVSCloneImageAttachment } from './vscloneImageAttachmentTypes.js';
 import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
@@ -159,6 +160,7 @@ export interface IVSCloneThreadRuntimeRunContext {
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
 	readonly systemMessage?: string;
 	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
+	readonly contextSelections?: readonly IVSCloneContextSelection[];
 }
 
 export type VSCloneThreadToolMessageType =
@@ -225,6 +227,7 @@ export type IVSCloneThreadRuntimeMessage =
 		readonly createdAt: number;
 		readonly content: string;
 		readonly imageAttachments?: readonly IVSCloneImageAttachment[];
+		readonly contextSelections?: readonly IVSCloneContextSelection[];
 	}
 	| {
 		readonly id: string;
@@ -272,5 +275,11 @@ export interface IVSCloneThreadRuntimeRunOptions {
 	readonly previousTurns?: readonly IVSCloneChatTransportConversationMessage[];
 	readonly systemMessage?: string;
 	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
+	/**
+	 * Raw selection metadata for display. The `promptText` sent to the LLM has already been enriched
+	 * with serialized file/folder/selection contents before reaching the runtime, so these are only
+	 * kept to re-render context chips in the transcript.
+	 */
+	readonly contextSelections?: readonly IVSCloneContextSelection[];
 	readonly recordPromptMessage?: boolean;
 }

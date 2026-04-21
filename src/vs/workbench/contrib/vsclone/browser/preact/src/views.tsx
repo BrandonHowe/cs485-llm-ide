@@ -9,6 +9,7 @@ import { Fragment } from 'preact';
 import { localize } from '../../../../../../nls.ts';
 import type {
 	IVSCloneAssistantBodySegmentView,
+	IVSCloneContextChipView,
 	IVSCloneConversationActivityItemView,
 	IVSCloneConversationDiffCardView,
 	IVSCloneConversationDiffLineView,
@@ -17,6 +18,7 @@ import type {
 	IVSCloneConversationSurfaceProps,
 	IVSCloneConversationTokenView,
 	IVSCloneEditApplySummaryView,
+	IVSCloneMentionMenuItemView,
 	IVSCloneModelSwitcherSection,
 	IVSCloneModelSwitcherViewProps,
 	IVSCloneRailViewProps,
@@ -689,6 +691,81 @@ function ConversationImageStrip(props: { images: readonly IVSCloneConversationIm
 	);
 }
 
+function ContextChipStrip(props: { chips: readonly IVSCloneContextChipView[]; stripRef: (element: HTMLElement | null) => void }) {
+	const className = props.chips.length === 0 ? 'vsclone-composer-context-strip hidden' : 'vsclone-composer-context-strip';
+	return (
+		<div ref={props.stripRef} className={className}>
+			{props.chips.map(chip => (
+				<div key={chip.key} className={`vsclone-composer-context-chip kind-${chip.kind}`} title={chip.title}>
+					<Codicon icon={chip.iconClass} extraClassName="vsclone-composer-context-chip-icon" />
+					<span className="vsclone-composer-context-chip-label">{chip.label}</span>
+					<button
+						type="button"
+						className="vsclone-composer-context-chip-remove"
+						aria-label={chip.removeAriaLabel}
+						onClick={(event) => {
+							event.stopPropagation();
+							chip.onRemove();
+						}}
+					>
+						<Codicon icon="codicon-close" />
+					</button>
+				</div>
+			))}
+		</div>
+	);
+}
+
+function MentionMenu(props: {
+	open: boolean;
+	query: string;
+	items: readonly IVSCloneMentionMenuItemView[];
+	activeIndex: number;
+	loading: boolean;
+	emptyLabel: string;
+	menuRef: (element: HTMLElement | null) => void;
+	onSelect: (index: number) => void;
+	onHover: (index: number) => void;
+}) {
+	if (!props.open) {
+		return <div ref={props.menuRef} className="vsclone-mention-menu hidden" />;
+	}
+	return (
+		<div ref={props.menuRef} className="vsclone-mention-menu" role="listbox">
+			<div className="vsclone-mention-menu-header">
+				<Codicon icon="codicon-mention" extraClassName="vsclone-mention-menu-header-icon" />
+				<span className="vsclone-mention-menu-header-query">{props.query.length > 0 ? props.query : localize('vsclone.mention.menu.hint', 'Type to search files and folders')}</span>
+			</div>
+			{props.loading ? (
+				<div className="vsclone-mention-menu-empty">{localize('vsclone.mention.menu.loading', 'Searching...')}</div>
+			) : props.items.length === 0 ? (
+				<div className="vsclone-mention-menu-empty">{props.emptyLabel}</div>
+			) : (
+				<div className="vsclone-mention-menu-list">
+					{props.items.map((item, index) => (
+						<button
+							key={item.key}
+							type="button"
+							role="option"
+							aria-selected={index === props.activeIndex ? 'true' : 'false'}
+							className={index === props.activeIndex ? 'vsclone-mention-menu-item active' : 'vsclone-mention-menu-item'}
+							onMouseEnter={() => props.onHover(index)}
+							onMouseDown={(event) => {
+								event.preventDefault();
+								props.onSelect(index);
+							}}
+						>
+							<Codicon icon={item.iconClass} extraClassName="vsclone-mention-menu-item-icon" />
+							<span className="vsclone-mention-menu-item-label">{item.label}</span>
+							<span className="vsclone-mention-menu-item-detail">{item.detail}</span>
+						</button>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
 function AssistantSegment(props: { segment: IVSCloneAssistantBodySegmentView }) {
 	switch (props.segment.kind) {
 		case 'markdown':
@@ -794,18 +871,32 @@ export function VSCloneUnifiedConversationSurface(props: IVSCloneConversationSur
 					className={props.pendingImages.length === 0 ? 'vsclone-composer-image-strip hidden' : 'vsclone-composer-image-strip'}
 					removable={true}
 				/>
-				<textarea
-					ref={props.composerInputRef}
-					className="vsclone-thread-composer-input"
-					rows={1}
-					placeholder={props.composerInputPlaceholder}
-					disabled={props.composerInputDisabled}
-					aria-label={localize('vsclone.composer.inputLabel', 'Chat message')}
-					aria-describedby={props.composerHintId}
-					onInput={() => props.onComposerInput()}
-					onKeyDown={(event) => props.onComposerKeyDown(event)}
-					onPaste={(event) => props.onComposerPaste(event)}
-				/>
+				<ContextChipStrip chips={props.pendingContextChips} stripRef={props.composerContextStripRef} />
+				<div className="vsclone-composer-input-wrap">
+					<textarea
+						ref={props.composerInputRef}
+						className="vsclone-thread-composer-input"
+						rows={1}
+						placeholder={props.composerInputPlaceholder}
+						disabled={props.composerInputDisabled}
+						aria-label={localize('vsclone.composer.inputLabel', 'Chat message')}
+						aria-describedby={props.composerHintId}
+						onInput={() => props.onComposerInput()}
+						onKeyDown={(event) => props.onComposerKeyDown(event)}
+						onPaste={(event) => props.onComposerPaste(event)}
+					/>
+					<MentionMenu
+						open={props.mentionMenuOpen}
+						query={props.mentionMenuQuery}
+						items={props.mentionMenuItems}
+						activeIndex={props.mentionMenuActiveIndex}
+						loading={props.mentionMenuLoading}
+						emptyLabel={props.mentionMenuEmptyLabel}
+						menuRef={props.mentionMenuRef}
+						onSelect={props.onMentionItemSelect}
+						onHover={props.onMentionItemHover}
+					/>
+				</div>
 				<div className="vsclone-thread-composer-toolbar">
 					<div ref={props.planModeContainerRef} className={props.addContextMenuOpen ? 'vsclone-add-context-root open' : 'vsclone-add-context-root'}>
 						<button
@@ -833,6 +924,15 @@ export function VSCloneUnifiedConversationSurface(props: IVSCloneConversationSur
 							>
 								<Codicon icon="codicon-file-media" />
 								{localize('vsclone.composer.addImage', 'Add Image')}
+							</button>
+							<button
+								type="button"
+								className="vsclone-add-context-menu-item"
+								role="menuitem"
+								onClick={() => props.onAddCodeSelectionClick()}
+							>
+								<Codicon icon="codicon-selection" />
+								{localize('vsclone.composer.addCodeSelection', 'Add Code Selection')}
 							</button>
 							<button
 								ref={props.planModeSwitchButtonRef}

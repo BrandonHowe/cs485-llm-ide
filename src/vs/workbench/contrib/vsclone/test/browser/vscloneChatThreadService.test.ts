@@ -12,6 +12,7 @@ import { VSCloneChatThreadService } from '../../browser/vscloneChatThreadService
 import { IVSCloneContextGatheringService } from '../../browser/vscloneContextGatheringService.js';
 import { IVSCloneThreadRuntimeHandle, IVSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
 import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
+import { createVSCloneTestFileService } from '../common/vscloneTestFileService.js';
 import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
 import { IVSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
 import { IVSCloneModelSelection } from '../../common/vscloneModelSelectionTypes.js';
@@ -234,6 +235,7 @@ suite('VSCloneChatThreadService', () => {
 			runtimeService,
 			new StaticContextGatheringService(),
 			new TestVSCloneUnifiedChatBackendService(),
+			createVSCloneTestFileService(),
 		));
 
 		const result = await threadService.sendMessage('Follow up on the earlier answer', {
@@ -269,6 +271,7 @@ suite('VSCloneChatThreadService', () => {
 			runtimeService,
 			new StaticContextGatheringService(),
 			new TestVSCloneUnifiedChatBackendService(),
+			createVSCloneTestFileService(),
 		));
 
 		await threadService.sendMessage('Use the updated selection for this turn', {
@@ -316,6 +319,7 @@ suite('VSCloneChatThreadService', () => {
 			runtimeService,
 			new StaticContextGatheringService(),
 			backendService,
+			createVSCloneTestFileService(),
 		));
 
 		// The service-level delete contract matters because the runtime owns transcript data while
@@ -356,6 +360,7 @@ suite('VSCloneChatThreadService', () => {
 			runtimeService,
 			new StaticContextGatheringService(),
 			backendService,
+			createVSCloneTestFileService(),
 		));
 
 		await threadService.clearAll();
