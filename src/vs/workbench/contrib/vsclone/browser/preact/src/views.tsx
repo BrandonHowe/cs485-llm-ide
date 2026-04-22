@@ -80,61 +80,22 @@ function renderRailState(viewState: VSCloneRailState, errorMessage: string | und
 }
 
 export function VSCloneThreadRailView(props: IVSCloneRailViewProps) {
+	const totalRows = props.rows.length;
+	const hasMoreThreads = totalRows > props.initialRowCount;
+	const visibleRows = props.showAll ? props.rows : props.rows.slice(0, props.initialRowCount);
+
 	return (
 		<div className="vsclone-thread-rail">
 			<div className="vsclone-thread-rail-header">
-				<div className="vsclone-thread-rail-header-row">
-					<button
-						type="button"
-						className="vsclone-thread-rail-back"
-						title={localize('vsclone.rail.back.tooltip', 'Back to conversation')}
-						aria-label={localize('vsclone.rail.back.tooltip', 'Back to conversation')}
-						onClick={() => props.onBack()}
-					>
-						{'\u2190'}
-					</button>
-					<div className="vsclone-thread-rail-title">
-						{localize('vsclone.rail.title', 'Threads').toUpperCase()}
-					</div>
-					<button
-						type="button"
-						className="vsclone-thread-rail-new-chat"
-						onClick={() => props.onNewChat()}
-					>
-						{localize('vsclone.rail.newChat', 'New Chat')}
-					</button>
-				</div>
 				<input
 					ref={props.searchInputRef}
 					className="vsclone-thread-rail-search"
 					type="search"
 					placeholder={localize('vsclone.rail.search.placeholder', 'Search threads...')}
 					aria-label={localize('vsclone.rail.search.ariaLabel', 'Search threads')}
-					defaultValue={props.filterState.query}
+					defaultValue={props.searchQuery}
 					onInput={(event) => props.onSearchInput((event.currentTarget as HTMLInputElement).value)}
 				/>
-				<div className="vsclone-thread-rail-tabs">
-					{(['all', 'active', 'archived'] as const).map(tab => {
-						const selected = props.filterState.tab === tab;
-						const label = tab === 'all'
-							? localize('vsclone.rail.tab.all', 'All')
-							: tab === 'active'
-								? localize('vsclone.rail.tab.active', 'Active')
-								: localize('vsclone.rail.tab.archived', 'Archived');
-						return (
-							<button
-								key={tab}
-								type="button"
-								className={selected ? 'vsclone-thread-rail-tab active' : 'vsclone-thread-rail-tab'}
-								data-tab={tab}
-								aria-pressed={selected ? 'true' : 'false'}
-								onClick={() => props.onTabSelect(tab)}
-							>
-								{label}
-							</button>
-						);
-					})}
-				</div>
 			</div>
 			<div className="vsclone-thread-rail-body">
 				<div
@@ -142,79 +103,136 @@ export function VSCloneThreadRailView(props: IVSCloneRailViewProps) {
 					role="list"
 					aria-label={localize('vsclone.rail.list.ariaLabel', 'Conversation threads')}
 				>
-					{props.rows.map(row => {
+					{visibleRows.map(row => {
 						const selected = row.threadId === props.selectedThreadId || row.selected;
+						const hovered = row.threadId === props.hoveredThreadId;
+						const pendingDelete = row.threadId === props.pendingDeleteThreadId;
+						const running = row.streamStateKind === 'llm' || row.streamStateKind === 'tool';
+						const awaitingUser = row.streamStateKind === 'awaiting_user';
+						let className = 'vsclone-thread-rail-row';
+						if (selected) {
+							className += ' selected';
+						}
+						if (hovered) {
+							className += ' hovered';
+						}
+						if (pendingDelete) {
+							className += ' pending-delete';
+						}
 						return (
-							<button
+							<div
 								key={row.threadId}
-								type="button"
-								className={selected ? 'vsclone-thread-rail-row selected' : 'vsclone-thread-rail-row'}
+								className={className}
 								data-thread-id={row.threadId}
+								role="button"
+								tabIndex={0}
 								aria-pressed={selected ? 'true' : 'false'}
 								aria-label={props.getRowAriaLabel(row)}
 								onClick={() => props.onRowSelect(row.threadId)}
+								onKeyDown={(event) => {
+									// Only the row itself should handle Enter/Space for selection.
+									// Without this guard, keypresses on nested buttons would bubble
+									// up and re-open the thread.
+									if (event.target !== event.currentTarget) {
+										return;
+									}
+									if (event.key === 'Enter' || event.key === ' ') {
+										event.preventDefault();
+										props.onRowSelect(row.threadId);
+									}
+								}}
 								onContextMenu={(event) => props.onRowContextMenu(row.threadId, event)}
+								onMouseEnter={() => props.onRowMouseEnter(row.threadId)}
+								onMouseLeave={() => props.onRowMouseLeave(row.threadId)}
 							>
-								<div className="vsclone-thread-rail-row-top">
-									<div className="vsclone-thread-rail-row-title">{row.title}</div>
-									<div className="vsclone-thread-rail-row-timestamp">{row.updatedLabel}</div>
+								<div className="vsclone-thread-rail-row-leading">
+									{running ? (
+										<span
+											className="vsclone-thread-rail-row-spinner codicon codicon-loading codicon-modifier-spin"
+											aria-hidden="true"
+										/>
+									) : awaitingUser ? (
+										<span
+											className="vsclone-thread-rail-row-spinner codicon codicon-question"
+											aria-hidden="true"
+										/>
+									) : null}
+									<span className="vsclone-thread-rail-row-title">
+										{row.title}
+									</span>
 								</div>
-								<div className="vsclone-thread-rail-row-preview">{row.preview}</div>
-								<div className="vsclone-thread-rail-row-metadata">
-									{localize('vsclone.rail.turnCount', '{0} turns', row.turnCount)}
-									{row.archived ? <span className="vsclone-thread-rail-row-archived">{localize('vsclone.rail.archived.badge', 'Archived')}</span> : null}
+								<div className="vsclone-thread-rail-row-trailing">
+									{pendingDelete ? (
+										<Fragment>
+											<button
+												type="button"
+												className="vsclone-thread-rail-row-icon"
+												title={localize('vsclone.rail.delete.cancel', 'Cancel')}
+												aria-label={localize('vsclone.rail.delete.cancel', 'Cancel')}
+												onClick={(event) => {
+													event.stopPropagation();
+													props.onCancelDelete();
+												}}
+											>
+												<span className="codicon codicon-close" aria-hidden="true" />
+											</button>
+											<button
+												type="button"
+												className="vsclone-thread-rail-row-icon confirm"
+												title={localize('vsclone.rail.delete.confirm', 'Delete')}
+												aria-label={localize('vsclone.rail.delete.confirm', 'Delete')}
+												onClick={(event) => {
+													event.stopPropagation();
+													props.onConfirmDelete(row.threadId);
+												}}
+											>
+												<span className="codicon codicon-check" aria-hidden="true" />
+											</button>
+										</Fragment>
+									) : (
+										<Fragment>
+											<span className="vsclone-thread-rail-row-timestamp">{row.updatedLabel}</span>
+											<button
+												type="button"
+												className="vsclone-thread-rail-row-icon vsclone-thread-rail-row-icon-delete"
+												title={localize('vsclone.rail.action.delete', 'Delete thread')}
+												aria-label={localize('vsclone.rail.action.delete', 'Delete thread')}
+												onClick={(event) => {
+													event.stopPropagation();
+													props.onRequestDelete(row.threadId);
+												}}
+											>
+												<span className="codicon codicon-trash" aria-hidden="true" />
+											</button>
+										</Fragment>
+									)}
 								</div>
-							</button>
+							</div>
 						);
 					})}
+					{hasMoreThreads ? (
+						<button
+							type="button"
+							className="vsclone-thread-rail-show-more"
+							onClick={() => props.onToggleShowAll()}
+						>
+							{props.showAll
+								? localize('vsclone.rail.showLess', 'Show less')
+								: localize('vsclone.rail.showMore', 'Show {0} more...', totalRows - props.initialRowCount)}
+						</button>
+					) : null}
 				</div>
 				{renderRailState(props.viewState, props.errorMessage, props.onRetry)}
 			</div>
-			<div
-				ref={props.modalContainerRef}
-				className={props.pendingDelete ? 'vsclone-thread-rail-delete-overlay visible' : 'vsclone-thread-rail-delete-overlay'}
-				aria-hidden={props.pendingDelete ? 'false' : 'true'}
-				onClick={(event) => {
-					if (event.target === event.currentTarget) {
-						props.onDeleteOverlayClick();
-					}
-				}}
-			>
-				<div
-					className="vsclone-thread-rail-delete-modal"
-					role="dialog"
-					aria-modal="true"
-					aria-labelledby={props.deleteTitleId}
-					aria-describedby={props.deleteDescriptionId}
-					onKeyDown={(event) => props.onDeleteModalKeyDown(event)}
+			<div className="vsclone-thread-rail-footer">
+				<button
+					type="button"
+					className="vsclone-thread-rail-new-chat"
+					onClick={() => props.onNewChat()}
 				>
-					<div id={props.deleteTitleId} className="vsclone-thread-rail-delete-title">
-						{localize('vsclone.rail.delete.title', 'Delete thread?')}
-					</div>
-					<div id={props.deleteDescriptionId} className="vsclone-thread-rail-delete-description">
-						{props.pendingDelete
-							? localize('vsclone.rail.delete.message', 'Are you sure you want to delete "{0}"? This action cannot be undone.', props.pendingDelete.threadTitle)
-							: ''}
-					</div>
-					<div className="vsclone-thread-rail-delete-actions">
-						<button
-							ref={props.modalCancelButtonRef}
-							type="button"
-							className="vsclone-thread-rail-delete-cancel"
-							onClick={() => props.onCancelDelete()}
-						>
-							{localize('vsclone.rail.delete.cancel', 'Cancel')}
-						</button>
-						<button
-							ref={props.modalConfirmButtonRef}
-							type="button"
-							className="vsclone-thread-rail-delete-confirm"
-							onClick={() => props.onConfirmDelete()}
-						>
-							{localize('vsclone.rail.delete.confirm', 'Delete')}
-						</button>
-					</div>
-				</div>
+					<span className="codicon codicon-add" aria-hidden="true" />
+					<span>{localize('vsclone.rail.newChat', 'New Chat')}</span>
+				</button>
 			</div>
 		</div>
 	);

@@ -17,7 +17,6 @@ import {
 } from "../../../../base/browser/dom.js";
 import { RunOnceScheduler } from "../../../../base/common/async.js";
 import { Action } from "../../../../base/common/actions.js";
-import { fromNow } from "../../../../base/common/date.js";
 import { onUnexpectedError } from "../../../../base/common/errors.js";
 import { MarkdownString } from "../../../../base/common/htmlContent.js";
 import {
@@ -55,10 +54,7 @@ import {
 	type IVSCloneModelSelection,
 } from "../common/vscloneModelSelectionTypes.js";
 import { IVSCloneSettingsService } from "../common/vscloneSettingsService.js";
-import {
-	VSCloneThreadRail,
-	VSCloneRailTab,
-} from "./vscloneThreadRail.js";
+import { VSCloneThreadRail } from "./vscloneThreadRail.js";
 import { IVSCloneChatThreadService } from "./vscloneChatThreadService.js";
 import { VSCloneModelSwitcherWidget } from "./vscloneModelSwitcherWidget.js";
 import { IVSCloneProviderConfigurationBridge } from "./vscloneProviderConfigurationBridge.js";
@@ -79,6 +75,7 @@ import {
 } from "../common/vscloneImageAttachmentTypes.js";
 import {
 	type IVSCloneThreadRuntimeAssistantEditSuggestion,
+	type IVSCloneThreadRuntimeCatalogEntry,
 	type IVSCloneThreadRuntimeCatalogQuery,
 	type IVSCloneThreadRuntimeMessage,
 	type IVSCloneThreadRuntimeState,
@@ -106,6 +103,30 @@ const COMPACT_RUNTIME_TOOL_NAMES = new Set<string>([
 
 function isCompactRuntimeTool(toolName: string): boolean {
 	return COMPACT_RUNTIME_TOOL_NAMES.has(toolName);
+}
+
+// Compact relative-time label for the thread rail ("now", "37m ago", "2h ago", "3d ago"). Anything
+// past a week falls back to a short "Mon d" label so year-old threads stay readable.
+function formatThreadRailRelativeTime(timestamp: number, now: number = Date.now()): string {
+	const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+	if (seconds < 45) {
+		return localize("vsclone.rail.time.now", "now");
+	}
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) {
+		return localize("vsclone.rail.time.minutes", "{0}m ago", minutes);
+	}
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) {
+		return localize("vsclone.rail.time.hours", "{0}h ago", hours);
+	}
+	const days = Math.floor(hours / 24);
+	if (days < 7) {
+		return localize("vsclone.rail.time.days", "{0}d ago", days);
+	}
+	const date = new Date(timestamp);
+	const month = date.toLocaleString(undefined, { month: "short" });
+	return localize("vsclone.rail.time.monthDay", "{0} {1}", month, date.getDate());
 }
 
 /**
@@ -254,17 +275,6 @@ interface IPendingImageAttachment extends IVSCloneImageAttachment {
 	readonly dataUrl: string;
 }
 
-export function toVSCloneHistoryQuery(
-	query: string,
-	tab: VSCloneRailTab,
-): IVSCloneThreadRuntimeCatalogQuery {
-	return {
-		text: query,
-		tab,
-		includeArchived: tab === "all",
-	};
-}
-
 interface IUnifiedDiffHunkHeader {
 	readonly originalStartLineNumber: number;
 	readonly originalLineCount: number;
@@ -309,15 +319,10 @@ interface IVSCloneThreadRuntimeCatalogService {
 		query?: IVSCloneThreadRuntimeCatalogQuery,
 	): readonly IVSClonePaneThreadCatalogEntry[];
 	isDeletedThread?(threadId: string): boolean;
-	archiveThread?(threadId: string, archived: boolean): boolean | Promise<boolean>;
 	deleteThread?(threadId: string): boolean | Promise<boolean>;
 }
 
-interface IVSClonePaneThreadCatalogEntry extends IVSCloneThreadCatalogEntry {
-	readonly sessionResource?: string;
-	readonly activeModelIdentifier?: string;
-	readonly createdAt: number;
-}
+type IVSClonePaneThreadCatalogEntry = IVSCloneThreadRuntimeCatalogEntry;
 
 export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private readonly composerFocusDisposable = this._register(
@@ -448,20 +453,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}),
 		);
 		this._register(
+			this.rail.onDidChangeSearchQuery(() => {
+				this.refreshRailRows();
+			}),
+		);
+		this._register(
 			this.rail.onDidRequestNewChat(() => {
 				this.showComposerForNewChat();
-			}),
-		);
-		this._register(
-			this.rail.onDidRequestClose(() => {
-				this.railVisible = false;
-				this.applyRailLayout();
-				this.focusInput();
-			}),
-		);
-		this._register(
-			this.rail.onDidChangeFilterState(() => {
-				this.refreshRailRows();
 			}),
 		);
 		this._register(
@@ -481,12 +479,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 						break;
 					case "delete":
 						void this.deleteThread(event.threadId);
-						break;
-					case "toggleArchive":
-						void this.setThreadArchived(
-							event.threadId,
-							!!event.archived,
-						);
 						break;
 				}
 			}),
@@ -523,10 +515,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	override focus(): void {
 		super.focus();
-		if (!this.catalogReady || this.railVisible) {
-			this.rail.focusSearch();
-			return;
-		}
 		this.focusInput();
 	}
 
@@ -546,15 +534,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	focusRail(): void {
 		this.railVisible = true;
 		this.applyRailLayout();
-		this.rail.focusSearch();
 	}
 
 	toggleRail(): void {
 		this.railVisible = !this.railVisible;
 		this.applyRailLayout();
-		if (this.railVisible) {
-			this.rail.focusSearch();
-		} else {
+		if (!this.railVisible) {
 			this.focusInput();
 		}
 	}
@@ -977,7 +962,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			addDisposableListener(threadButton, EventType.CLICK, () => {
 				this.railVisible = true;
 				this.applyRailLayout();
-				this.rail.focusSearch();
 			}),
 		);
 
@@ -1749,10 +1733,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		this.refreshThreadCatalogFromRuntime();
-		const filterState = this.rail.getFilterState();
-		const threads = this.getFilteredThreadCatalog(
-			toVSCloneHistoryQuery(filterState.query, filterState.tab),
-		);
+		const threads = this.getSortedThreadCatalog();
+		const query = this.rail.getSearchQuery().toLocaleLowerCase();
+		const filteredThreads = query
+			? threads.filter(thread => (
+				thread.title.toLocaleLowerCase().includes(query)
+				|| thread.lastTurnPreview.toLocaleLowerCase().includes(query)
+			))
+			: threads;
 
 		const previousActiveThreadId = this.activeThreadId;
 		if (this.activeThreadId && !this.resolveThreadById(this.activeThreadId)) {
@@ -1764,8 +1752,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
-		const rows = toVSCloneThreadRailRows(threads, this.activeThreadId, (timestamp) =>
-			fromNow(timestamp, true),
+		const catalogEntries: IVSCloneThreadCatalogEntry[] = filteredThreads.map(thread => ({
+			threadId: thread.threadId,
+			title: thread.title,
+			updatedAt: thread.updatedAt,
+			// Only surface a spinner while the thread is actively streaming. `streamState.kind`
+			// is `'idle'` for completed threads too, so we map those to undefined here.
+			streamStateKind: this.resolveActiveStreamStateKind(thread.threadId),
+		}));
+
+		const rows = toVSCloneThreadRailRows(catalogEntries, this.activeThreadId, (timestamp) =>
+			formatThreadRailRelativeTime(timestamp),
 		);
 		this.rail.setRows(rows);
 		if (!this.activeThreadId) {
@@ -1775,14 +1772,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 	}
 
+	private resolveActiveStreamStateKind(threadId: string): 'llm' | 'tool' | 'awaiting_user' | undefined {
+		const kind = this.threadRuntimeService.getState?.(threadId)?.streamState.kind;
+		if (kind === 'llm' || kind === 'tool' || kind === 'awaiting_user') {
+			return kind;
+		}
+		return undefined;
+	}
+
 	private getRuntimeThreadCatalogService(): (IVSCloneThreadRuntimeService & IVSCloneThreadRuntimeCatalogService) | undefined {
 		return this.threadRuntimeService as (IVSCloneThreadRuntimeService & IVSCloneThreadRuntimeCatalogService) | undefined;
 	}
 
 	private refreshThreadCatalogFromRuntime(): void {
-		const runtimeCatalog = this.getRuntimeThreadCatalogService()?.getThreads?.({
-			includeArchived: true,
-		});
+		const runtimeCatalog = this.getRuntimeThreadCatalogService()?.getThreads?.();
 		if (!runtimeCatalog) {
 			return;
 		}
@@ -1805,37 +1808,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 	}
 
-	private getFilteredThreadCatalog(
-		query: IVSCloneThreadRuntimeCatalogQuery,
-	): readonly IVSCloneThreadCatalogEntry[] {
-		const needle = query.text?.trim().toLocaleLowerCase();
-		const entries = [...this.threadsById.values()]
-			.filter((thread) => {
-				switch (query.tab) {
-					case "active":
-						return !thread.archived;
-					case "archived":
-						return thread.archived;
-					default:
-						return query.includeArchived ? true : !thread.archived;
-				}
-			})
-			.filter((thread) => {
-				if (!needle) {
-					return true;
-				}
-				return (
-					thread.title.toLocaleLowerCase().includes(needle) ||
-					thread.lastTurnPreview.toLocaleLowerCase().includes(needle)
-				);
-			})
-			.sort((left, right) => {
-				if (right.updatedAt !== left.updatedAt) {
-					return right.updatedAt - left.updatedAt;
-				}
-				return right.createdAt - left.createdAt;
-			});
-		return entries;
+	private getSortedThreadCatalog(): readonly IVSClonePaneThreadCatalogEntry[] {
+		return [...this.threadsById.values()].sort((left, right) => {
+			if (right.updatedAt !== left.updatedAt) {
+				return right.updatedAt - left.updatedAt;
+			}
+			return right.createdAt - left.createdAt;
+		});
 	}
 
 	private syncThreadCatalogEntryFromRuntime(
@@ -4791,54 +4770,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.refreshRailRows();
 		this.refreshModelControls();
 		this.refreshConversation();
-	}
-
-	private async setThreadArchived(
-		threadId: string,
-		archived: boolean,
-	): Promise<void> {
-		const existing = this.resolveThreadByIdForLifecycleAction(threadId);
-		const optimisticUpdatedAt = Date.now();
-		if (existing) {
-			this.threadsById.set(threadId, {
-				...existing,
-				archived,
-				status: archived ? "archived" : existing.status === "archived" ? "completed" : existing.status,
-				updatedAt: optimisticUpdatedAt,
-			});
-		}
-
-		try {
-			const runtimeCatalog = this.getRuntimeThreadCatalogService();
-			if (!runtimeCatalog || !runtimeCatalog.archiveThread || !existing) {
-				throw new Error("Thread archive requires a runtime catalog entry.");
-			}
-
-			const archivedInRuntime = await runtimeCatalog.archiveThread(threadId, archived);
-			if (archivedInRuntime === false) {
-				throw new Error("Thread archive was rejected by the runtime catalog.");
-			}
-		} catch (error) {
-			if (existing) {
-				this.threadsById.set(threadId, existing);
-			} else {
-				this.threadsById.delete(threadId);
-			}
-			this.refreshRailRows();
-			this.notificationService.error(
-				localize(
-					archived
-						? "vsclone.rail.archive.error"
-						: "vsclone.rail.unarchive.error",
-					archived
-						? "Failed to archive the chat. Please try again."
-						: "Failed to move the chat back to active. Please try again.",
-				),
-			);
-			return;
-		}
-
-		this.refreshRailRows();
 	}
 
 	private showComposerForNewChat(): void {

@@ -12,10 +12,7 @@ function createThread(overrides: Partial<IVSCloneThreadCatalogEntry>): IVSCloneT
 		threadId: 'thread-1',
 		title: 'Thread 1',
 		updatedAt: 2000,
-		status: 'completed',
-		archived: false,
-		turnCount: 1,
-		lastTurnPreview: 'Preview 1',
+		streamStateKind: undefined,
 		...overrides,
 	};
 }
@@ -29,18 +26,13 @@ suite('VSCloneThreadRailTree', () => {
 				threadId: 'thread-1',
 				title: 'Alpha',
 				updatedAt: 1111,
-				status: 'active',
-				turnCount: 3,
-				lastTurnPreview: 'Preview A',
+				streamStateKind: 'llm',
 			}),
 			createThread({
 				threadId: 'thread-2',
 				title: 'Beta',
 				updatedAt: 2222,
-				status: 'archived',
-				archived: true,
-				turnCount: 5,
-				lastTurnPreview: 'Preview B',
+				streamStateKind: undefined,
 			}),
 		];
 
@@ -50,21 +42,15 @@ suite('VSCloneThreadRailTree', () => {
 			{
 				threadId: 'thread-1',
 				title: 'Alpha',
-				preview: 'Preview A',
 				updatedLabel: '2m ago',
-				archived: false,
-				turnCount: 3,
-				status: 'active',
+				streamStateKind: 'llm',
 				selected: false,
 			},
 			{
 				threadId: 'thread-2',
 				title: 'Beta',
-				preview: 'Preview B',
 				updatedLabel: 'just now',
-				archived: true,
-				turnCount: 5,
-				status: 'archived',
+				streamStateKind: undefined,
 				selected: true,
 			},
 		]);

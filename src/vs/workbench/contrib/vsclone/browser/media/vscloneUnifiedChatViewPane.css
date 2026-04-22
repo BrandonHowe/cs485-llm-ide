@@ -2148,101 +2148,25 @@
 }
 
 .vsclone-thread-rail-header {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	padding: 12px;
-	border-bottom: 1px solid var(--vscode-panel-border);
-}
-
-.vsclone-thread-rail-header-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-}
-
-.vsclone-thread-rail-title {
-	flex: 1;
-	font-size: 12px;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	opacity: 0.85;
-}
-
-.vsclone-thread-rail-back {
-	height: 26px;
-	width: 26px;
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 5px;
-	cursor: pointer;
-	font-size: 14px;
-	background: var(--vscode-button-secondaryBackground);
-	color: var(--vscode-button-secondaryForeground);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0;
-}
-
-.vsclone-thread-rail-back:hover {
-	background: var(--vscode-button-secondaryHoverBackground);
-}
-
-.vsclone-thread-rail-new-chat {
-	height: 26px;
-	padding: 0 10px;
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 5px;
-	cursor: pointer;
-	font-size: 12px;
-	font-weight: 600;
-	background: var(--vscode-button-secondaryBackground);
-	color: var(--vscode-button-secondaryForeground);
-}
-
-.vsclone-thread-rail-new-chat:hover {
-	background: var(--vscode-button-secondaryHoverBackground);
+	flex: none;
+	padding: 10px 12px 6px;
+	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent 30%);
 }
 
 .vsclone-thread-rail-search {
-	height: 30px;
-	border: none;
-	outline: none;
+	width: 100%;
+	height: 28px;
 	padding: 0 10px;
+	border: 1px solid var(--vscode-input-border, transparent);
 	border-radius: 5px;
 	background: var(--vscode-input-background);
 	color: var(--vscode-input-foreground);
+	font: inherit;
+	outline: none;
 }
 
 .vsclone-thread-rail-search::placeholder {
 	color: var(--vscode-input-placeholderForeground);
-}
-
-.vsclone-thread-rail-tabs {
-	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
-	gap: 4px;
-}
-
-.vsclone-thread-rail-tab {
-	height: 28px;
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 4px;
-	background: var(--vscode-button-secondaryBackground);
-	color: var(--vscode-button-secondaryForeground);
-	cursor: pointer;
-	font-weight: 600;
-}
-
-.vsclone-thread-rail-tab:hover {
-	background: var(--vscode-button-secondaryHoverBackground);
-}
-
-.vsclone-thread-rail-tab.active {
-	border-color: color-mix(in srgb, var(--vscode-button-background) 65%, white 35%);
-	background: var(--vscode-button-background);
-	color: var(--vscode-button-foreground);
 }
 
 .vsclone-thread-rail-body {
@@ -2254,7 +2178,36 @@
 .vsclone-thread-rail-list,
 .vsclone-thread-rail-state {
 	height: 100%;
-	overflow: auto;
+	overflow-y: auto;
+	overflow-x: hidden;
+	scrollbar-gutter: stable;
+}
+
+.vsclone-thread-rail-footer {
+	flex: none;
+	padding: 6px 10px 10px;
+	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent 30%);
+}
+
+.vsclone-thread-rail-new-chat {
+	width: 100%;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	height: 30px;
+	padding: 0 12px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent 30%);
+	border-radius: 5px;
+	background: var(--vscode-button-secondaryBackground, transparent);
+	color: var(--vscode-button-secondaryForeground, inherit);
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.vsclone-thread-rail-new-chat:hover {
+	background: var(--vscode-button-secondaryHoverBackground, color-mix(in srgb, var(--vscode-list-hoverBackground) 80%, transparent 20%));
 }
 
 .vsclone-thread-rail-list.hidden,
@@ -2263,69 +2216,120 @@
 }
 
 .vsclone-thread-rail-row {
-	display: block;
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	gap: 8px;
 	width: 100%;
-	border: none;
-	background: transparent;
-	color: inherit;
-	font: inherit;
-	text-align: left;
-	padding: 10px 12px;
-	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 75%, transparent 25%);
+	padding: 6px 12px;
 	cursor: pointer;
+	opacity: 0.85;
+	min-height: 28px;
+	min-width: 0;
 }
 
-.vsclone-thread-rail-row:hover {
+.vsclone-thread-rail-row:hover,
+.vsclone-thread-rail-row.hovered {
 	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 50%, transparent 50%);
+	opacity: 1;
 }
 
 .vsclone-thread-rail-row.selected {
 	background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 75%, transparent 25%);
 	color: var(--vscode-list-activeSelectionForeground);
+	opacity: 1;
 }
 
-.vsclone-thread-rail-row-top {
+.vsclone-thread-rail-row-leading {
 	display: flex;
-	align-items: baseline;
-	gap: 8px;
+	align-items: center;
+	gap: 6px;
+	flex: 1;
+	min-width: 0;
 }
 
 .vsclone-thread-rail-row-title {
 	flex: 1;
-	font-weight: 600;
+	font-size: 13px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+.vsclone-thread-rail-row-spinner {
+	flex-shrink: 0;
+	font-size: 12px;
+	opacity: 0.85;
+}
+
+.vsclone-thread-rail-row-trailing {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-shrink: 0;
 }
 
 .vsclone-thread-rail-row-timestamp {
 	font-size: 11px;
-	opacity: 0.8;
+	opacity: 0.7;
 }
 
-.vsclone-thread-rail-row-preview {
-	margin-top: 3px;
-	font-size: 12px;
-	opacity: 0.88;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.vsclone-thread-rail-row-metadata {
-	margin-top: 5px;
-	display: flex;
+.vsclone-thread-rail-row-icon {
+	display: inline-flex;
 	align-items: center;
-	gap: 8px;
-	font-size: 11px;
-	opacity: 0.8;
+	justify-content: center;
+	height: 20px;
+	width: 20px;
+	padding: 0;
+	border: none;
+	border-radius: 3px;
+	background: transparent;
+	color: inherit;
+	opacity: 0.75;
+	cursor: pointer;
 }
 
-.vsclone-thread-rail-row-archived {
-	padding: 1px 5px;
-	border-radius: 8px;
-	background: color-mix(in srgb, var(--vscode-badge-background) 65%, transparent 35%);
-	color: var(--vscode-badge-foreground);
+.vsclone-thread-rail-row-icon:hover {
+	opacity: 1;
+	background: color-mix(in srgb, var(--vscode-toolbar-hoverBackground) 70%, transparent 30%);
+}
+
+.vsclone-thread-rail-row-icon.confirm {
+	color: var(--vscode-errorForeground);
+}
+
+.vsclone-thread-rail-row-icon-delete {
+	display: none;
+}
+
+.vsclone-thread-rail-row:hover .vsclone-thread-rail-row-icon-delete,
+.vsclone-thread-rail-row:focus-within .vsclone-thread-rail-row-icon-delete,
+.vsclone-thread-rail-row.hovered .vsclone-thread-rail-row-icon-delete {
+	display: inline-flex;
+}
+
+.vsclone-thread-rail-row:hover .vsclone-thread-rail-row-timestamp,
+.vsclone-thread-rail-row:focus-within .vsclone-thread-rail-row-timestamp,
+.vsclone-thread-rail-row.hovered .vsclone-thread-rail-row-timestamp {
+	display: none;
+}
+
+.vsclone-thread-rail-show-more {
+	display: block;
+	width: 100%;
+	padding: 6px 10px;
+	border: none;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	font-size: 11px;
+	text-align: left;
+	cursor: pointer;
+	opacity: 0.7;
+}
+
+.vsclone-thread-rail-show-more:hover {
+	opacity: 1;
 }
 
 .vsclone-thread-rail-state {
@@ -2410,68 +2414,6 @@
 
 .vsclone-thread-rail-skeleton-line:nth-child(3) {
 	width: 48%;
-}
-
-.vsclone-thread-rail-delete-overlay {
-	position: absolute;
-	inset: 0;
-	display: none;
-	align-items: center;
-	justify-content: center;
-	padding: 20px;
-	background: color-mix(in srgb, black 65%, transparent 35%);
-	z-index: 40;
-}
-
-.vsclone-thread-rail-delete-overlay.visible {
-	display: flex;
-}
-
-.vsclone-thread-rail-delete-modal {
-	width: min(360px, 100%);
-	border-radius: 8px;
-	padding: 16px;
-	border: 1px solid var(--vscode-panel-border);
-	background: var(--vscode-editorWidget-background);
-	box-shadow: 0 8px 28px color-mix(in srgb, black 50%, transparent 50%);
-}
-
-.vsclone-thread-rail-delete-title {
-	font-weight: 700;
-	font-size: 20px;
-}
-
-.vsclone-thread-rail-delete-description {
-	margin-top: 10px;
-	line-height: 1.4;
-	opacity: 0.9;
-}
-
-.vsclone-thread-rail-delete-actions {
-	display: grid;
-	grid-template-columns: 1fr 1fr;
-	gap: 8px;
-	margin-top: 14px;
-}
-
-.vsclone-thread-rail-delete-cancel,
-.vsclone-thread-rail-delete-confirm {
-	height: 34px;
-	border: none;
-	border-radius: 5px;
-	cursor: pointer;
-	font-weight: 600;
-}
-
-.vsclone-thread-rail-delete-cancel {
-	background: var(--vscode-button-secondaryBackground);
-	color: var(--vscode-button-secondaryForeground);
-}
-
-.vsclone-thread-rail-delete-confirm {
-	background: color-mix(in srgb, var(--vscode-errorForeground) 35%, transparent 65%);
-	color: var(--vscode-errorForeground);
-	border: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 50%, transparent 50%);
 }
 
 .vsclone-composer-context-strip {

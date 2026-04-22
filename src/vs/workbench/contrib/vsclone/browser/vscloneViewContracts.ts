@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IVSCloneThreadRailRow } from './vscloneThreadRailTree.js';
-import type { VSCloneRailTab, VSCloneRailState } from './vscloneThreadRail.js';
+import type { VSCloneRailState } from './vscloneThreadRail.js';
 import type { IVSCloneModelSelection } from '../common/vscloneModelSelectionTypes.js';
 import type { IVSCloneSettingsModelState, IVSCloneSettingsState } from '../common/vscloneSettingsTypes.js';
 
@@ -16,30 +16,28 @@ export interface IVSCloneMountedView<Props> {
 }
 
 export interface IVSCloneRailViewProps {
-	filterState: { query: string; tab: VSCloneRailTab };
 	rows: readonly IVSCloneThreadRailRow[];
 	selectedThreadId: string | undefined;
 	viewState: VSCloneRailState;
 	errorMessage: string | undefined;
-	pendingDelete?: { threadId: string; threadTitle: string };
-	deleteTitleId: string;
-	deleteDescriptionId: string;
+	hoveredThreadId: string | undefined;
+	pendingDeleteThreadId: string | undefined;
+	showAll: boolean;
+	initialRowCount: number;
+	searchQuery: string;
 	searchInputRef: (element: HTMLInputElement | null) => void;
-	modalContainerRef: (element: HTMLElement | null) => void;
-	modalCancelButtonRef: (element: HTMLButtonElement | null) => void;
-	modalConfirmButtonRef: (element: HTMLButtonElement | null) => void;
 	getRowAriaLabel: (row: IVSCloneThreadRailRow) => string;
-	onBack: () => void;
-	onNewChat: () => void;
-	onSearchInput: (value: string) => void;
-	onTabSelect: (tab: VSCloneRailTab) => void;
 	onRowSelect: (threadId: string) => void;
 	onRowContextMenu: (threadId: string, event: MouseEvent) => void;
-	onRetry: () => void;
-	onDeleteOverlayClick: () => void;
+	onRowMouseEnter: (threadId: string) => void;
+	onRowMouseLeave: (threadId: string) => void;
+	onRequestDelete: (threadId: string) => void;
 	onCancelDelete: () => void;
-	onConfirmDelete: () => void;
-	onDeleteModalKeyDown: (event: KeyboardEvent) => void;
+	onConfirmDelete: (threadId: string) => void;
+	onToggleShowAll: () => void;
+	onSearchInput: (value: string) => void;
+	onNewChat: () => void;
+	onRetry: () => void;
 }
 
 export interface IVSCloneModelSwitcherSection {
