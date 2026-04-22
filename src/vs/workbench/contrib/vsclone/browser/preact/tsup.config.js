@@ -10,6 +10,7 @@ export default defineConfig({
 		'./src/thread-rail/index.tsx',
 		'./src/model-switcher/index.tsx',
 		'./src/unified-conversation-surface/index.tsx',
+		'./src/diff/index.tsx',
 	],
 	outDir: './out',
 	format: ['esm'],

@@ -15,28 +15,20 @@ export type VSCloneComputedDiff = {
 	originalStartLine: number;
 	originalEndLine: number;
 	code: string;
-	startLine: number;
+	startLine: number; // 1-indexed
 	endLine: number;
-	startOffset: number;
-	endOffset: number;
 } | {
 	type: 'insertion';
-	originalCode?: string;
-	originalStartLine: number;
+	originalStartLine: number; // insertion starts on column 0 of this
 	code: string;
 	startLine: number;
 	endLine: number;
-	startOffset: number;
-	endOffset: number;
 } | {
 	type: 'deletion';
 	originalCode: string;
 	originalStartLine: number;
 	originalEndLine: number;
-	startLine: number;
-	endLine: number;
-	startOffset: number;
-	endOffset: number;
+	startLine: number; // deletion starts on column 0 of this
 };
 
 export type VSCloneCommonZoneProps = {

@@ -4,16 +4,27 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from '../../../../base/common/buffer.js';
+import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
+import { EndOfLinePreference, IModelDecorationOptions, ITextModel } from '../../../../editor/common/model.js';
+import { ModelDecorationOptions } from '../../../../editor/common/model/textModel.js';
+import { IModelService } from '../../../../editor/common/services/model.js';
+import { RenderOptions } from '../../../../editor/browser/widget/diffEditor/components/diffEditorViewZones/renderLines.js';
+import { IViewZone } from '../../../../editor/browser/editorBrowser.js';
 import { IBulkEditService, ResourceFileEdit, ResourceTextEdit } from '../../../../editor/browser/services/bulkEditService.js';
+import { ICodeEditorService } from '../../../../editor/browser/services/codeEditorService.js';
 import { Range } from '../../../../editor/common/core/range.js';
 import { ITextModelService } from '../../../../editor/common/services/resolverService.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IVSCloneConsistentItemService } from './helperServices/vscloneConsistentItemService.js';
+import { VSCloneAcceptRejectInlineWidget } from './vscloneAcceptRejectInlineWidget.js';
+import { findDiffs } from './helpers/findDiffs.js';
 import type {
 	IVSCloneEditCodeService as IVSCloneEditCodeServiceContract,
 	VSCloneAddCtrlKOpts,
@@ -87,8 +98,30 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		@IFileService private readonly fileService: IFileService,
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IEditorService private readonly editorService: IEditorService,
+		@IModelService private readonly _modelService: IModelService,
+		@IInstantiationService private readonly _instantiationService: IInstantiationService,
+		@IVSCloneConsistentItemService private readonly _consistentItemService: IVSCloneConsistentItemService,
+		@ICodeEditorService private readonly _codeEditorService: ICodeEditorService,
 	) {
 		super();
+
+		// Mirror Void's constructor wiring: when a model or editor appears after a DiffZone has been
+		// registered, re-run the refresh so decorations and inline widgets reappear. Without this,
+		// DiffZones created before the editor opens stay invisible forever.
+		this._register(this._modelService.onModelAdded(model => {
+			if (this.diffAreasOfURI[model.uri.fsPath] && (this.diffAreasOfURI[model.uri.fsPath]?.size ?? 0) > 0) {
+				this._refreshStylesAndDiffsInURI(model.uri);
+			}
+		}));
+		this._register(this._codeEditorService.onCodeEditorAdd(editor => {
+			const uri = editor.getModel()?.uri;
+			if (!uri) {
+				return;
+			}
+			if (this.diffAreasOfURI[uri.fsPath] && (this.diffAreasOfURI[uri.fsPath]?.size ?? 0) > 0) {
+				this._refreshStylesAndDiffsInURI(uri);
+			}
+		}));
 	}
 
 	processRawKeybindingText(keybindingStr: string): string {
@@ -202,6 +235,8 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 
 		const ctrlKZone = this.addDiffArea(adding);
 		this._onDidAddOrDeleteDiffZones.fire({ uri });
+		// Matches Void: paint the CtrlK highlight decorations via the refresh-rebuild pipeline.
+		this._refreshStylesAndDiffsInURI(uri);
 		return ctrlKZone.diffareaid;
 	}
 
@@ -213,6 +248,8 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 
 		this.deleteCtrlKZone(ctrlKZone);
 		this._onDidAddOrDeleteDiffZones.fire({ uri: ctrlKZone._URI });
+		// Matches Void: tear down the CtrlK highlight the zone contributed in the next refresh pass.
+		this._refreshStylesAndDiffsInURI(ctrlKZone._URI);
 	}
 
 	hasSearchReplaceBlocks(responseText: string): boolean {
@@ -316,10 +353,9 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			}
 
 			if (diffArea.type === 'DiffZone') {
-				if (Object.keys(diffArea._diffOfId).length === 0) {
-					this.deleteDiffZone(diffArea);
-					continue;
-				}
+				// Route through the zone-level helpers even if _diffOfId is empty. When the URI's
+				// model hasn't loaded yet, refresh defers diff rebuild, so the empty map does NOT
+				// mean "no work to do" -- for reject we still need to write originalCode back.
 				if (behavior === 'reject') {
 					await this.rejectDiffsInZone(diffArea);
 				} else {
@@ -330,7 +366,10 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			}
 		}
 
-		this._onDidAddOrDeleteDiffZones.fire({ uri });
+		// Inner helpers (acceptDiffsInZone / rejectDiffsInZone) already fire onDidAddOrDeleteDiffZones
+		// via deleteDiffZone and run refresh per-zone. A failed rejectDiffsInZone deliberately skips
+		// both, so we don't want an outer unconditional fire + refresh here -- it would emit phantom
+		// add/delete events for zones that weren't actually removed. Matches Void's batch path.
 	};
 
 	acceptDiff = async ({ diffid }: { diffid: number }): Promise<void> => {
@@ -344,16 +383,38 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			return;
 		}
 
-		const replacementText = this.diffReplacementText(diff);
-		diffArea.originalCode = applyResolvedEditToText(diffArea.originalCode, diff.startOffset, diff.endOffset, replacementText);
-		this.shiftDiffOffsets(diffArea, diff, replacementText.length - (diff.endOffset - diff.startOffset), countLines(replacementText) - countLines(this.diffOriginalReplacementText(diff)));
+		// Bake this hunk into the zone baseline via line slicing, matching Void's acceptDiff.
+		const originalLines = diffArea.originalCode.split('\n');
+		let newOriginalCode: string;
+
+		if (diff.type === 'deletion') {
+			newOriginalCode = [
+				...originalLines.slice(0, diff.originalStartLine - 1),
+				...originalLines.slice(diff.originalEndLine),
+			].join('\n');
+		} else if (diff.type === 'insertion') {
+			newOriginalCode = [
+				...originalLines.slice(0, diff.originalStartLine - 1),
+				diff.code,
+				...originalLines.slice(diff.originalStartLine - 1),
+			].join('\n');
+		} else {
+			newOriginalCode = [
+				...originalLines.slice(0, diff.originalStartLine - 1),
+				diff.code,
+				...originalLines.slice(diff.originalEndLine),
+			].join('\n');
+		}
+
+		diffArea.originalCode = newOriginalCode;
+		const uri = diffArea._URI;
 		this.deleteDiff(diff);
 
 		if (Object.keys(diffArea._diffOfId).length === 0) {
 			this.deleteDiffZone(diffArea);
 		}
 
-		this._onDidChangeDiffsInDiffZoneNotStreaming.fire({ uri: diffArea._URI, diffareaid: diffArea.diffareaid });
+		this._refreshStylesAndDiffsInURI(uri);
 	};
 
 	rejectDiff = async ({ diffid }: { diffid: number }): Promise<void> => {
@@ -367,21 +428,43 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			return;
 		}
 
-		const remainingDiffs = this.getSortedDiffs(diffArea).filter(candidate => candidate.diffid !== diffid);
-		const remainingResolved = remainingDiffs.map(candidate => this.diffToResolvedEdit(candidate));
-		const nextContent = applyResolvedEditsInReverse(diffArea.originalCode, remainingResolved);
-		await this.writeWholeFile(diffArea._URI, nextContent);
+		const uri = diffArea._URI;
+		let writeText: string;
+		let toRange: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
 
-		const inverseDelta = (diff.endOffset - diff.startOffset) - this.diffReplacementText(diff).length;
-		const inverseLineDelta = countLines(this.diffOriginalReplacementText(diff)) - countLines(this.diffReplacementText(diff));
+		// Mirrors Void: undo this hunk in the editor without touching originalCode. The refresh pass
+		// then rebuilds the remaining diffs via findDiffs.
+		if (diff.type === 'deletion') {
+			if (diff.startLine - 1 === diffArea.endLine) {
+				writeText = '\n' + diff.originalCode;
+				toRange = { startLineNumber: diff.startLine - 1, startColumn: Number.MAX_SAFE_INTEGER, endLineNumber: diff.startLine - 1, endColumn: Number.MAX_SAFE_INTEGER };
+			} else {
+				writeText = diff.originalCode + '\n';
+				toRange = { startLineNumber: diff.startLine, startColumn: 1, endLineNumber: diff.startLine, endColumn: 1 };
+			}
+		} else if (diff.type === 'insertion') {
+			if (diff.endLine === diffArea.endLine) {
+				writeText = '';
+				toRange = { startLineNumber: diff.startLine - 1, startColumn: Number.MAX_SAFE_INTEGER, endLineNumber: diff.endLine, endColumn: 1 };
+			} else {
+				writeText = '';
+				toRange = { startLineNumber: diff.startLine, startColumn: 1, endLineNumber: diff.endLine + 1, endColumn: 1 };
+			}
+		} else {
+			writeText = diff.originalCode;
+			toRange = { startLineNumber: diff.startLine, startColumn: 1, endLineNumber: diff.endLine, endColumn: Number.MAX_SAFE_INTEGER };
+		}
+
+		await this._writeURIText(uri, writeText, toRange);
+
+		// originalCode stays the same on reject -- only the live file reverts.
 		this.deleteDiff(diff);
-		this.shiftLaterDiffsByStartOffset(diffArea, diff, inverseDelta, inverseLineDelta);
 
 		if (Object.keys(diffArea._diffOfId).length === 0) {
 			this.deleteDiffZone(diffArea);
 		}
 
-		this._onDidChangeDiffsInDiffZoneNotStreaming.fire({ uri: diffArea._URI, diffareaid: diffArea.diffareaid });
+		this._refreshStylesAndDiffsInURI(uri);
 	};
 
 	isCtrlKZoneStreaming({ diffareaid }: { diffareaid: number }): boolean {
@@ -419,9 +502,14 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			snapshottedDiffAreaOfId[diffareaid] = this.cloneSnapshotEntry(diffArea);
 		}
 
+		// Match Void (_getCurrentVoidFileSnapshot): read directly from the model service so hidden
+		// but loaded models still yield their text. The editor-walking fallback would return '' for
+		// any URI whose model is not currently mounted in a visible/active control.
+		const model = this._modelService.getModel(uri);
+		const entireFileCode = model ? model.getValue(EndOfLinePreference.LF) : '';
 		return {
 			snapshottedDiffAreaOfId,
-			entireFileCode: this.readModelValue(uri),
+			entireFileCode,
 		};
 	}
 
@@ -430,6 +518,60 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 	}
 
 	private async restoreVSCloneFileSnapshotAsync(uri: URI, snapshot: VSCloneFileSnapshot): Promise<void> {
+		// Prebuild every restored zone object and validate invariants BEFORE touching the filesystem
+		// or in-memory state. This makes the restore effectively atomic: any schema violation in the
+		// snapshot throws before the write, so we can't end up with the file mutated and the zone
+		// map half-populated.
+		const clonedSnapshot = this.cloneFileSnapshot(snapshot);
+		const prebuiltZones: { diffareaid: string; zone: VSCloneDiffZone | VSCloneCtrlKZone }[] = [];
+		for (const diffareaid in clonedSnapshot.snapshottedDiffAreaOfId) {
+			const diffArea = clonedSnapshot.snapshottedDiffAreaOfId[diffareaid];
+			if (diffArea.type === 'DiffZone') {
+				if (diffArea.originalCode === undefined) {
+					throw new Error('VSClone diff snapshots must retain originalCode so restore can rebuild the live diff zone.');
+				}
+				prebuiltZones.push({
+					diffareaid,
+					zone: {
+						type: 'DiffZone',
+						diffareaid: diffArea.diffareaid,
+						startLine: diffArea.startLine,
+						endLine: diffArea.endLine,
+						originalCode: diffArea.originalCode,
+						_URI: uri,
+						_diffOfId: {},
+						_streamState: { isStreaming: false },
+						_removeStylesFns: new Set(),
+					},
+				});
+			} else if (diffArea.type === 'CtrlKZone') {
+				if (diffArea.editorId === undefined) {
+					throw new Error('VSClone Ctrl+K snapshots must retain editorId so restore can rebind the inline zone.');
+				}
+				prebuiltZones.push({
+					diffareaid,
+					zone: {
+						type: 'CtrlKZone',
+						diffareaid: diffArea.diffareaid,
+						startLine: diffArea.startLine,
+						endLine: diffArea.endLine,
+						editorId: diffArea.editorId,
+						_URI: uri,
+						_removeStylesFns: new Set(),
+						_mountInfo: null,
+						_linkedStreamingDiffZone: null,
+					},
+				});
+			}
+		}
+
+		// Now commit: write file first, and if the workspace edit is refused leave in-memory state
+		// untouched so the caller's visible zones still match the on-disk file.
+		const applied = await this.writeWholeFile(uri, clonedSnapshot.entireFileCode);
+		if (!applied) {
+			return;
+		}
+
 		for (const diffareaid in this.diffAreaOfId) {
 			const diffArea = this.diffAreaOfId[diffareaid];
 			if (diffArea._URI.fsPath !== uri.fsPath) {
@@ -442,49 +584,13 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			}
 		}
 
-		const clonedSnapshot = this.cloneFileSnapshot(snapshot);
-		for (const diffareaid in clonedSnapshot.snapshottedDiffAreaOfId) {
-			const diffArea = clonedSnapshot.snapshottedDiffAreaOfId[diffareaid];
-			if (diffArea.type === 'DiffZone') {
-				// Snapshot entries intentionally drop runtime-only editor state. Rebuild those fields per
-				// discriminated branch instead of spreading the union back into the live store.
-				if (diffArea.originalCode === undefined) {
-					throw new Error('VSClone diff snapshots must retain originalCode so restore can rebuild the live diff zone.');
-				}
-				const restoredDiffZone: VSCloneDiffZone = {
-					type: 'DiffZone',
-					diffareaid: diffArea.diffareaid,
-					startLine: diffArea.startLine,
-					endLine: diffArea.endLine,
-					originalCode: diffArea.originalCode,
-					_URI: uri,
-					_diffOfId: {},
-					_streamState: { isStreaming: false },
-					_removeStylesFns: new Set(),
-				};
-				this.diffAreaOfId[diffareaid] = restoredDiffZone;
-			} else if (diffArea.type === 'CtrlKZone') {
-				if (diffArea.editorId === undefined) {
-					throw new Error('VSClone Ctrl+K snapshots must retain editorId so restore can rebind the inline zone.');
-				}
-				const restoredCtrlKZone: VSCloneCtrlKZone = {
-					type: 'CtrlKZone',
-					diffareaid: diffArea.diffareaid,
-					startLine: diffArea.startLine,
-					endLine: diffArea.endLine,
-					editorId: diffArea.editorId,
-					_URI: uri,
-					_removeStylesFns: new Set(),
-					_mountInfo: null,
-					_linkedStreamingDiffZone: null,
-				};
-				this.diffAreaOfId[diffareaid] = restoredCtrlKZone;
-			}
+		for (const { diffareaid, zone } of prebuiltZones) {
+			this.diffAreaOfId[diffareaid] = zone;
 			this.addOrInitializeDiffAreaAtURI(uri, diffareaid);
 		}
 
 		this._onDidAddOrDeleteDiffZones.fire({ uri });
-		await this.writeWholeFile(uri, clonedSnapshot.entireFileCode);
+		this._refreshStylesAndDiffsInURI(uri);
 	}
 
 	private async applySearchReplaceBlocksToString(responseText: string, mode: IApplyMode): Promise<VSCloneEditApplyResult> {
@@ -589,7 +695,9 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 
 			try {
 				const model = modelReference.object.textEditorModel;
-				const originalContent = model.getValue();
+				// Read LF-normalized so snapshots and diff computations see the same line endings as
+				// _computeDiffsAndAddStylesToURI. Otherwise CRLF files show every line as changed.
+				const originalContent = model.getValue(EndOfLinePreference.LF);
 				const { resolved, failed } = resolveContentEdits(originalContent, replacementEdits);
 
 				for (const failedEdit of failed) {
@@ -689,7 +797,8 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 
 	private async applyWholeFileRewrite(uri: URI, newContent: string, mode: IApplyMode): Promise<VSCloneEditApplyResult> {
 		const modelReference = await this.safeCreateModelReference(uri);
-		const originalContent = modelReference?.object.textEditorModel.getValue() ?? '';
+		// LF-normalized so the diff baseline matches _computeDiffsAndAddStylesToURI's reads.
+		const originalContent = modelReference?.object.textEditorModel.getValue(EndOfLinePreference.LF) ?? '';
 		modelReference?.dispose();
 
 		const finalContent = newContent;
@@ -795,7 +904,11 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 
 	private recordAppliedDiffZone(plan: IFileApplyPlan): void {
 		const uri = plan.uri;
-		const lineCount = countLines(plan.finalContent);
+		// Monaco counts a trailing newline as its own empty line; our custom `countLines` strips it.
+		// The DiffZone has to cover every line the model reports, otherwise the refresh slice drops
+		// the trailing empty line and findDiffs reports a phantom deletion below the file. Split on
+		// every Monaco-recognized line break (\r\n, \r, \n) so mixed-ending payloads count correctly.
+		const lineCount = plan.finalContent === '' ? 1 : plan.finalContent.split(/\r\n|\r|\n/).length;
 		this.clearAssistantApplyDiffZonesForURI(uri);
 
 		const adding: Omit<VSCloneDiffZone, 'diffareaid'> = {
@@ -810,53 +923,51 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		};
 		const diffZone = this.addDiffArea(adding);
 
-		if (plan.resolvedEdits.length === 0) {
-			// A pure create-file apply still deserves a diff entry so accept/reject can remain
-			// symmetric with the search/replace path.
-			const insertionText = plan.finalContent;
-			if (insertionText.length > 0) {
-				this.addDiff({
-					type: 'insertion',
-					originalCode: '',
-					originalStartLine: 1,
-					code: insertionText,
-					startLine: 1,
-					endLine: Math.max(1, countLines(insertionText)),
-					startOffset: 0,
-					endOffset: 0,
-				}, diffZone);
-			}
-		} else {
-			for (const resolvedEdit of plan.resolvedEdits) {
-				this.addDiff(this.resolvedEditToComputedDiff(plan.originalContent ?? '', resolvedEdit), diffZone);
-			}
-		}
-
 		this.trackAssistantApplyDiffZone(diffZone);
+		// Under Void's refresh-rebuild model, _diffOfId is populated by the refresh pass that runs
+		// here. `plan.resolvedEdits` no longer drives the diff list -- findDiffs does.
 		this._onDidAddOrDeleteDiffZones.fire({ uri });
-		this._onDidChangeDiffsInDiffZoneNotStreaming.fire({ uri, diffareaid: diffZone.diffareaid });
+		this._refreshStylesAndDiffsInURI(uri);
 	}
 
 	private async acceptDiffsInZone(diffArea: VSCloneDiffZone): Promise<void> {
-		// Accepting a diff means the current file already reflects the change, so we only need to
-		// bake it into the zone's baseline and rebase the remaining diffs.
-		const diffs = this.getSortedDiffs(diffArea);
-		for (const diff of [...diffs].sort((left, right) => right.startOffset - left.startOffset)) {
-			await this.acceptDiff({ diffid: diff.diffid });
+		// Match Void's whole-zone accept path (acceptOrRejectAllDiffAreas → _deleteDiffZone). Rather
+		// than iterating per-diff -- which breaks because acceptDiff runs a refresh that re-mints the
+		// diffids mid-loop -- we baseline originalCode to the current model slice and drop the zone.
+		// _deleteDiffZone runs _clearAllDiffAreaEffects so decorations/widgets tear down cleanly.
+		const uri = diffArea._URI;
+		const model = this._modelService.getModel(uri);
+		if (model) {
+			const fullFileText = model.getValue(EndOfLinePreference.LF);
+			const lines = fullFileText.split('\n');
+			diffArea.originalCode = lines.slice(diffArea.startLine - 1, diffArea.endLine).join('\n');
 		}
+		this.deleteDiffZone(diffArea);
+		this._refreshStylesAndDiffsInURI(uri);
 	}
 
 	private async rejectDiffsInZone(diffArea: VSCloneDiffZone): Promise<void> {
-		const diffs = this.getSortedDiffs(diffArea);
-		if (diffs.length === 0) {
+		// Mirror Void's reject-all path: write originalCode back, then delete the zone. Skip the
+		// zone deletion if the whole-file revert failed -- otherwise the editor keeps the modified
+		// text but the review UI disappears, stranding the user.
+		const uri = diffArea._URI;
+
+		// No-op guard: if the live file already matches originalCode (e.g. all diffs accepted and
+		// the zone hasn't been cleaned up, or the zone was empty to begin with) skip the bulk edit
+		// so reject-all doesn't create undo-stack noise. Matches Void's _writeURIText no-op path.
+		const model = this._modelService.getModel(uri);
+		if (model && model.getValue(EndOfLinePreference.LF) === diffArea.originalCode) {
+			this.deleteDiffZone(diffArea);
+			this._refreshStylesAndDiffsInURI(uri);
 			return;
 		}
 
-		await this.writeWholeFile(diffArea._URI, diffArea.originalCode);
-		for (const diff of [...diffs].sort((left, right) => right.startOffset - left.startOffset)) {
-			this.deleteDiff(diff);
+		const applied = await this.writeWholeFile(uri, diffArea.originalCode);
+		if (!applied) {
+			return;
 		}
 		this.deleteDiffZone(diffArea);
+		this._refreshStylesAndDiffsInURI(uri);
 	}
 
 	private addDiffArea(diffArea: Omit<VSCloneCtrlKZone, 'diffareaid'>): VSCloneCtrlKZone;
@@ -883,18 +994,6 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		this.diffAreasOfURI[uri.fsPath]?.add(diffareaid.toString());
 	}
 
-	private addDiff(computedDiff: VSCloneComputedDiff, diffZone: VSCloneDiffZone): VSCloneDiff {
-		const diffid = this._diffidPool++;
-		const newDiff: VSCloneDiff = {
-			...computedDiff,
-			diffid,
-			diffareaid: diffZone.diffareaid,
-		};
-		this.diffOfId[diffid] = newDiff;
-		diffZone._diffOfId[diffid] = newDiff;
-		return newDiff;
-	}
-
 	private deleteDiff(diff: VSCloneDiff): void {
 		const diffArea = this.diffAreaOfId[diff.diffareaid];
 		if (diffArea?.type !== 'DiffZone') {
@@ -914,7 +1013,10 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 
 	private deleteDiffZone(diffZone: VSCloneDiffZone): void {
 		this.untrackAssistantApplyDiffZone(diffZone);
-		this.deleteDiffs(diffZone);
+		// Run the stored remove-style fns before tearing down the lookup tables. Otherwise the
+		// refresh-rebuild pass can't find the zone to call its disposers and the inline widget +
+		// red view zone stick around after the final accept/reject.
+		this._clearAllDiffAreaEffects(diffZone);
 		delete this.diffAreaOfId[diffZone.diffareaid];
 		this.diffAreasOfURI[diffZone._URI.fsPath]?.delete(diffZone.diffareaid.toString());
 		this._onDidAddOrDeleteDiffZones.fire({ uri: diffZone._URI });
@@ -957,96 +1059,284 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 	}
 
 	private deleteCtrlKZone(ctrlKZone: VSCloneCtrlKZone): void {
+		// Match Void (:818): clear the zone's removeStyles fns and dispose the inline mount before
+		// tearing down the lookup tables, otherwise its highlight decoration and mounted widget
+		// survive the delete.
+		this._clearAllDiffAreaEffects(ctrlKZone);
+		try {
+			ctrlKZone._mountInfo?.dispose();
+		} catch (err) {
+			onUnexpectedError(err);
+		}
 		delete this.diffAreaOfId[ctrlKZone.diffareaid];
 		this.diffAreasOfURI[ctrlKZone._URI.fsPath]?.delete(ctrlKZone.diffareaid.toString());
 	}
 
-	private getSortedDiffs(diffZone: VSCloneDiffZone): VSCloneDiff[] {
-		return Object.values(diffZone._diffOfId).sort((left, right) => left.startOffset - right.startOffset);
+	// ---------- Void's refresh-rebuild decoration pipeline ----------
+
+	private _addLineDecoration(model: ITextModel, startLine: number, endLine: number, className: string, options?: Partial<IModelDecorationOptions>) {
+		const decorationOptions = ModelDecorationOptions.createDynamic({
+			className,
+			description: className,
+			isWholeLine: true,
+			...(options ?? {}),
+		});
+		const ids = model.deltaDecorations([], [{
+			range: new Range(startLine, 1, endLine, Number.MAX_SAFE_INTEGER),
+			options: decorationOptions,
+		}]);
+		// Match Void (:300): deltaDecorations throws on a disposed model, so guard the teardown.
+		return () => { if (!model.isDisposed()) { model.deltaDecorations(ids, []); } };
 	}
 
-	private diffReplacementText(diff: VSCloneDiff): string {
-		return diff.type === 'deletion' ? '' : diff.code;
-	}
-
-	private diffOriginalReplacementText(diff: VSCloneDiff): string {
-		return diff.type === 'insertion' ? '' : diff.originalCode;
-	}
-
-	private diffToResolvedEdit(diff: VSCloneDiff): VSCloneResolvedContentEdit {
-		return {
-			startOffset: diff.startOffset,
-			endOffset: diff.endOffset,
-			replaceText: this.diffReplacementText(diff),
-			source: {
-				filePath: diff.diffareaid.toString(),
-				searchText: this.diffOriginalReplacementText(diff),
-				replaceText: this.diffReplacementText(diff),
-				order: diff.diffid,
-			},
-		};
-	}
-
-	private resolvedEditToComputedDiff(originalContent: string, resolvedEdit: VSCloneResolvedContentEdit): VSCloneComputedDiff {
-		const originalSlice = originalContent.slice(resolvedEdit.startOffset, resolvedEdit.endOffset);
-		const originalRange = rangeFromOffsets(originalContent, resolvedEdit.startOffset, resolvedEdit.endOffset);
-		const replacementLineCount = countLines(resolvedEdit.replaceText);
-
-		if (resolvedEdit.source.searchText.trim().length === 0) {
-			return {
-				type: 'insertion',
-				originalStartLine: originalRange.startLine,
-				code: resolvedEdit.replaceText,
-				startLine: originalRange.startLine,
-				endLine: Math.max(originalRange.startLine, originalRange.startLine + replacementLineCount - 1),
-				startOffset: resolvedEdit.startOffset,
-				endOffset: resolvedEdit.endOffset,
-			};
-		}
-
-		if (resolvedEdit.replaceText.length === 0) {
-			return {
-				type: 'deletion',
-				originalCode: originalSlice,
-				originalStartLine: originalRange.startLine,
-				originalEndLine: originalRange.endLine,
-				startLine: originalRange.startLine,
-				endLine: originalRange.endLine,
-				startOffset: resolvedEdit.startOffset,
-				endOffset: resolvedEdit.endOffset,
-			};
-		}
-
-		return {
-			type: 'edit',
-			originalCode: originalSlice,
-			originalStartLine: originalRange.startLine,
-			originalEndLine: originalRange.endLine,
-			code: resolvedEdit.replaceText,
-			startLine: originalRange.startLine,
-			endLine: Math.max(originalRange.startLine, originalRange.startLine + replacementLineCount - 1),
-			startOffset: resolvedEdit.startOffset,
-			endOffset: resolvedEdit.endOffset,
-		};
-	}
-
-	private shiftDiffOffsets(diffArea: VSCloneDiffZone, anchorDiff: VSCloneDiff, charDelta: number, lineDelta: number): void {
-		this.shiftLaterDiffsByStartOffset(diffArea, anchorDiff, charDelta, lineDelta);
-	}
-
-	private shiftLaterDiffsByStartOffset(diffArea: VSCloneDiffZone, anchorDiff: VSCloneDiff, charDelta: number, lineDelta: number): void {
-		const diffs = this.getSortedDiffs(diffArea);
-		const anchorIndex = diffs.findIndex(candidate => candidate.diffid === anchorDiff.diffid);
-		if (anchorIndex === -1) {
+	private _addDiffAreaStylesToURI(uri: URI): void {
+		const model = this._modelService.getModel(uri);
+		if (!model) {
 			return;
 		}
 
-		for (const diff of diffs.slice(anchorIndex + 1)) {
-			diff.startOffset += charDelta;
-			diff.endOffset += charDelta;
-			diff.startLine += lineDelta;
-			diff.endLine += lineDelta;
+		for (const diffareaid of this.diffAreasOfURI[uri.fsPath] ?? []) {
+			const diffArea = this.diffAreaOfId[diffareaid];
+			if (!diffArea) {
+				continue;
+			}
+
+			if (diffArea.type === 'DiffZone' && diffArea._streamState.isStreaming) {
+				const fn1 = this._addLineDecoration(model, diffArea._streamState.line, diffArea._streamState.line, 'vsclone-sweepIdxBG');
+				const fn2 = diffArea._streamState.line + 1 <= diffArea.endLine
+					? this._addLineDecoration(model, diffArea._streamState.line + 1, diffArea.endLine, 'vsclone-sweepBG')
+					: null;
+				diffArea._removeStylesFns.add(() => { fn1?.(); fn2?.(); });
+			} else if (diffArea.type === 'CtrlKZone' && diffArea._linkedStreamingDiffZone === null) {
+				const fn = this._addLineDecoration(model, diffArea.startLine, diffArea.endLine, 'vsclone-highlightBG');
+				diffArea._removeStylesFns.add(() => { fn?.(); });
+			}
 		}
+	}
+
+	private _addDiffStylesToURI(uri: URI, diff: VSCloneDiff): () => void {
+		const disposeFns: (() => void)[] = [];
+		const model = this._modelService.getModel(uri);
+
+		// Green decoration over the new-file range (insertions and edits).
+		if (diff.type !== 'deletion' && model) {
+			const fn = this._addLineDecoration(model, diff.startLine, diff.endLine, 'vsclone-greenBG', {
+				minimap: { color: { id: 'minimapGutter.addedBackground' }, position: 2 },
+				overviewRuler: { color: { id: 'editorOverviewRuler.addedForeground' }, position: 7 },
+			});
+			disposeFns.push(() => { fn?.(); });
+		}
+
+		// Red view zone rendering the removed lines (deletions and edits).
+		if (diff.type !== 'insertion') {
+			const originalCode = diff.originalCode;
+			const consistentZoneId = this._consistentItemService.addConsistentItemToURI({
+				uri,
+				fn: (editor) => {
+					const domNode = document.createElement('div');
+					domNode.className = 'vsclone-redBG';
+
+					const renderOptions = RenderOptions.fromEditor(editor);
+					const processedText = originalCode.replace(/\t/g, ' '.repeat(renderOptions.tabSize));
+					const lines = processedText.split('\n');
+
+					const linesContainer = document.createElement('div');
+					linesContainer.style.fontFamily = renderOptions.fontInfo.fontFamily;
+					linesContainer.style.fontSize = `${renderOptions.fontInfo.fontSize}px`;
+					linesContainer.style.lineHeight = `${renderOptions.fontInfo.lineHeight}px`;
+					linesContainer.style.whiteSpace = 'pre';
+					linesContainer.style.position = 'relative';
+					linesContainer.style.width = '100%';
+
+					lines.forEach(line => {
+						const lineDiv = document.createElement('div');
+						lineDiv.className = 'view-line';
+						lineDiv.style.whiteSpace = 'pre';
+						lineDiv.style.position = 'relative';
+						lineDiv.style.height = `${renderOptions.fontInfo.lineHeight}px`;
+
+						const span = document.createElement('span');
+						span.textContent = line || '\u00a0';
+						span.style.whiteSpace = 'pre';
+						span.style.display = 'inline-block';
+
+						lineDiv.appendChild(span);
+						linesContainer.appendChild(lineDiv);
+					});
+
+					domNode.appendChild(linesContainer);
+
+					const heightInLines = lines.length;
+					const minWidthInPx = Math.max(...lines.map(line =>
+						Math.ceil(renderOptions.fontInfo.typicalFullwidthCharacterWidth * line.length),
+					));
+
+					const viewZone: IViewZone = {
+						afterLineNumber: diff.startLine - 1,
+						heightInLines,
+						minWidthInPx,
+						domNode,
+						marginDomNode: document.createElement('div'),
+						suppressMouseDown: false,
+						showInHiddenAreas: false,
+					};
+
+					let zoneId: string | null = null;
+					editor.changeViewZones(accessor => { zoneId = accessor.addZone(viewZone); });
+					return () => editor.changeViewZones(accessor => { if (zoneId) { accessor.removeZone(zoneId); } });
+				},
+			});
+			disposeFns.push(() => { this._consistentItemService.removeConsistentItemFromURI(consistentZoneId); });
+		}
+
+		// Accept / Reject inline widget for non-streaming zones.
+		const diffZone = this.diffAreaOfId[diff.diffareaid];
+		if (diffZone && diffZone.type === 'DiffZone' && !diffZone._streamState.isStreaming) {
+			const diffid = diff.diffid;
+
+			const consistentWidgetId = this._consistentItemService.addConsistentItemToURI({
+				uri,
+				fn: (editor) => {
+					let startLine: number;
+					let offsetLines: number;
+					if (diff.type === 'insertion' || diff.type === 'edit') {
+						startLine = diff.startLine;
+						offsetLines = 0;
+					} else if (diff.type === 'deletion') {
+						if (diff.startLine === 1) {
+							const numRedLines = diff.originalEndLine - diff.originalStartLine + 1;
+							startLine = diff.startLine;
+							offsetLines = -numRedLines;
+						} else {
+							startLine = diff.startLine - 1;
+							offsetLines = 1;
+						}
+					} else {
+						throw new Error('VSClone edit service: unknown diff.type');
+					}
+
+					const widget = this._instantiationService.createInstance(VSCloneAcceptRejectInlineWidget, {
+						editor,
+						onAccept: () => { this.acceptDiff({ diffid }); },
+						onReject: () => { this.rejectDiff({ diffid }); },
+						diffid: diffid.toString(),
+						startLine,
+						offsetLines,
+					});
+					return () => { widget.dispose(); };
+				},
+			});
+			disposeFns.push(() => { this._consistentItemService.removeConsistentItemFromURI(consistentWidgetId); });
+		}
+
+		return () => { disposeFns.forEach(fn => fn()); };
+	}
+
+	private _computeDiffsAndAddStylesToURI(uri: URI): void {
+		const model = this._modelService.getModel(uri);
+		if (model === null || model === undefined) {
+			return;
+		}
+		const fullFileText = model.getValue(EndOfLinePreference.LF);
+
+		for (const diffareaid of this.diffAreasOfURI[uri.fsPath] ?? []) {
+			const diffArea = this.diffAreaOfId[diffareaid];
+			if (!diffArea || diffArea.type !== 'DiffZone') {
+				continue;
+			}
+
+			const newDiffAreaCode = fullFileText.split('\n').slice(diffArea.startLine - 1, diffArea.endLine).join('\n');
+			const computedDiffs = findDiffs(diffArea.originalCode, newDiffAreaCode);
+			for (const computedDiff of computedDiffs) {
+				// findDiffs produces zone-local line numbers; shift them into file coordinates.
+				if (computedDiff.type === 'deletion') {
+					computedDiff.startLine += diffArea.startLine - 1;
+				} else {
+					computedDiff.startLine += diffArea.startLine - 1;
+					computedDiff.endLine += diffArea.startLine - 1;
+				}
+				this._addDiff(computedDiff, diffArea);
+			}
+		}
+	}
+
+	private _addDiff(computedDiff: VSCloneComputedDiff, diffZone: VSCloneDiffZone): VSCloneDiff {
+		const uri = diffZone._URI;
+		const diffid = this._diffidPool++;
+
+		const newDiff: VSCloneDiff = {
+			...computedDiff,
+			diffid,
+			diffareaid: diffZone.diffareaid,
+		};
+
+		const fn = this._addDiffStylesToURI(uri, newDiff);
+		if (fn) {
+			diffZone._removeStylesFns.add(fn);
+		}
+
+		this.diffOfId[diffid] = newDiff;
+		diffZone._diffOfId[diffid] = newDiff;
+
+		return newDiff;
+	}
+
+	private _clearAllDiffAreaEffects(diffArea: VSCloneDiffArea): void {
+		if (diffArea.type === 'DiffZone') {
+			// Tear down every diff record; the refresh pass that follows will rebuild via findDiffs.
+			this.deleteDiffs(diffArea);
+		}
+		// Wrap each disposal so a single throwing style-remove fn (e.g. an already-disposed widget)
+		// doesn't abort teardown mid-commit. Callers rely on this method to be non-throwing -- it
+		// runs after filesystem writes in snapshot-restore and as part of the refresh pipeline.
+		diffArea._removeStylesFns?.forEach(removeStyles => {
+			try {
+				removeStyles();
+			} catch (err) {
+				onUnexpectedError(err);
+			}
+		});
+		diffArea._removeStylesFns?.clear();
+	}
+
+	private _clearAllEffects(uri: URI): void {
+		for (const diffareaid of this.diffAreasOfURI[uri.fsPath] ?? []) {
+			const diffArea = this.diffAreaOfId[diffareaid];
+			if (!diffArea) {
+				continue;
+			}
+			this._clearAllDiffAreaEffects(diffArea);
+		}
+	}
+
+	private _fireChangeDiffsIfNotStreaming(uri: URI): void {
+		for (const diffareaid of this.diffAreasOfURI[uri.fsPath] ?? []) {
+			const diffArea = this.diffAreaOfId[diffareaid];
+			if (!diffArea || diffArea.type !== 'DiffZone') {
+				continue;
+			}
+			if (diffArea._streamState.isStreaming) {
+				continue;
+			}
+			// Consumers (e.g., the Phase 3 command bar) rebuild their per-URI indexes from this.
+			// The service itself does NOT re-subscribe to this event -- refresh is only called from
+			// mutation sites, never via its own events, to avoid feedback loops.
+			this._onDidChangeDiffsInDiffZoneNotStreaming.fire({ uri, diffareaid: diffArea.diffareaid });
+		}
+	}
+
+	private _refreshStylesAndDiffsInURI(uri: URI): void {
+		// If the model has not been loaded yet, skip the clear+rebuild cycle entirely. Otherwise
+		// _clearAllEffects wipes _diffOfId and _computeDiffsAndAddStylesToURI can't rebuild (it
+		// early-returns when the model is null), leaving the zone diff-less forever. The constructor's
+		// onModelAdded listener will call this method again once the model loads.
+		if (this._modelService.getModel(uri) === null) {
+			return;
+		}
+		this._clearAllEffects(uri);
+		this._addDiffAreaStylesToURI(uri);
+		this._computeDiffsAndAddStylesToURI(uri);
+		this._fireChangeDiffsIfNotStreaming(uri);
 	}
 
 	private findOverlappingDiffArea(
@@ -1143,22 +1433,6 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		}
 	}
 
-	private readModelValue(uri: URI): string {
-		for (const control of this.editorService.visibleTextEditorControls) {
-			const model = control.getModel() as { uri?: URI; getValue?: () => string } | null;
-			if (model?.uri?.toString() === uri.toString() && model.getValue) {
-				return model.getValue();
-			}
-		}
-
-		const activeModel = this.editorService.activeTextEditorControl?.getModel?.() as { uri?: URI; getValue?: () => string } | null | undefined;
-		if (activeModel?.uri?.toString() === uri.toString() && activeModel.getValue) {
-			return activeModel.getValue();
-		}
-
-		return '';
-	}
-
 	private cloneSnapshotEntry(diffArea: VSCloneDiffArea): VSCloneDiffAreaSnapshotEntry {
 		const snapshot: Partial<VSCloneDiffAreaSnapshotEntry> = {};
 		for (const key of vscloneDiffAreaSnapshotKeys) {
@@ -1189,18 +1463,37 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		return ordered;
 	}
 
-	private async writeWholeFile(uri: URI, text: string): Promise<void> {
+	private async _writeURIText(
+		uri: URI,
+		text: string,
+		range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number },
+	): Promise<void> {
+		const modelReference = await this.safeCreateModelReference(uri);
+		if (!modelReference) {
+			return;
+		}
+		try {
+			await this.bulkEditService.apply([new ResourceTextEdit(uri, {
+				range: new Range(range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn),
+				text,
+			})], { label: 'VSClone reject diff' });
+		} finally {
+			modelReference.dispose();
+		}
+	}
+
+	private async writeWholeFile(uri: URI, text: string): Promise<boolean> {
 		const modelReference = await this.safeCreateModelReference(uri);
 		if (!modelReference) {
 			// Snapshot restore can target files that no longer exist, so it follows the same parent
 			// folder creation path as initial create_file rewrites to keep restore behavior symmetric.
 			await this.fileService.createFolder(dirname(uri));
-			await this.bulkEditService.apply([new ResourceFileEdit(undefined, uri, {
+			const result = await this.bulkEditService.apply([new ResourceFileEdit(undefined, uri, {
 				overwrite: true,
 				ignoreIfExists: false,
 				contents: Promise.resolve(VSBuffer.fromString(text)),
 			})], { label: 'Restore VSClone file' });
-			return;
+			return result.isApplied;
 		}
 
 		try {
@@ -1211,7 +1504,8 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 				range: new Range(1, 1, lineCount, lastLineLength),
 				text,
 			});
-			await this.bulkEditService.apply([edit], { label: 'Restore VSClone file' });
+			const result = await this.bulkEditService.apply([edit], { label: 'Restore VSClone file' });
+			return result.isApplied;
 		} finally {
 			modelReference.dispose();
 		}
@@ -1285,10 +1579,6 @@ export function applyResolvedEditsInReverse(content: string, edits: readonly VSC
 		next = `${next.slice(0, edit.startOffset)}${edit.replaceText}${next.slice(edit.endOffset)}`;
 	}
 	return next;
-}
-
-function applyResolvedEditToText(content: string, startOffset: number, endOffset: number, replaceText: string): string {
-	return `${content.slice(0, startOffset)}${replaceText}${content.slice(endOffset)}`;
 }
 
 function findNearestFilePathLine(text: string, beforeOffset: number): string | undefined {
@@ -1379,24 +1669,3 @@ function countLines(text: string): number {
 	return trimmed.split('\n').length;
 }
 
-function rangeFromOffsets(content: string, startOffset: number, endOffset: number): { startLine: number; endLine: number } {
-	const normalized = content.replace(/\r\n/g, '\n');
-	const lineOffsets = computeLineOffsets(normalized);
-	const startLine = lineNumberAtOffset(lineOffsets, startOffset);
-	const endLine = lineNumberAtOffset(lineOffsets, Math.max(startOffset, endOffset - 1));
-	return { startLine, endLine };
-}
-
-function lineNumberAtOffset(lineOffsets: number[], offset: number): number {
-	let low = 0;
-	let high = lineOffsets.length - 1;
-	while (low <= high) {
-		const mid = (low + high) >>> 1;
-		if (lineOffsets[mid] <= offset) {
-			low = mid + 1;
-		} else {
-			high = mid - 1;
-		}
-	}
-	return Math.max(1, high + 1);
-}

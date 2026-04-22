@@ -20,6 +20,11 @@ import { registerVSCloneOAuthActions } from './vscloneOAuthActions.js';
 import { VSCloneOAuthService } from './vscloneOAuthService.js';
 import { VSCloneEditCodeService } from './vscloneEditCodeService.js';
 import { IVSCloneEditCodeService } from './vscloneEditCodeServiceInterface.js';
+// Side-effect imports: register edit-decoration colors + mount the consistent-item helper services
+// that the edit service uses to paint per-diff inline widgets and view zones.
+import '../common/helpers/vscloneEditColors.js';
+import './helperServices/vscloneConsistentItemService.js';
+import './media/vscloneEditDecorations.css';
 import { IVSCloneChatThreadService, VSCloneChatThreadService } from './vscloneChatThreadService.js';
 import { IVSCloneConvertToLLMMessageService, VSCloneConvertToLLMMessageService } from './vscloneConvertToLLMMessageService.js';
 import { IVSCloneContextGatheringService, VSCloneContextGatheringService } from './vscloneContextGatheringService.js';
