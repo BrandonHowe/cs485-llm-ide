@@ -123,7 +123,7 @@ suite('VSCloneModelSwitcherWidget', () => {
 		assert.ok((container.querySelector('.vsclone-model-switcher-menu') as HTMLElement).classList.contains('hidden'));
 	});
 
-	test('model rows expose pressed state and locked-provider accessibility labels', async () => {
+	test('hides signed-out providers and exposes pressed state for signed-in model rows', async () => {
 		const { oauthService, settingsService, widget, container } = await createHarness();
 		const selectedModel = settingsService.getSelectableModels()[0];
 		assert.ok(selectedModel);
@@ -148,13 +148,13 @@ suite('VSCloneModelSwitcherWidget', () => {
 			assert.ok((row.getAttribute('aria-label') || '').includes('model'));
 		}
 
-		const lockedRow = container.querySelector('.vsclone-model-switcher-row.locked') as HTMLButtonElement | null;
-		assert.ok(lockedRow);
-		assert.ok((lockedRow?.getAttribute('aria-label') || '').includes('provider requires sign in'));
+		// Signed-out providers must not render any rows in the picker.
+		assert.strictEqual(container.querySelector('.vsclone-model-switcher-row.locked'), null);
+		assert.ok(!(container.textContent || '').toUpperCase().includes('GOOGLE'));
+
 		const firstRowLabel = container.querySelector('.vsclone-model-switcher-row-label') as HTMLElement | null;
 		assert.ok((firstRowLabel?.getAttribute('title') || '').length > 0);
 
-		// Icons created through createCodicon are decorative and must stay hidden to assistive tech.
 		const refreshIcon = container.querySelector('.vsclone-model-switcher-refresh .codicon') as HTMLElement | null;
 		assert.ok(refreshIcon);
 		assert.strictEqual(refreshIcon?.getAttribute('aria-hidden'), 'true');
@@ -175,21 +175,16 @@ suite('VSCloneModelSwitcherWidget', () => {
 		assert.ok((container.textContent || '').includes('Try again'));
 	});
 
-	test('shows empty and requires sign-in states', async () => {
+	test('shows empty state when no providers are signed in', async () => {
 		const { oauthService, settingsService, widget, container } = await createHarness();
 
-		await settingsService.setProviderEnabled('openai', false);
-		await settingsService.setProviderEnabled('anthropic', false);
-		await settingsService.setProviderEnabled('google', false);
-		await settingsService.refreshState();
-		widget.open();
-		assert.ok((container.textContent || '').includes('No models available'));
-
-		await settingsService.setProviderEnabled('google', true);
+		oauthService.setReady('openai', false);
+		oauthService.setReady('anthropic', false);
 		oauthService.setReady('google', false);
 		await settingsService.refreshState();
 		widget.open();
-		assert.ok((container.textContent || '').includes('Sign in to use this provider'));
+		assert.ok((container.textContent || '').includes('No models available'));
+		assert.ok((container.textContent || '').includes('Sign in to a provider to get started'));
 	});
 
 	test('footer shows reset only for explicit thread selection', async () => {

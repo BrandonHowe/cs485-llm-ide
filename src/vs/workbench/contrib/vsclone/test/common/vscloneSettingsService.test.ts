@@ -66,18 +66,6 @@ suite('VSCloneSettingsService', () => {
 		assert.strictEqual(state.recentModels[0]?.model?.identifier, selectedModel.identifier);
 	});
 
-	test('retains disabled providers in consolidated state while model rows stay feature-filtered', async () => {
-		const { settingsService } = await createHarness();
-		await settingsService.setProviderEnabled('anthropic', false);
-
-		const state = settingsService.getState();
-		const anthropicProvider = state.providers.find(provider => provider.vendor === 'anthropic');
-		assert.ok(anthropicProvider);
-		assert.strictEqual(anthropicProvider?.enabled, false);
-		assert.strictEqual(anthropicProvider?.definedModelCount, 2);
-		assert.strictEqual(state.models.some(model => model.vendor === 'anthropic'), false);
-	});
-
 	test('derives trimmed capability metadata and filters feature-specific model lists', async () => {
 		const { settingsService } = await createHarness();
 		const autocompleteModels = settingsService.getModelsForFeature('Autocomplete');

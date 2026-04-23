@@ -85,9 +85,9 @@
 	padding: 10px 12px 0;
 }
 
-.vsclone-thread-action-button,
-.vsclone-thread-action-overflow {
+.vsclone-thread-action-button {
 	height: 26px;
+	padding: 0 10px;
 	border: 1px solid var(--vscode-panel-border);
 	border-radius: 5px;
 	cursor: pointer;
@@ -97,17 +97,7 @@
 	color: var(--vscode-button-secondaryForeground);
 }
 
-.vsclone-thread-action-button {
-	padding: 0 10px;
-}
-
-.vsclone-thread-action-overflow {
-	width: 28px;
-	padding: 0;
-}
-
-.vsclone-thread-action-button:hover,
-.vsclone-thread-action-overflow:hover {
+.vsclone-thread-action-button:hover {
 	background: var(--vscode-button-secondaryHoverBackground);
 }
 
@@ -128,11 +118,18 @@
 	-webkit-user-select: text;
 }
 
+.vsclone-thread-messages.hidden {
+	display: none;
+}
+
 .vsclone-thread-empty-state {
 	flex: 1;
+	min-height: 0;
 	display: flex;
+	flex-direction: column;
 	align-items: center;
 	justify-content: center;
+	gap: 10px;
 	padding: 28px;
 	text-align: center;
 	color: var(--vscode-descriptionForeground);
@@ -141,6 +138,33 @@
 
 .vsclone-thread-empty-state.hidden {
 	display: none;
+}
+
+.vsclone-thread-empty-state-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	border-radius: 50%;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 70%, transparent 30%);
+	color: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--vscode-foreground) 20%);
+	margin-bottom: 2px;
+}
+
+.vsclone-thread-empty-state-icon .codicon {
+	font-size: 22px;
+}
+
+.vsclone-thread-empty-state-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.vsclone-thread-empty-state-description {
+	font-size: 12px;
+	max-width: 280px;
 }
 
 .vsclone-thread-message {

@@ -94,7 +94,6 @@ class UnusedSettingsService implements IVSCloneSettingsService {
 	getRecentModels() { return []; }
 	getRecentModelIdentifiers(): readonly string[] { return []; }
 	getEligibilityRecords() { return []; }
-	async setProviderEnabled(): Promise<void> { }
 	getIneligibilityRecord() { return undefined; }
 	async markModelIneligible(): Promise<void> { }
 	async clearIneligibilityForVendor(): Promise<void> { }

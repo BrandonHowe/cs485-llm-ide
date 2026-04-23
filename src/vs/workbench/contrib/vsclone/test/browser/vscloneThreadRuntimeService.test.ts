@@ -149,7 +149,6 @@ suite('VSCloneThreadRuntimeService', () => {
 			getRecentModels: () => [],
 			getRecentModelIdentifiers: () => [],
 			getEligibilityRecords: () => [],
-			setProviderEnabled: async () => undefined,
 			getIneligibilityRecord: () => undefined,
 			markModelIneligible: async () => undefined,
 			clearIneligibilityForVendor: async () => undefined,
@@ -243,7 +242,7 @@ suite('VSCloneThreadRuntimeService', () => {
 		assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'rejected']);
 		// Tool terminal states share one result-message interface, so an explicit runtime guard keeps
 		// this assertion aligned with the actual message shape instead of over-constraining the type.
-		assert.ok(rejectedMessage && 'output' in rejectedMessage);
+		assert.ok(rejectedMessage && rejectedMessage.type === 'rejected');
 		assert.strictEqual(rejectedMessage.output, 'Rejected by the test harness.');
 	});
 });

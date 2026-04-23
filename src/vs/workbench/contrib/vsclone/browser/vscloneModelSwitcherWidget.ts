@@ -201,6 +201,9 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		}
 
 		for (const provider of state.providers) {
+			if (provider.status !== 'available') {
+				continue;
+			}
 			const providerModels = models.filter(model => model.vendor === provider.vendor);
 			if (providerModels.length === 0) {
 				continue;

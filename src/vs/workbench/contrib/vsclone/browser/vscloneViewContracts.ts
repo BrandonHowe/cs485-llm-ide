@@ -262,7 +262,6 @@ export interface IVSCloneConversationSurfaceProps {
 	mentionMenuRef: (element: HTMLElement | null) => void;
 	imageFileInputRef: (element: HTMLInputElement | null) => void;
 	onHistoryClick: () => void;
-	onOverflowClick: (event: MouseEvent) => void;
 	onComposerInput: () => void;
 	onComposerKeyDown: (event: KeyboardEvent) => void;
 	onComposerPaste: (event: ClipboardEvent) => void;

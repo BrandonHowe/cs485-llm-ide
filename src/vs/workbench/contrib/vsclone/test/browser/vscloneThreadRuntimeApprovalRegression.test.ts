@@ -14,8 +14,7 @@ import type { IStorageService } from '../../../../../platform/storage/common/sto
 import type { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import type { IVSCloneConvertToLLMMessageService } from '../../browser/vscloneConvertToLLMMessageService.js';
 import type { IVSCloneLLMMessageService } from '../../browser/vscloneLLMMessageService.js';
-import { VSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
-import type { IVSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
+import { VSCloneThreadRuntimeService, type IVSCloneThreadRuntimeService } from '../../browser/vscloneThreadRuntimeService.js';
 import type { IVSCloneChatTransportRequestOptions } from '../../common/vscloneChatTransportTypes.js';
 import {
 	type IVSCloneLLMMessageChatRequest,
@@ -141,7 +140,6 @@ function createSettingsService(): IVSCloneSettingsService {
 		getRecentModels: () => [],
 		getRecentModelIdentifiers: () => [],
 		getEligibilityRecords: () => [],
-		setProviderEnabled: async () => undefined,
 		getIneligibilityRecord: () => undefined,
 		markModelIneligible: async () => undefined,
 		clearIneligibilityForVendor: async () => undefined,
@@ -312,7 +310,7 @@ suite('VSCloneThreadRuntimeApprovalRegression', () => {
 		const rejectedMessage = toolMessages.find(message => message.type === 'rejected');
 		assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'rejected']);
 		assert.strictEqual(toolMessages.some(message => message.type === 'tool_error'), false);
-		assert.ok(rejectedMessage && 'output' in rejectedMessage);
+		assert.ok(rejectedMessage && rejectedMessage.type === 'rejected');
 		assert.strictEqual(rejectedMessage.output, 'Command rejected by reviewer.');
 		assert.strictEqual(toolExecutionCount, 0);
 		assert.strictEqual(state!.streamState.kind, 'idle');
@@ -384,15 +382,15 @@ suite('VSCloneThreadRuntimeApprovalRegression', () => {
 
 		assert.strictEqual(restoredRuntime.getState('thread-restore')?.streamState.kind, 'awaiting_user');
 		assert.strictEqual(restoredRuntime.rejectLatestToolRequest('thread-restore', 'Command rejected after restore.'), true);
-			await waitForIdleThread(restoredRuntime, 'thread-restore');
+		await waitForIdleThread(restoredRuntime, 'thread-restore');
 
-			const state = restoredRuntime.getState('thread-restore');
-			assert.ok(state);
-			const lastMessage = state!.messages.at(-1);
-			assert.strictEqual(lastMessage?.role, 'assistant');
-			assert.strictEqual(lastMessage && lastMessage.role === 'assistant' ? lastMessage.content : undefined, 'Okay, I will not run it.');
-			const toolMessages = state!.messages.filter((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }> => message.role === 'tool');
-			assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'rejected']);
+		const state = restoredRuntime.getState('thread-restore');
+		assert.ok(state);
+		const lastMessage = state!.messages.at(-1);
+		assert.strictEqual(lastMessage?.role, 'assistant');
+		assert.strictEqual(lastMessage && lastMessage.role === 'assistant' ? lastMessage.content : undefined, 'Okay, I will not run it.');
+		const toolMessages = state!.messages.filter((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }> => message.role === 'tool');
+		assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'rejected']);
 		assert.strictEqual(toolExecutionCount, 0);
 	});
 });

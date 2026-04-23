@@ -65,7 +65,6 @@ export interface IVSCloneModelCapabilityMetadata {
 export interface IVSCloneProviderSettingsDefinition {
 	readonly vendor: VSCloneModelVendor;
 	readonly displayName: string;
-	readonly enabled: boolean;
 }
 
 /**
@@ -74,10 +73,9 @@ export interface IVSCloneProviderSettingsDefinition {
  * settings service, thread selection policy, and transport types share the exact same catalog.
  */
 export const VSCLONE_PROVIDER_SETTINGS_DEFAULTS: readonly IVSCloneProviderSettingsDefinition[] = [
-	{ vendor: 'openai', displayName: defaultOAuthProviderConfig.openai.displayName, enabled: true },
-	{ vendor: 'anthropic', displayName: defaultOAuthProviderConfig.anthropic.displayName, enabled: true },
-	// Keep Google visible by default so OAuth-backed Gemini discovery stays obvious in the picker.
-	{ vendor: 'google', displayName: defaultOAuthProviderConfig.google.displayName, enabled: true },
+	{ vendor: 'openai', displayName: defaultOAuthProviderConfig.openai.displayName },
+	{ vendor: 'anthropic', displayName: defaultOAuthProviderConfig.anthropic.displayName },
+	{ vendor: 'google', displayName: defaultOAuthProviderConfig.google.displayName },
 ] as const;
 
 export const VSCLONE_MODEL_DEFINITIONS_BY_PROVIDER: Record<VSCloneModelVendor, readonly IVSCloneStaticModelDefinition[]> = {

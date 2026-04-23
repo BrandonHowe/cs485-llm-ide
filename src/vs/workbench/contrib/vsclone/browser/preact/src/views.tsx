@@ -279,7 +279,7 @@ function renderModelSwitcherBody(
 		);
 	}
 
-	if (state.models.length === 0) {
+	if (sections.length === 0) {
 		return (
 			<div className="vsclone-model-switcher-state">
 				<Codicon icon="codicon-info" extraClassName="vsclone-model-switcher-state-icon" />
@@ -856,20 +856,10 @@ export function VSCloneUnifiedConversationSurface(props: IVSCloneConversationSur
 				>
 					{localize('vsclone.thread.actions.history', 'Threads')}
 				</button>
-				<button
-					type="button"
-					className="vsclone-thread-action-overflow"
-					title={localize('vsclone.thread.actions.more', 'More actions')}
-					aria-label={localize('vsclone.thread.actions.more', 'More actions')}
-					aria-haspopup="menu"
-					onClick={(event) => props.onOverflowClick(event)}
-				>
-					{'\u22ef'}
-				</button>
 			</div>
 			<div
 				ref={props.conversationListRef}
-				className="vsclone-thread-messages"
+				className={props.emptyStateHidden ? 'vsclone-thread-messages' : 'vsclone-thread-messages hidden'}
 				role="log"
 				aria-live="polite"
 				aria-relevant="additions text"
@@ -881,7 +871,15 @@ export function VSCloneUnifiedConversationSurface(props: IVSCloneConversationSur
 				ref={props.conversationEmptyStateRef}
 				className={props.emptyStateHidden ? 'vsclone-thread-empty-state hidden' : 'vsclone-thread-empty-state'}
 			>
-				{localize('vsclone.thread.empty', 'Start a new chat from the composer below.')}
+				<div className="vsclone-thread-empty-state-icon" aria-hidden="true">
+					<span className="codicon codicon-comment-discussion" />
+				</div>
+				<div className="vsclone-thread-empty-state-title">
+					{localize('vsclone.thread.empty.title', 'Start a new chat')}
+				</div>
+				<div className="vsclone-thread-empty-state-description">
+					{localize('vsclone.thread.empty.description', 'Type a prompt in the composer below to begin.')}
+				</div>
 			</div>
 			<div className="vsclone-thread-composer">
 				<ConversationImageStrip

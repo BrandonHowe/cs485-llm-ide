@@ -9,14 +9,14 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IVSCloneUnifiedChatBackendService } from './backend/vscloneUnifiedChatBackendService.js';
-import type {
-	IVSCloneChatLocation,
-	IVSCloneModelSelection,
-	IVSCloneModelSelectionChangeEvent,
-	IVSCloneThreadSelectionMap,
-	IVSCloneUnifiedChatSelectionState,
+import {
+	normalizeVSCloneThreadId,
+	type IVSCloneChatLocation,
+	type IVSCloneModelSelection,
+	type IVSCloneModelSelectionChangeEvent,
+	type IVSCloneThreadSelectionMap,
+	type IVSCloneUnifiedChatSelectionState,
 } from './vscloneModelSelectionTypes.js';
-import { normalizeVSCloneThreadId } from './vscloneModelSelectionTypes.js';
 import {
 	getVSCloneModelCapabilityMetadata,
 	getVSCloneStaticModelDefinitionByIdentifier,
@@ -45,7 +45,6 @@ import {
 	type IVSCloneSettingsThreadSelectionSnapshot,
 	type IVSCloneSettingsThreadSelectionSnapshotMap,
 	type IVSCloneStoredModelIneligibility,
-	type IVSCloneStoredProviderPreference,
 	type IVSCloneStoredSettingsState,
 	type VSCloneFeatureModelSelection,
 } from './vscloneSettingsTypes.js';
@@ -76,7 +75,6 @@ export interface IVSCloneSettingsService {
 	getRecentModels(limit?: number): readonly IVSCloneSettingsRecentModelState[];
 	getRecentModelIdentifiers(limit?: number): readonly string[];
 	getEligibilityRecords(): readonly IVSCloneSettingsEligibilityRecord[];
-	setProviderEnabled(vendor: VSCloneModelVendor, enabled: boolean): Promise<void>;
 	getIneligibilityRecord(modelIdentifier: string): IVSCloneModelIneligibilityRecord | undefined;
 	markModelIneligible(modelIdentifier: string, reason: string): Promise<void>;
 	clearIneligibilityForVendor(vendor: VSCloneModelVendor): Promise<void>;
@@ -84,7 +82,6 @@ export interface IVSCloneSettingsService {
 
 interface IVSCloneStoredSettingsPayload {
 	readonly version?: 1;
-	readonly providers?: Partial<Record<VSCloneModelVendor, IVSCloneStoredProviderPreference>>;
 	readonly ineligibility?: Record<string, IVSCloneStoredModelIneligibility>;
 }
 
@@ -94,8 +91,6 @@ interface IVSCloneSelectionFallbackCandidate {
 }
 
 const settingsStorageKey = 'vsclone.settings.v1';
-const legacyProviderPreferencesStorageKey = 'vsclone.providerPreferences.v1';
-const legacyProviderVisibilityStorageKey = 'vsclone.modelSwitcher.providers.v1';
 const legacyModelEligibilityStorageKey = 'vsclone.modelEligibility.v1';
 
 const providerOrder = new Map(VSCLONE_PROVIDER_SETTINGS_DEFAULTS.map((provider, index) => [provider.vendor, index]));
@@ -110,7 +105,6 @@ const featureFallbackCandidates: Partial<Record<VSCloneSettingsFeatureName, read
 
 function createEmptyStoredSettingsState(): IVSCloneStoredSettingsState {
 	return {
-		providers: {},
 		ineligibility: {},
 	};
 }
@@ -231,10 +225,6 @@ function toFeatureSelection(selection: IVSCloneModelSelection): VSCloneFeatureMo
 	};
 }
 
-function parseBooleanFlag(value: unknown): boolean | undefined {
-	return typeof value === 'boolean' ? value : undefined;
-}
-
 function parseStoredSettings(raw: string | undefined): IVSCloneStoredSettingsState {
 	if (!raw) {
 		return createEmptyStoredSettingsState();
@@ -246,15 +236,7 @@ function parseStoredSettings(raw: string | undefined): IVSCloneStoredSettingsSta
 			return createEmptyStoredSettingsState();
 		}
 
-		const providers: Partial<Record<VSCloneModelVendor, IVSCloneStoredProviderPreference>> = {};
 		const ineligibility: Record<string, IVSCloneStoredModelIneligibility> = {};
-
-		for (const vendor of ['openai', 'anthropic', 'google'] satisfies VSCloneModelVendor[]) {
-			const enabled = parseBooleanFlag(parsed.providers?.[vendor]?.enabled);
-			if (enabled !== undefined) {
-				providers[vendor] = { enabled };
-			}
-		}
 
 		for (const [modelIdentifier, record] of Object.entries(parsed.ineligibility ?? {})) {
 			if (!record || typeof record.reason !== 'string' || typeof record.markedAt !== 'number') {
@@ -266,36 +248,9 @@ function parseStoredSettings(raw: string | undefined): IVSCloneStoredSettingsSta
 			};
 		}
 
-		return { providers, ineligibility };
+		return { ineligibility };
 	} catch {
 		return createEmptyStoredSettingsState();
-	}
-}
-
-function parseLegacyProviderPreferences(raw: string | undefined): Partial<Record<VSCloneModelVendor, IVSCloneStoredProviderPreference>> {
-	if (!raw) {
-		return {};
-	}
-
-	try {
-		const parsed = JSON.parse(raw) as {
-			version?: number;
-			providers?: Partial<Record<VSCloneModelVendor, { enabled?: boolean }>>;
-		} | undefined;
-		if (!parsed || parsed.version !== 1 || typeof parsed.providers !== 'object' || !parsed.providers) {
-			return {};
-		}
-
-		const providers: Partial<Record<VSCloneModelVendor, IVSCloneStoredProviderPreference>> = {};
-		for (const vendor of ['openai', 'anthropic', 'google'] satisfies VSCloneModelVendor[]) {
-			const enabled = parseBooleanFlag(parsed.providers[vendor]?.enabled);
-			if (enabled !== undefined) {
-				providers[vendor] = { enabled };
-			}
-		}
-		return providers;
-	} catch {
-		return {};
 	}
 }
 
@@ -332,7 +287,6 @@ function parseLegacyEligibility(raw: string | undefined): Record<string, IVSClon
 function toStoredPayload(state: IVSCloneStoredSettingsState): IVSCloneStoredSettingsPayload {
 	return {
 		version: 1,
-		providers: state.providers,
 		ineligibility: state.ineligibility,
 	};
 }
@@ -634,24 +588,6 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 		return this.state.eligibilityRecords.map(cloneEligibilityRecord);
 	}
 
-	async setProviderEnabled(vendor: VSCloneModelVendor, enabled: boolean): Promise<void> {
-		await this.initialize();
-		const previous = this.storedSettingsState.providers[vendor];
-		if (previous?.enabled === enabled) {
-			return;
-		}
-
-		this.storedSettingsState = {
-			...this.storedSettingsState,
-			providers: {
-				...this.storedSettingsState.providers,
-				[vendor]: { enabled },
-			},
-		};
-		this.storeSettingsState();
-		this.syncState('ready');
-	}
-
 	getIneligibilityRecord(modelIdentifier: string): IVSCloneModelIneligibilityRecord | undefined {
 		const record = this.storedSettingsState.ineligibility[modelIdentifier];
 		return record ? { modelIdentifier, reason: record.reason, markedAt: record.markedAt } : undefined;
@@ -665,7 +601,6 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 		}
 
 		this.storedSettingsState = {
-			...this.storedSettingsState,
 			ineligibility: {
 				...this.storedSettingsState.ineligibility,
 				[modelIdentifier]: {
@@ -694,7 +629,6 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 		}
 
 		this.storedSettingsState = {
-			...this.storedSettingsState,
 			ineligibility: nextIneligibility,
 		};
 		this.storeSettingsState();
@@ -734,23 +668,16 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 		}
 
 		const stored = parseStoredSettings(this.storageService.get(settingsStorageKey, StorageScope.PROFILE));
-		const migratedProviders = Object.keys(stored.providers).length > 0
-			? stored.providers
-			: {
-				...parseLegacyProviderPreferences(this.storageService.get(legacyProviderPreferencesStorageKey, StorageScope.PROFILE)),
-				...parseLegacyProviderPreferences(this.storageService.get(legacyProviderVisibilityStorageKey, StorageScope.PROFILE)),
-			};
 		const migratedIneligibility = Object.keys(stored.ineligibility).length > 0
 			? stored.ineligibility
 			: parseLegacyEligibility(this.storageService.get(legacyModelEligibilityStorageKey, StorageScope.PROFILE));
 
 		this.storedSettingsState = {
-			providers: migratedProviders,
 			ineligibility: migratedIneligibility,
 		};
 		this.storedSettingsLoaded = true;
 
-		if (Object.keys(migratedProviders).length > 0 || Object.keys(migratedIneligibility).length > 0) {
+		if (Object.keys(migratedIneligibility).length > 0) {
 			this.storeSettingsState();
 		}
 	}
@@ -813,24 +740,21 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 	private buildProviders(): readonly IVSCloneSettingsProviderState[] {
 		return VSCLONE_PROVIDER_SETTINGS_DEFAULTS
 			.map<IVSCloneSettingsProviderState>(providerDefault => {
-				const enabled = this.storedSettingsState.providers[providerDefault.vendor]?.enabled ?? providerDefault.enabled;
 				const providerState = this.oauthService.state.providers[providerDefault.vendor];
-				const visibleModels = enabled
-					? VSCLONE_MODEL_DEFINITIONS_BY_PROVIDER[providerDefault.vendor]
-					: [];
+				const definedModels = VSCLONE_MODEL_DEFINITIONS_BY_PROVIDER[providerDefault.vendor];
+				const visibleModels = providerState.isReady ? definedModels : [];
 				const selectableModelCount = visibleModels.filter(model => {
 					const identifier = `${providerDefault.vendor}/${model.modelId}`;
-					return providerState.isReady && !this.storedSettingsState.ineligibility[identifier];
+					return !this.storedSettingsState.ineligibility[identifier];
 				}).length;
 
 				return {
 					vendor: providerDefault.vendor,
 					displayName: providerDefault.displayName,
-					enabled,
 					status: providerState.isReady ? 'available' : 'requires_sign_in',
 					modelCount: visibleModels.length,
 					selectableModelCount,
-					definedModelCount: VSCLONE_MODEL_DEFINITIONS_BY_PROVIDER[providerDefault.vendor].length,
+					definedModelCount: definedModels.length,
 				};
 			})
 			.sort(byProviderOrder);
@@ -840,10 +764,6 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 		const models: IVSCloneSettingsModelState[] = [];
 
 		for (const provider of providers) {
-			if (!provider.enabled) {
-				continue;
-			}
-
 			for (const definition of VSCLONE_MODEL_DEFINITIONS_BY_PROVIDER[provider.vendor]) {
 				const identifier = `${provider.vendor}/${definition.modelId}`;
 				const ineligibilityRecord = this.storedSettingsState.ineligibility[identifier];
@@ -1101,7 +1021,7 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 		modelByIdentifier: ReadonlyMap<string, IVSCloneSettingsModelState>,
 	): readonly IVSCloneSettingsEligibilityRecord[] {
 		const providerRecords = providers
-			.filter(provider => provider.enabled && provider.status === 'requires_sign_in')
+			.filter(provider => provider.status === 'requires_sign_in')
 			.map<IVSCloneSettingsEligibilityRecord>(provider => ({
 				scope: 'provider',
 				source: 'oauth_sign_in',
@@ -1144,14 +1064,14 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 	}
 
 	private emitSelectionChanges(previousState: IVSCloneSettingsState, nextState: IVSCloneSettingsState): void {
-			for (const definition of VSCLONE_SETTINGS_FEATURE_DEFINITIONS) {
-				// Feature defaults are location-scoped and intentionally synthetic, so restore events clone
-				// them into full selection payloads with no thread binding instead of reusing the persisted object.
-				const previousSelection = toLocationSelection(previousState.featureSelections[definition.location]);
-				const currentSelection = toLocationSelection(nextState.featureSelections[definition.location]);
-				if (selectionsEqual(previousSelection, currentSelection)) {
-					continue;
-				}
+		for (const definition of VSCLONE_SETTINGS_FEATURE_DEFINITIONS) {
+			// Feature defaults are location-scoped and intentionally synthetic, so restore events clone
+			// them into full selection payloads with no thread binding instead of reusing the persisted object.
+			const previousSelection = toLocationSelection(previousState.featureSelections[definition.location]);
+			const currentSelection = toLocationSelection(nextState.featureSelections[definition.location]);
+			if (selectionsEqual(previousSelection, currentSelection)) {
+				continue;
+			}
 			this.fireSelectionChange({
 				threadId: undefined,
 				previous: previousSelection,

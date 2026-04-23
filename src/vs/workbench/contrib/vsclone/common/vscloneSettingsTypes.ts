@@ -61,7 +61,6 @@ export function createEmptyVSCloneModelSelectionOfFeature(): Record<VSCloneSetti
 export interface IVSCloneSettingsProviderState {
 	readonly vendor: VSCloneModelVendor;
 	readonly displayName: string;
-	readonly enabled: boolean;
 	readonly status: 'available' | 'requires_sign_in';
 	readonly modelCount: number;
 	readonly selectableModelCount: number;
@@ -96,15 +95,6 @@ export interface IVSCloneModelIneligibilityRecord {
 }
 
 /**
- * Provider visibility stays profile-scoped because it is a user preference rather than a property
- * of any one workspace's thread graph. The settings service persists only the override bit here
- * and recomputes the rest of the provider/model projection from OAuth plus static model metadata.
- */
-export interface IVSCloneStoredProviderPreference {
-	readonly enabled: boolean;
-}
-
-/**
  * Eligibility remains an OAuth-account-side effect, so the persisted payload stores the raw
  * reason text and timestamp while the live settings projection decides whether that record should
  * currently surface as a disabled picker entry.
@@ -115,7 +105,6 @@ export interface IVSCloneStoredModelIneligibility {
 }
 
 export interface IVSCloneStoredSettingsState {
-	readonly providers: Partial<Record<VSCloneModelVendor, IVSCloneStoredProviderPreference>>;
 	readonly ineligibility: Record<string, IVSCloneStoredModelIneligibility>;
 }
 

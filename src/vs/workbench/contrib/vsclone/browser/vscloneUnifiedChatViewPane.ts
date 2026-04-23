@@ -16,7 +16,6 @@ import {
 	getWindow,
 } from "../../../../base/browser/dom.js";
 import { RunOnceScheduler } from "../../../../base/common/async.js";
-import { Action } from "../../../../base/common/actions.js";
 import { onUnexpectedError } from "../../../../base/common/errors.js";
 import { MarkdownString } from "../../../../base/common/htmlContent.js";
 import {
@@ -716,19 +715,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		threadButton.setAttribute("aria-label", threadButtonLabel);
 		actions.appendChild(threadButton);
 
-		const overflowButton = document.createElement("button");
-		overflowButton.type = "button";
-		overflowButton.className = "vsclone-thread-action-overflow";
-		overflowButton.textContent = "\u22ef";
-		const overflowButtonLabel = localize(
-			"vsclone.thread.actions.more",
-			"More actions",
-		);
-		overflowButton.title = overflowButtonLabel;
-		overflowButton.setAttribute("aria-label", overflowButtonLabel);
-		overflowButton.setAttribute("aria-haspopup", "menu");
-		actions.appendChild(overflowButton);
-
 		const messages = document.createElement("div");
 		messages.className = "vsclone-thread-messages";
 		// Announce newly appended message bubbles without repeatedly reading the whole transcript.
@@ -963,60 +949,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				this.railVisible = true;
 				this.applyRailLayout();
 			}),
-		);
-
-		this._register(
-			addDisposableListener(
-				overflowButton,
-				EventType.CLICK,
-				(event: MouseEvent) => {
-					event.stopPropagation();
-					// Context menus allocate Action disposables on every open, so we tie their lifetime to
-					// the menu instance instead of registering them on the long-lived view.
-					const menuActions = new DisposableStore();
-					const actions = [
-						menuActions.add(new Action(
-							"vsclone.threadRail.copyPrompt",
-							localize("vsclone.thread.actions.copyPrompt", "Copy Prompt"),
-							undefined,
-							true,
-							() => this.copyPrompt(),
-						)),
-						menuActions.add(new Action(
-							"vsclone.threadRail.copyResponse",
-							localize(
-								"vsclone.thread.actions.copyResponse",
-								"Copy Response",
-							),
-							undefined,
-							true,
-							() => this.copyResponse(),
-						)),
-						menuActions.add(new Action(
-							"vsclone.threadRail.reusePrompt",
-							localize("vsclone.thread.actions.reusePrompt", "Reuse Prompt"),
-							undefined,
-							true,
-							() => this.reusePrompt(),
-						)),
-						menuActions.add(new Action(
-							"vsclone.threadRail.deleteThread",
-							localize(
-								"vsclone.thread.actions.deleteThread",
-								"Delete Thread",
-							),
-							undefined,
-							true,
-							() => this.deleteActiveThread(),
-						)),
-					];
-					this.contextMenuService.showContextMenu({
-						getAnchor: () => ({ x: event.clientX, y: event.clientY }),
-						getActions: () => actions,
-						onHide: () => menuActions.dispose(),
-					});
-				},
-			),
 		);
 
 		this._register(
@@ -1902,6 +1834,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		// the previous pass before replacing nodes to avoid leaking listeners.
 		this.renderedMarkdownDisposables.clear();
 		this.conversationList.replaceChildren();
+		this.conversationList.classList.toggle("hidden", !hasRuntimeNodes);
 		this.conversationEmptyState.classList.toggle(
 			"hidden",
 			hasRuntimeNodes,

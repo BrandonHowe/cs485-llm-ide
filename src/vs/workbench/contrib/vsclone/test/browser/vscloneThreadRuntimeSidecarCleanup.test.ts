@@ -131,7 +131,6 @@ suite('VSCloneThreadRuntimeSidecarCleanup', () => {
 			getRecentModels: () => [],
 			getRecentModelIdentifiers: () => [],
 			getEligibilityRecords: () => [],
-			setProviderEnabled: async () => undefined,
 			getIneligibilityRecord: () => undefined,
 			markModelIneligible: async () => undefined,
 			clearIneligibilityForVendor: async () => undefined,
