@@ -532,6 +532,18 @@
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 55%, transparent 45%);
 }
 
+.vsclone-reasoning-summary-spinner {
+	font-size: 11px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 55%, transparent 45%);
+	margin-left: 2px;
+}
+
+.vsclone-reasoning-block {
+	/* Sits directly inside an assistant bubble body. Strip the default margin so it lines up with
+	 * the assistant prose that follows it and doesn't inherit the narration-block's flat treatment. */
+	margin: 0 0 4px 0;
+}
+
 .vsclone-thinking-content {
 	padding: 6px 0 4px;
 }
@@ -1636,6 +1648,74 @@
 
 .vsclone-thread-reasoning-level.hidden {
 	display: none;
+}
+
+/* On/off toggle for models whose capability metadata sets `canTurnOffReasoning: true` but that
+ * do not expose a power slider. Sits next to the model switcher matching Void's `VoidSwitch`. */
+.vsclone-thread-reasoning-enabled {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+}
+
+.vsclone-thread-reasoning-enabled.hidden {
+	display: none;
+}
+
+.vsclone-thread-reasoning-enabled-label {
+	font-size: 11px;
+	font-weight: 600;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 70%, transparent 30%);
+}
+
+.vsclone-thread-reasoning-enabled-input {
+	width: 14px;
+	height: 14px;
+	cursor: pointer;
+	accent-color: var(--vscode-button-background);
+}
+
+.vsclone-thread-reasoning-enabled-input:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+
+/* Budget slider for Anthropic extended thinking and Gemini `thinkingConfig`. Matches Void's
+ * `VoidSlider` layout: label + slider + live token-count value. */
+.vsclone-thread-reasoning-budget {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+	min-width: 0;
+}
+
+.vsclone-thread-reasoning-budget.hidden {
+	display: none;
+}
+
+.vsclone-thread-reasoning-budget-label {
+	font-size: 11px;
+	font-weight: 600;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 70%, transparent 30%);
+}
+
+.vsclone-thread-reasoning-budget-input {
+	width: 72px;
+	cursor: pointer;
+	accent-color: var(--vscode-button-background);
+}
+
+.vsclone-thread-reasoning-budget-input:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+
+.vsclone-thread-reasoning-budget-value {
+	font-size: 11px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 60%, transparent 40%);
+	white-space: nowrap;
 }
 
 /* "+" context menu button and popup */

@@ -7,6 +7,7 @@ import { URI } from '../../../../base/common/uri.js';
 import type { IVSCloneChatTransportConversationMessage } from './vscloneChatTransportTypes.js';
 import type { IVSCloneContextSelection } from './vscloneContextSelectionTypes.js';
 import type { IVSCloneImageAttachment } from './vscloneImageAttachmentTypes.js';
+import type { IVSCloneLLMMessageReasoningBlock } from './vscloneLLMMessageTypes.js';
 import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
@@ -158,6 +159,8 @@ export interface IVSCloneThreadRuntimeRunContext {
 	readonly modelId: string;
 	readonly modelIdentifier: string;
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
+	readonly reasoningEnabled?: boolean;
+	readonly reasoningBudget?: number;
 	readonly systemMessage?: string;
 	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 	readonly contextSelections?: readonly IVSCloneContextSelection[];
@@ -236,6 +239,19 @@ export type IVSCloneThreadRuntimeMessage =
 		readonly metadata?: IVSCloneThreadRuntimeConversationMessageMetadata;
 		readonly createdAt: number;
 		readonly content: string;
+		/**
+		 * Mirrors Void's `reasoning: string` on the assistant chat turn. Persisted so reload can
+		 * restore the collapsible "Thinking..." section without rerunning the model, and so that
+		 * `fullReasoning` deltas from the LLM transport survive the runtime-owned message stream.
+		 */
+		readonly reasoning?: string;
+		/**
+		 * Mirrors Void's `anthropicReasoning: AnthropicReasoning[] | null`. These blocks carry the
+		 * server-issued `signature` string and must be replayed verbatim when the assistant turn is
+		 * sent back to Anthropic on a subsequent tool-chain iteration. Keep the field optional so
+		 * existing persisted turns without reasoning deserialize cleanly.
+		 */
+		readonly anthropicReasoning?: readonly IVSCloneLLMMessageReasoningBlock[] | null;
 	}
 	| IVSCloneThreadRuntimeToolRequestMessage
 	| IVSCloneThreadRuntimeToolProgressMessage
@@ -272,6 +288,17 @@ export interface IVSCloneThreadRuntimeRunOptions {
 	readonly modelId: string;
 	readonly modelIdentifier: string;
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
+	/**
+	 * Mirrors Void's `ModelSelectionOptions.reasoningEnabled`. Forwarded to the main-process prepared
+	 * payload so the provider adapter can honor the user's explicit on/off toggle even when the model
+	 * defaults to reasoning-on.
+	 */
+	readonly reasoningEnabled?: boolean;
+	/**
+	 * Mirrors Void's `ModelSelectionOptions.reasoningBudget`. Only consumed by budget-slider providers
+	 * (Anthropic extended thinking and Gemini `thinkingConfig`); ignored by effort-slider providers.
+	 */
+	readonly reasoningBudget?: number;
 	readonly previousTurns?: readonly IVSCloneChatTransportConversationMessage[];
 	readonly systemMessage?: string;
 	readonly imageAttachments?: readonly IVSCloneImageAttachment[];

@@ -8,7 +8,7 @@ import { VSCLONE_SETTINGS_FEATURE_NAMES, type VSCloneReasoningEffortLevel, type 
 import { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 
 export type VSCloneSettingsStatus = 'idle' | 'loading' | 'ready' | 'error';
-export type VSCloneFeatureModelSelection = Pick<IVSCloneModelSelection, 'location' | 'modelIdentifier' | 'vendor' | 'modelId' | 'modelName' | 'reasoningEffort' | 'selectedAt'>;
+export type VSCloneFeatureModelSelection = Pick<IVSCloneModelSelection, 'location' | 'modelIdentifier' | 'vendor' | 'modelId' | 'modelName' | 'reasoningEffort' | 'reasoningEnabled' | 'reasoningBudget' | 'selectedAt'>;
 
 export interface IVSCloneSettingsFeatureDefinition {
 	readonly featureName: VSCloneSettingsFeatureName;

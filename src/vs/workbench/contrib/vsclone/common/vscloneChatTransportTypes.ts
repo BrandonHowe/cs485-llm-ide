@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IVSCloneContextSelection } from './vscloneContextSelectionTypes.js';
+import type { IVSCloneLLMMessageReasoningBlock } from './vscloneLLMMessageTypes.js';
 import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
@@ -43,6 +44,13 @@ export type IVSCloneChatTransportConversationMessage =
 	| {
 		readonly role: 'assistant';
 		readonly content: string;
+		/**
+		 * Anthropic-specific signed reasoning blocks. Mirrors Void's assistant-turn
+		 * `anthropicReasoning` field. When present, the convert seam prepends them as `thinking`/
+		 * `redacted_thinking` content blocks on Anthropic requests so the server-issued signatures
+		 * stay intact across follow-up iterations.
+		 */
+		readonly anthropicReasoning?: readonly IVSCloneLLMMessageReasoningBlock[] | null;
 	}
 	| {
 		// Tool history is now carried structurally instead of being re-inferred from assistant XML.
@@ -70,6 +78,17 @@ export interface IVSCloneChatTransportRequestOptions {
 	readonly modelId: string;
 	readonly modelIdentifier: string;
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
+	/**
+	 * Mirrors Void's `ModelSelectionOptions.reasoningEnabled`. Forwarded from the selection so the
+	 * prepared payload can surface it to the provider adapter that decides whether to include a
+	 * `thinking` or `reasoning` fragment on the request.
+	 */
+	readonly reasoningEnabled?: boolean;
+	/**
+	 * Mirrors Void's `ModelSelectionOptions.reasoningBudget`. Anthropic and Gemini use this for their
+	 * extended-thinking budgets; effort-slider providers ignore the value.
+	 */
+	readonly reasoningBudget?: number;
 	readonly previousTurns?: readonly IVSCloneChatTransportConversationMessage[];
 	readonly currentTurn: IVSCloneChatTransportConversationMessage;
 	readonly systemMessage?: string;

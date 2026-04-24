@@ -238,8 +238,23 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		}
 
 		const context = this.getContext();
-		const preservedReasoningEffort = selected?.modelIdentifier === model.identifier && selected.reasoningEffort
-			? selected.reasoningEffort
+		// Preserve every reasoning field (effort, enabled, budget) when the user reselects the same
+		// model. Carrying only `reasoningEffort` silently reset `reasoningEnabled`/`reasoningBudget`
+		// to undefined, which flipped an explicitly-off slider back on and erased budget tweaks.
+		// Additionally drop any field whose capability is absent on the current model so a persisted
+		// stale value cannot outlive a capability change. Mirrors Void's capability-shaped filtering.
+		const isSameModel = selected?.modelIdentifier === model.identifier;
+		const capabilities = model.capabilities.reasoningCapabilities;
+		const reasoningSlider = capabilities ? capabilities.reasoningSlider : undefined;
+		const canTurnOffReasoning = capabilities ? capabilities.canTurnOffReasoning === true : false;
+		const preservedReasoningEffort = isSameModel && reasoningSlider?.type === 'effort_slider'
+			? selected?.reasoningEffort
+			: undefined;
+		const preservedReasoningEnabled = isSameModel && canTurnOffReasoning
+			? selected?.reasoningEnabled
+			: undefined;
+		const preservedReasoningBudget = isSameModel && reasoningSlider?.type === 'budget_slider'
+			? selected?.reasoningBudget
 			: undefined;
 		const nextSelection: IVSCloneModelSelection = {
 			threadId: context.threadId || undefined,
@@ -248,8 +263,10 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 			vendor: model.vendor,
 			modelId: model.modelId,
 			modelName: model.modelName,
-			// Preserve the user's current level when re-selecting the same reasoning model.
+			// Preserve the user's current reasoning configuration when re-selecting the same model.
 			reasoningEffort: preservedReasoningEffort,
+			reasoningEnabled: preservedReasoningEnabled,
+			reasoningBudget: preservedReasoningBudget,
 			selectedAt: Date.now(),
 		};
 		void this.settingsService.setSelectionForFeature(context.threadId, nextSelection);

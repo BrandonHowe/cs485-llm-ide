@@ -15,6 +15,7 @@ import {
 	IVSCloneLLMMessageAuthMaterial,
 	IVSCloneLLMMessageErrorPayload,
 	IVSCloneLLMMessageFinalPayload,
+	type IVSCloneLLMMessageReasoningBlock,
 	type IVSCloneLLMMessageToolCall,
 	type IVSCloneLLMPreparedFIMPayload,
 	type IVSCloneLLMPreparedChatPayload,
@@ -22,6 +23,12 @@ import {
 	IVSCloneLLMMessageTextPayload,
 	type IVSCloneOpenAILLMChatMessage,
 } from '../common/vscloneLLMMessageTypes.js';
+import {
+	getVSCloneProviderReasoningIOSettings,
+	getVSCloneReservedOutputTokenSpaceForReasoning,
+	getVSCloneSendableReasoningInfo,
+	type VSCloneSendableReasoningInfo,
+} from '../common/vscloneModelCapabilities.js';
 import { getVSCloneVisibleToolDefinitions, toVSCloneToolJsonSchema, type IVSCloneToolJsonSchema } from '../common/vscloneToolDefinitions.js';
 
 interface IVSCloneLLMMessageCallbacks {
@@ -45,7 +52,7 @@ type VSCloneOpenAIFunctionTool = import('openai').default.Responses.FunctionTool
 type VSCloneOpenAIResponse = import('openai').default.Responses.Response;
 type VSCloneOpenAIResponseOutputItem = import('openai').default.Responses.ResponseOutputItem;
 
-interface IVSCloneFIMTransportRequest {
+export interface IVSCloneFIMTransportRequest {
 	readonly url: string;
 	readonly body: Record<string, unknown>;
 }
@@ -283,6 +290,7 @@ async function sendOpenAIChatMessage(
 	const disposeAbort = bindAbortController(signal, () => stream.controller.abort());
 
 	let fullText = '';
+	let fullReasoning = '';
 	let toolCall = createEmptyToolCall();
 	let toolArgsJson = '';
 
@@ -298,7 +306,36 @@ async function sendOpenAIChatMessage(
 					callbacks.onText({
 						text: event.delta,
 						fullText,
-						fullReasoning: '',
+						fullReasoning,
+						toolCall: toolCall.name ? toolCall : undefined,
+					});
+					break;
+				case 'response.reasoning.delta': {
+					// OpenAI Responses: `delta` is typed as `unknown` in the SDK because the reasoning
+					// channel can carry structured updates. Treat a plain string as the textual delta and
+					// ignore anything else so we never leak non-string `[object Object]` into the UI.
+					const reasoningDelta = typeof event.delta === 'string' ? event.delta : '';
+					if (!reasoningDelta) {
+						continue;
+					}
+					fullReasoning += reasoningDelta;
+					callbacks.onText({
+						text: '',
+						fullText,
+						fullReasoning,
+						toolCall: toolCall.name ? toolCall : undefined,
+					});
+					break;
+				}
+				case 'response.reasoning_summary_text.delta':
+					if (!event.delta) {
+						continue;
+					}
+					fullReasoning += event.delta;
+					callbacks.onText({
+						text: '',
+						fullText,
+						fullReasoning,
 						toolCall: toolCall.name ? toolCall : undefined,
 					});
 					break;
@@ -344,7 +381,7 @@ async function sendOpenAIChatMessage(
 	const finalToolCall = toVSCloneToolCallFromOpenAIResponse(finalResponse) ?? (toolCall.name ? toolCall : undefined);
 	callbacks.onFinalMessage({
 		fullText,
-		fullReasoning: '',
+		fullReasoning,
 		toolCall: finalToolCall,
 		anthropicReasoning: null,
 	});
@@ -370,6 +407,7 @@ async function sendAnthropicChatMessage(
 	const disposeAbort = bindAbortController(signal, () => stream.controller.abort());
 
 	let fullText = '';
+	let fullReasoning = '';
 	let toolCall = createEmptyToolCall();
 	let toolArgsJson = '';
 
@@ -385,6 +423,37 @@ async function sendAnthropicChatMessage(
 						};
 						continue;
 					}
+					if (event.content_block.type === 'thinking') {
+						// Anthropic streams the `thinking` block as incremental deltas below. Emit the
+						// start-block text so the reasoning transcript is not missed when the provider
+						// front-loads content on the start event instead of the first delta.
+						if (event.content_block.thinking) {
+							if (fullReasoning) {
+								fullReasoning += '\n\n';
+							}
+							fullReasoning += event.content_block.thinking;
+							callbacks.onText({
+								text: '',
+								fullText,
+								fullReasoning,
+								toolCall: toolCall.name ? toolCall : undefined,
+							});
+						}
+						continue;
+					}
+					if (event.content_block.type === 'redacted_thinking') {
+						if (fullReasoning) {
+							fullReasoning += '\n\n';
+						}
+						fullReasoning += '[redacted_thinking]';
+						callbacks.onText({
+							text: '',
+							fullText,
+							fullReasoning,
+							toolCall: toolCall.name ? toolCall : undefined,
+						});
+						continue;
+					}
 					if (event.content_block.type !== 'text' || !event.content_block.text) {
 						continue;
 					}
@@ -393,11 +462,24 @@ async function sendAnthropicChatMessage(
 					callbacks.onText({
 						text: event.content_block.text,
 						fullText,
-						fullReasoning: '',
+						fullReasoning,
 						toolCall: toolCall.name ? toolCall : undefined,
 					});
 					break;
 				case 'content_block_delta':
+					if (event.delta.type === 'thinking_delta') {
+						if (!event.delta.thinking) {
+							continue;
+						}
+						fullReasoning += event.delta.thinking;
+						callbacks.onText({
+							text: '',
+							fullText,
+							fullReasoning,
+							toolCall: toolCall.name ? toolCall : undefined,
+						});
+						continue;
+					}
 					if (event.delta.type !== 'text_delta' || !event.delta.text) {
 						if (event.delta.type === 'input_json_delta') {
 							toolArgsJson += event.delta.partial_json ?? '';
@@ -412,7 +494,7 @@ async function sendAnthropicChatMessage(
 					callbacks.onText({
 						text: event.delta.text,
 						fullText,
-						fullReasoning: '',
+						fullReasoning,
 						toolCall: toolCall.name ? toolCall : undefined,
 					});
 					break;
@@ -428,12 +510,40 @@ async function sendAnthropicChatMessage(
 
 	const finalMessage = await stream.finalMessage();
 	const finalToolCall = toVSCloneToolCallFromAnthropicMessage(finalMessage) ?? (toolCall.name ? toolCall : undefined);
+	const anthropicReasoning = collectAnthropicReasoningBlocks(finalMessage);
 	callbacks.onFinalMessage({
 		fullText,
-		fullReasoning: '',
+		fullReasoning,
 		toolCall: finalToolCall,
-		anthropicReasoning: null,
+		anthropicReasoning,
 	});
+}
+
+// Mirrors Void's `anthropicReasoning` collection out of the final message: keep only the thinking
+// and redacted_thinking blocks in their original order so subsequent turns can replay them back
+// into Anthropic verbatim with the server-issued signatures intact.
+function collectAnthropicReasoningBlocks(
+	message: VSCloneAnthropicMessage,
+): readonly IVSCloneLLMMessageReasoningBlock[] | null {
+	const blocks: IVSCloneLLMMessageReasoningBlock[] = [];
+	for (const contentBlock of message.content) {
+		if (contentBlock.type === 'thinking') {
+			// Signature is required for Anthropic to verify the replayed thinking block on the next
+			// turn. The SDK guarantees both fields on a final `thinking` block, so preserve them as-is
+			// instead of defaulting to a synthetic empty signature that the server would reject.
+			blocks.push({
+				type: 'thinking',
+				thinking: contentBlock.thinking,
+				signature: contentBlock.signature,
+			});
+		} else if (contentBlock.type === 'redacted_thinking') {
+			blocks.push({
+				type: 'redacted_thinking',
+				data: contentBlock.data,
+			});
+		}
+	}
+	return blocks.length > 0 ? blocks : null;
 }
 
 async function sendGoogleChatMessage(
@@ -449,6 +559,7 @@ async function sendGoogleChatMessage(
 		// API-key plumbing replace the renderer-supplied OAuth headers that VSClone explicitly passes.
 		// Load it lazily so renderer-hosted bridge tests can import this Electron module graph without
 		// having to resolve the Node-only `google-auth-library` package before any Google request runs.
+		// eslint-disable-next-line local/code-no-dangerous-type-assertions
 		googleAuthOptions: {
 			authClient: await createGooglePassThroughAuthClient(),
 		} as never,
@@ -553,28 +664,31 @@ function buildOpenAIChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 		stream: true as const,
 	};
 
-	if (!prepared.reasoningEffort) {
-		return baseRequest;
-	}
-
-	return {
-		...baseRequest,
-		reasoning: {
-			effort: toOpenAIReasoningEffort(prepared.reasoningEffort),
-		},
-	};
+	// Mirror Void's IO-settings path: ask the provider adapter what (if anything) to inject. When
+	// the adapter returns null (reasoning disabled or not supported), attach no reasoning field at
+	// all -- matching Void's `getSendableReasoningInfo` behavior rather than falling back to the raw
+	// `reasoningEffort` selection.
+	const reasoningFragment = buildProviderReasoningFragment(prepared);
+	return reasoningFragment ? { ...baseRequest, ...reasoningFragment } : baseRequest;
 }
 
 function buildAnthropicChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 	const apiModelId = resolveVSCloneApiModelId('anthropic', prepared.modelId);
 	assertSupportsAnthropicOAuthMessagesModel(apiModelId);
 
-	return {
+	const reasoningFragment = buildProviderReasoningFragment(prepared);
+	// Mirror Void's `getReservedOutputTokenSpace`: when reasoning is on, reserve the model-specific
+	// override; otherwise fall back to Anthropic's required minimum so the request still validates.
+	const reservedOutputTokenSpace = getVSCloneReservedOutputTokenSpaceForReasoning(
+		prepared.vendor,
+		prepared.modelId,
+		{ isReasoningEnabled: reasoningFragment !== null },
+	);
+
+	const baseRequest = {
 		model: apiModelId,
 		messages: prepared.messages as readonly IVSCloneAnthropicLLMChatMessage[],
-		max_tokens: 16384,
-		// The prepared-message seam now owns tool/result conversion, but Anthropic reasoning blocks
-		// are still omitted until the live runtime can round-trip them end-to-end.
+		max_tokens: reservedOutputTokenSpace ?? 4_096,
 		system: prepared.separateSystemMessage?.trim() || defaultSystemMessage,
 		tools: buildAnthropicTools(prepared.mode),
 		tool_choice: {
@@ -582,11 +696,14 @@ function buildAnthropicChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 			disable_parallel_tool_use: true,
 		},
 	};
+
+	return reasoningFragment ? { ...baseRequest, ...reasoningFragment } : baseRequest;
 }
 
 function buildGoogleChatRequest(prepared: IVSCloneLLMPreparedChatPayload, signal: AbortSignal) {
 	const apiModelId = resolveVSCloneApiModelId('google', prepared.modelId);
 	const googleTools = buildGoogleTools(prepared.mode);
+	const reasoningFragment = buildProviderReasoningFragment(prepared);
 	return {
 		model: apiModelId,
 		contents: prepared.messages as readonly IVSCloneGeminiLLMChatMessage[],
@@ -601,8 +718,30 @@ function buildGoogleChatRequest(prepared: IVSCloneLLMPreparedChatPayload, signal
 				},
 				tools: googleTools,
 			} : {}),
+			...(reasoningFragment ?? {}),
 		},
 	};
+}
+
+/**
+ * Mirrors Void's reasoning-injection seam: resolve the sendable info from the prepared payload and
+ * ask the provider's IO-settings adapter to return the request-level fragment it wants merged in.
+ * VSClone does not carry Void's full `ModelSelectionOptions` on the transport yet, so we synthesize
+ * the minimum shape from the already-prepared fields before calling the helper.
+ */
+function buildProviderReasoningFragment(prepared: IVSCloneLLMPreparedChatPayload): Record<string, unknown> | null {
+	const info: VSCloneSendableReasoningInfo = getVSCloneSendableReasoningInfo(
+		'Chat',
+		prepared.vendor,
+		prepared.modelId,
+		{
+			reasoningEnabled: prepared.reasoningEnabled,
+			reasoningBudget: prepared.reasoningBudget,
+			reasoningEffort: prepared.reasoningEffort,
+		},
+	);
+	const settings = getVSCloneProviderReasoningIOSettings(prepared.vendor);
+	return settings.input?.includeInPayload?.(info) ?? null;
 }
 
 function getFIMEndpointMode(_prepared: IVSCloneLLMPreparedFIMPayload): VSCloneFIMEndpointMode {
@@ -624,7 +763,7 @@ function supportsOpenAICompletionTemperature(prepared: IVSCloneLLMPreparedFIMPay
 	return !prepared.modelId.startsWith('gpt-5');
 }
 
-function buildOpenAIFIMRequest(prepared: IVSCloneLLMPreparedFIMPayload): IVSCloneFIMTransportRequest {
+export function buildOpenAIFIMRequest(prepared: IVSCloneLLMPreparedFIMPayload): IVSCloneFIMTransportRequest {
 	const apiModelId = resolveVSCloneApiModelId('openai', prepared.modelId);
 	const body: Record<string, unknown> = {
 		model: apiModelId,
@@ -637,16 +776,42 @@ function buildOpenAIFIMRequest(prepared: IVSCloneLLMPreparedFIMPayload): IVSClon
 	if (supportsOpenAICompletionTemperature(prepared) && prepared.prompt.temperature !== undefined) {
 		body.temperature = prepared.prompt.temperature;
 	}
-	if (prepared.reasoningEffort) {
-		body.reasoning = {
-			effort: toOpenAIReasoningEffort(prepared.reasoningEffort),
-		};
+	// Route FIM through the same gating the Chat path uses so an effort-slider `'none'` (or any off
+	// configuration) produces a request body with no `reasoning` property at all. Without this the
+	// autocomplete fallback that explicitly asks for `reasoningEffort: 'none'` would still emit
+	// `reasoning: { effort: 'minimal' }` via `toVSCloneOpenAIReasoningEffort`.
+	const reasoningFragment = buildOpenAIFIMReasoningFragment(prepared);
+	if (reasoningFragment) {
+		Object.assign(body, reasoningFragment);
 	}
 
 	return {
 		url: defaultOAuthProviderConfig.openai.apiEndpoint,
 		body,
 	};
+}
+
+/**
+ * OpenAI-only FIM reasoning fragment builder. Mirrors Void's provider FIM layout: only the
+ * OpenAI-compatible FIM path accepts a `reasoning` field (VSClone's OpenAI FIM routes through the
+ * Responses endpoint), so this helper is not shared with the Anthropic or Google FIM builders --
+ * Void's Anthropic/Gemini providers declare `sendFIM: null` and have no FIM reasoning pathway at
+ * all. Autocomplete only exposes `reasoningEffort` on the selection, so the synthesized
+ * `IVSCloneModelSelectionOptions` uses that lone field and relies on
+ * `getVSCloneSendableReasoningInfo` to return `null` for effort-slider `'none'` and for any model
+ * whose capability shape does not support reasoning.
+ */
+function buildOpenAIFIMReasoningFragment(prepared: IVSCloneLLMPreparedFIMPayload): Record<string, unknown> | null {
+	const info: VSCloneSendableReasoningInfo = getVSCloneSendableReasoningInfo(
+		'Chat',
+		prepared.vendor,
+		prepared.modelId,
+		{
+			reasoningEffort: prepared.reasoningEffort,
+		},
+	);
+	const settings = getVSCloneProviderReasoningIOSettings(prepared.vendor);
+	return settings.input?.includeInPayload?.(info) ?? null;
 }
 
 function buildAnthropicFIMRequest(prepared: IVSCloneLLMPreparedFIMPayload): IVSCloneFIMTransportRequest {
@@ -1212,34 +1377,6 @@ function assertSupportsAnthropicOAuthMessagesModel(modelId: string): void {
 		throw new Error(
 			'Anthropic OAuth messages currently support only Claude Haiku 4.5 and Claude Haiku 3 in VSClone. Re-select an Anthropic Haiku model.',
 		);
-	}
-}
-
-type OpenAIReasoningEffort =
-	| 'none'
-	| 'minimal'
-	| 'low'
-	| 'medium'
-	| 'high'
-	| 'xhigh';
-
-function toOpenAIReasoningEffort(level: NonNullable<IVSCloneLLMPreparedChatPayload['reasoningEffort']>): OpenAIReasoningEffort {
-	switch (level) {
-		case 'xhigh':
-		case 'max':
-			return 'xhigh';
-		case 'high':
-			return 'high';
-		case 'medium':
-		case 'standard':
-			return 'medium';
-		case 'low':
-		case 'lite':
-			return 'low';
-		case 'minimal':
-			return 'minimal';
-		case 'none':
-			return 'none';
 	}
 }
 

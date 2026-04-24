@@ -152,6 +152,7 @@ suite('VSCloneThreadRuntimeService', () => {
 			getIneligibilityRecord: () => undefined,
 			markModelIneligible: async () => undefined,
 			clearIneligibilityForVendor: async () => undefined,
+			sanitizeReasoningFields: (_modelIdentifier, fields) => ({ ...fields }),
 		};
 		const toolRuntimeService: IVSCloneToolRuntimeService = {
 			_serviceBrand: undefined,

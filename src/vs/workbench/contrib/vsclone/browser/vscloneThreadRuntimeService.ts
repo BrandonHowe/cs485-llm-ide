@@ -17,7 +17,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IVSCloneUnifiedChatBackendService } from '../common/backend/vscloneUnifiedChatBackendService.js';
 import type { IVSCloneChatTransportConversationMessage } from '../common/vscloneChatTransportTypes.js';
-import { IVSCloneLLMMessageRequestHandle, type IVSCloneLLMMessageToolCall } from '../common/vscloneLLMMessageTypes.js';
+import { IVSCloneLLMMessageRequestHandle, type IVSCloneLLMMessageReasoningBlock, type IVSCloneLLMMessageToolCall } from '../common/vscloneLLMMessageTypes.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneSettingsService } from '../common/vscloneSettingsService.js';
 import { formatToolResult, type VSCloneToolApprovalType } from '../common/vscloneToolDefinitions.js';
@@ -140,6 +140,17 @@ interface ILoopIterationResult {
 	readonly responseText: string;
 	readonly responseTranscriptText: string;
 	readonly toolCall?: IVSCloneLLMMessageToolCall;
+	/**
+	 * Streaming reasoning text captured from the provider. Mirrors Void's `fullReasoning` and is
+	 * persisted onto the assistant turn so reload and branch operations see the same "Thinking..."
+	 * content without rerunning the model.
+	 */
+	readonly reasoning?: string;
+	/**
+	 * Anthropic-specific signed thinking blocks. Round-tripped verbatim on subsequent turns so the
+	 * provider can verify the server-issued signature. Null when the provider did not emit any.
+	 */
+	readonly anthropicReasoning?: readonly IVSCloneLLMMessageReasoningBlock[] | null;
 	readonly errorMessage?: string;
 	readonly aborted: boolean;
 }
@@ -233,6 +244,8 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			modelId: options.modelId,
 			modelIdentifier: options.modelIdentifier,
 			reasoningEffort: options.reasoningEffort,
+			reasoningEnabled: options.reasoningEnabled,
+			reasoningBudget: options.reasoningBudget,
 			systemMessage: options.systemMessage,
 			imageAttachments: options.imageAttachments,
 			contextSelections: options.contextSelections,
@@ -939,7 +952,14 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				return;
 			}
 
-			messages.push({ role: 'assistant', content: visibleAssistantText });
+			messages.push({
+				role: 'assistant',
+				content: visibleAssistantText,
+				// Mirror Void: carry the signed Anthropic thinking blocks onto the stored assistant
+				// turn so the follow-up request replays them verbatim. Anthropic rejects multi-turn
+				// requests that drop the server-issued signatures.
+				anthropicReasoning: iterationResult.anthropicReasoning,
+			});
 			messages.push({
 				role: 'tool',
 				id: toolCall.id,
@@ -1004,6 +1024,8 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		let responseText = '';
 		let responseTranscriptText = '';
 		let toolCall: IVSCloneLLMMessageToolCall | undefined;
+		let reasoning = '';
+		let anthropicReasoning: readonly IVSCloneLLMMessageReasoningBlock[] | null = null;
 		let errorMessage: string | undefined;
 		let aborted = false;
 
@@ -1014,6 +1036,8 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					responseText,
 					responseTranscriptText,
 					toolCall,
+					reasoning,
+					anthropicReasoning,
 					aborted: true,
 				};
 			}
@@ -1022,6 +1046,8 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					responseText,
 					responseTranscriptText,
 					toolCall,
+					reasoning,
+					anthropicReasoning,
 					errorMessage: `Not signed in to ${options.vendor}`,
 					aborted: false,
 				};
@@ -1043,12 +1069,21 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					modelId: options.modelId,
 					modelIdentifier: options.modelIdentifier,
 					reasoningEffort: options.reasoningEffort,
+					reasoningEnabled: options.reasoningEnabled,
+					reasoningBudget: options.reasoningBudget,
 					previousTurns: messages.slice(0, -1),
 					currentTurn,
 					systemMessage: options.systemMessage,
 				}),
 			}, {
 				onText: payload => {
+					// Reasoning deltas arrive alongside text deltas on the same stream; keep the latest
+					// cumulative reasoning string so reload and the collapsible UI both see the stream-
+					// time "Thinking..." content without reparsing provider transport chunks.
+					if (payload.fullReasoning !== undefined) {
+						reasoning = payload.fullReasoning;
+						this.recordAssistantReasoning(options.threadId, reasoning);
+					}
 					if (!payload.text) {
 						return;
 					}
@@ -1065,11 +1100,14 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					// or only returns a native tool call with no text deltas. Syncing the runtime-owned
 					// assistant message here avoids silently dropping zero-text tool turns.
 					responseText = payload.fullText;
+					reasoning = payload.fullReasoning ?? reasoning;
+					anthropicReasoning = payload.anthropicReasoning ?? null;
 					responseTranscriptText = this.replaceCurrentIterationTranscript(
 						options.threadId,
 						'',
 						payload.fullText,
 					);
+					this.applyAssistantReasoningFinal(options.threadId, reasoning, anthropicReasoning);
 					toolCall = payload.toolCall;
 				},
 				onAbort: () => {
@@ -1090,6 +1128,8 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			responseText,
 			responseTranscriptText,
 			toolCall,
+			reasoning,
+			anthropicReasoning,
 			errorMessage,
 			aborted,
 		};
@@ -1417,6 +1457,88 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			...current,
 			messages: [...current.messages, assistantMessage],
 			branchHeadMessageId: assistantMessage.id,
+			streamState: { kind: 'llm' },
+			lastUpdatedAt: Date.now(),
+		});
+	}
+
+	/**
+	 * Streams the latest reasoning string onto the current assistant turn. Mirrors Void's behavior
+	 * of attaching `reasoning` alongside `content` on the assistant chat message so reload and the
+	 * collapsible UI see the same "Thinking..." text without reparsing transport events.
+	 */
+	private recordAssistantReasoning(threadId: string, reasoning: string): void {
+		const current = this.states.get(threadId);
+		if (!current) {
+			return;
+		}
+
+		const lastMessage = current.messages.at(-1);
+		if (lastMessage?.role === 'assistant') {
+			if ((lastMessage.reasoning ?? '') === reasoning) {
+				return;
+			}
+			const updatedMessages = [...current.messages];
+			updatedMessages[updatedMessages.length - 1] = this.normalizeRuntimeConversationMessage({
+				...lastMessage,
+				reasoning,
+			}, current.mode);
+			this.setState(threadId, {
+				...current,
+				messages: updatedMessages,
+				branchHeadMessageId: lastMessage.id,
+				streamState: { kind: 'llm' },
+				lastUpdatedAt: Date.now(),
+			});
+			return;
+		}
+
+		// No assistant message yet (e.g. the provider buffers text until the final event). Create an
+		// empty-text assistant turn so the reasoning has somewhere to live until text arrives.
+		const assistantMessage = this.createMessage({
+			role: 'assistant',
+			mode: current.mode ?? 'act',
+			createdAt: Date.now(),
+			content: '',
+			reasoning,
+		});
+		this.setState(threadId, {
+			...current,
+			messages: [...current.messages, assistantMessage],
+			branchHeadMessageId: assistantMessage.id,
+			streamState: { kind: 'llm' },
+			lastUpdatedAt: Date.now(),
+		});
+	}
+
+	/**
+	 * Apply the final reasoning snapshot: the cumulative `reasoning` text plus the verbatim
+	 * Anthropic thinking blocks. The blocks must persist exactly as received so a later turn can
+	 * replay them back into Anthropic with the server-issued signatures intact.
+	 */
+	private applyAssistantReasoningFinal(
+		threadId: string,
+		reasoning: string,
+		anthropicReasoning: readonly IVSCloneLLMMessageReasoningBlock[] | null,
+	): void {
+		const current = this.states.get(threadId);
+		if (!current) {
+			return;
+		}
+		const lastMessage = current.messages.at(-1);
+		if (lastMessage?.role !== 'assistant') {
+			return;
+		}
+		const updatedMessages = [...current.messages];
+		updatedMessages[updatedMessages.length - 1] = this.normalizeRuntimeConversationMessage({
+			...lastMessage,
+			reasoning,
+			anthropicReasoning,
+		}, current.mode);
+		this.setState(threadId, {
+			...current,
+			messages: updatedMessages,
+			branchHeadMessageId: lastMessage.id,
 			streamState: { kind: 'llm' },
 			lastUpdatedAt: Date.now(),
 		});
@@ -1965,7 +2087,11 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					break;
 				}
 				case 'assistant':
-					messages.push({ role: 'assistant', content: message.content });
+					messages.push({
+						role: 'assistant',
+						content: message.content,
+						...(message.anthropicReasoning ? { anthropicReasoning: message.anthropicReasoning } : {}),
+					});
 					break;
 				case 'tool':
 					if (message.id === excludedToolResultMessageId) {
@@ -1999,8 +2125,20 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	): void {
 		// Persisted tool decisions must resume from the runtime transcript so reload-time approvals
 		// and rejections produce the same assistant follow-up the live loop would have emitted.
+		// Sanitize the persisted reasoning fields against the current model's capabilities before
+		// replaying so a stale `reasoningEnabled: false` cannot survive a capability change. Mirrors
+		// the capability-aware normalization applied to thread-bound selections on load. Does not
+		// touch `anthropicReasoning`, which lives on the assistant message in `previousTurns`.
+		const sanitizedReasoning = this.settingsService.sanitizeReasoningFields(pendingToolRequest.run.modelIdentifier, {
+			reasoningEffort: pendingToolRequest.run.reasoningEffort,
+			reasoningEnabled: pendingToolRequest.run.reasoningEnabled,
+			reasoningBudget: pendingToolRequest.run.reasoningBudget,
+		});
 		const resumeHandle = this.runThread({
 			...pendingToolRequest.run,
+			reasoningEffort: sanitizedReasoning.reasoningEffort,
+			reasoningEnabled: sanitizedReasoning.reasoningEnabled,
+			reasoningBudget: sanitizedReasoning.reasoningBudget,
 			threadId,
 			promptText: '',
 			previousTurns: this.toAgentLoopConversationMessagesFromRuntime(threadId),

@@ -20,7 +20,7 @@ import { type IVSCloneModelSelection } from '../../common/vscloneModelSelectionT
 import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
 import { IVSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
 import type { IVSClonePromptContext } from '../../common/vsclonePrompts.js';
-import { IVSCloneSettingsService } from '../../common/vscloneSettingsService.js';
+import { IVSCloneReasoningFieldOverrides, IVSCloneSettingsService } from '../../common/vscloneSettingsService.js';
 import type { IVSCloneSettingsState } from '../../common/vscloneSettingsTypes.js';
 import { VSCloneUnifiedChatBackendService } from '../../common/backend/vscloneUnifiedChatBackendService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
@@ -97,6 +97,7 @@ class UnusedSettingsService implements IVSCloneSettingsService {
 	getIneligibilityRecord() { return undefined; }
 	async markModelIneligible(): Promise<void> { }
 	async clearIneligibilityForVendor(): Promise<void> { }
+	sanitizeReasoningFields(_modelIdentifier: string, fields: IVSCloneReasoningFieldOverrides): IVSCloneReasoningFieldOverrides { return { ...fields }; }
 }
 
 class UnusedPlanModeService implements IVSClonePlanModeService {

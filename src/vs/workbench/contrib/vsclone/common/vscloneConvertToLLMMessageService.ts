@@ -10,6 +10,7 @@ import { type IVSCloneImageAttachment, toVSCloneImageDataUrl } from './vscloneIm
 import {
 	type IVSCloneAnthropicLLMChatMessage,
 	type IVSCloneGeminiLLMChatMessage,
+	type IVSCloneLLMMessageReasoningBlock,
 	type IVSCloneLLMPreparedFIMPayload,
 	type IVSCloneLLMPreparedChatPayload,
 	type IVSCloneOpenAILLMChatMessage,
@@ -33,6 +34,7 @@ type IVSCloneSimplePreparedMessage =
 	| {
 		readonly role: 'assistant';
 		readonly content: string;
+		readonly anthropicReasoning?: readonly IVSCloneLLMMessageReasoningBlock[] | null;
 	}
 	| {
 		readonly role: 'tool';
@@ -62,6 +64,8 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					modelIdentifier: options.modelIdentifier,
 					mode: options.mode,
 					reasoningEffort: options.reasoningEffort,
+					reasoningEnabled: options.reasoningEnabled,
+					reasoningBudget: options.reasoningBudget,
 					messages: prepareOpenAIMessages(simpleMessages),
 					separateSystemMessage,
 				};
@@ -72,6 +76,8 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					modelIdentifier: options.modelIdentifier,
 					mode: options.mode,
 					reasoningEffort: options.reasoningEffort,
+					reasoningEnabled: options.reasoningEnabled,
+					reasoningBudget: options.reasoningBudget,
 					messages: prepareAnthropicMessages(simpleMessages),
 					separateSystemMessage,
 				};
@@ -82,6 +88,8 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					modelIdentifier: options.modelIdentifier,
 					mode: options.mode,
 					reasoningEffort: options.reasoningEffort,
+					reasoningEnabled: options.reasoningEnabled,
+					reasoningBudget: options.reasoningBudget,
 					messages: prepareGeminiMessages(simpleMessages),
 					separateSystemMessage,
 				};
@@ -135,6 +143,7 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					messages.push({
 						role: 'assistant',
 						content: message.content,
+						...(message.anthropicReasoning ? { anthropicReasoning: message.anthropicReasoning } : {}),
 					});
 					break;
 				case 'tool':
@@ -224,12 +233,27 @@ function prepareAnthropicMessages(messages: readonly IVSCloneSimplePreparedMessa
 						: message.content,
 				});
 				break;
-			case 'assistant':
+			case 'assistant': {
+				// When the assistant turn carries signed Anthropic thinking blocks, prepend them as
+				// first-class content parts so the server can verify the original signatures on the
+				// follow-up request. Mirrors Void's Anthropic content union.
+				const reasoningBlocks = message.anthropicReasoning ?? [];
+				if (reasoningBlocks.length === 0) {
+					preparedMessages.push({
+						role: 'assistant',
+						content: message.content,
+					});
+					break;
+				}
+				const textContent = message.content.length > 0
+					? [{ type: 'text' as const, text: message.content }]
+					: [];
 				preparedMessages.push({
 					role: 'assistant',
-					content: message.content,
+					content: [...reasoningBlocks, ...textContent],
 				});
 				break;
+			}
 			case 'tool': {
 				const previousMessage = preparedMessages.at(-1);
 				if (previousMessage?.role === 'assistant') {

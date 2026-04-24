@@ -17,7 +17,7 @@ import { IVSCloneThreadRuntimeHandle, IVSCloneThreadRuntimeRunOptions, IVSCloneT
 import { VSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
 import { IVSCloneModelSelection } from '../../common/vscloneModelSelectionTypes.js';
 import type { IVSClonePromptContext } from '../../common/vsclonePrompts.js';
-import { IVSCloneSettingsService } from '../../common/vscloneSettingsService.js';
+import { IVSCloneReasoningFieldOverrides, IVSCloneSettingsService } from '../../common/vscloneSettingsService.js';
 import type { IVSCloneSettingsState } from '../../common/vscloneSettingsTypes.js';
 
 class SlowSettingsService implements IVSCloneSettingsService {
@@ -80,6 +80,7 @@ class SlowSettingsService implements IVSCloneSettingsService {
 	getIneligibilityRecord() { return undefined; }
 	async markModelIneligible(): Promise<void> { }
 	async clearIneligibilityForVendor(): Promise<void> { }
+	sanitizeReasoningFields(_modelIdentifier: string, fields: IVSCloneReasoningFieldOverrides): IVSCloneReasoningFieldOverrides { return { ...fields }; }
 }
 
 class RecordingThreadRuntimeHandle implements IVSCloneThreadRuntimeHandle {

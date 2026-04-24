@@ -345,6 +345,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private addContextMenuToggle: HTMLSpanElement | undefined;
 	private reasoningEffortContainer: HTMLElement | undefined;
 	private reasoningEffortSelect: HTMLSelectElement | undefined;
+	private reasoningEnabledContainer: HTMLElement | undefined;
+	private reasoningEnabledInput: HTMLInputElement | undefined;
+	private reasoningBudgetContainer: HTMLElement | undefined;
+	private reasoningBudgetInput: HTMLInputElement | undefined;
+	private reasoningBudgetValueLabel: HTMLElement | undefined;
 	private composerImageStrip: HTMLElement | undefined;
 	private pendingImages: IPendingImageAttachment[] = [];
 	private composerContextStrip: HTMLElement | undefined;
@@ -367,6 +372,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	// The pane only keeps a transient pending set so repeated refreshes do not launch duplicate
 	// browser-local apply work while the engine bridge is still running.
 	private readonly pendingAssistantApplyMessageIds = new Set<string>();
+	/**
+	 * Sticky open/closed state for each assistant turn's reasoning dropdown. Mirrors Void's
+	 * `ReasoningWrapper` behavior: auto-open while streaming, auto-collapse when the final text
+	 * arrives, but respect a manual toggle afterwards. Stored by message id so repeated refresh
+	 * passes (which rebuild DOM from scratch) don't reset the user's explicit toggle.
+	 */
+	private readonly reasoningPanelStateByMessageId = new Map<string, { userToggled: boolean; open: boolean }>();
 	private readonly refreshRailScheduler = this._register(
 		new RunOnceScheduler(() => {
 			this.refreshRailRows();
@@ -772,6 +784,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.addContextMenuToggle = undefined;
 		this.reasoningEffortContainer = undefined;
 		this.reasoningEffortSelect = undefined;
+		this.reasoningEnabledContainer = undefined;
+		this.reasoningEnabledInput = undefined;
+		this.reasoningBudgetContainer = undefined;
+		this.reasoningBudgetInput = undefined;
+		this.reasoningBudgetValueLabel = undefined;
 		this.composerContextStrip = undefined;
 		this.mentionMenuRoot = undefined;
 		this.mentionMenuList = undefined;
@@ -816,6 +833,53 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			controls.appendChild(reasoningEffortHost);
 			this.reasoningEffortContainer = reasoningEffortHost;
 			this.reasoningEffortSelect = reasoningEffortSelect;
+
+			// Enabled toggle: only visible for models whose capability metadata sets
+			// `canTurnOffReasoning: true` AND has no `reasoningSlider`. When a slider exists
+			// (budget_slider or effort_slider) it owns the on/off affordance itself. Mirrors the
+			// `VoidSwitch` Void renders when reasoning can be explicitly suppressed without a slider.
+			const reasoningEnabledHost = document.createElement("div");
+			reasoningEnabledHost.className = "vsclone-thread-reasoning-enabled hidden";
+			const reasoningEnabledLabel = document.createElement("span");
+			reasoningEnabledLabel.className = "vsclone-thread-reasoning-enabled-label";
+			reasoningEnabledLabel.textContent = localize("vsclone.composer.reasoningEnabled", "Thinking");
+			const reasoningEnabledInput = document.createElement("input");
+			reasoningEnabledInput.type = "checkbox";
+			reasoningEnabledInput.className = "vsclone-thread-reasoning-enabled-input";
+			reasoningEnabledInput.setAttribute(
+				"aria-label",
+				localize("vsclone.composer.reasoningEnabled.aria", "Toggle reasoning"),
+			);
+			reasoningEnabledHost.appendChild(reasoningEnabledLabel);
+			reasoningEnabledHost.appendChild(reasoningEnabledInput);
+			controls.appendChild(reasoningEnabledHost);
+			this.reasoningEnabledContainer = reasoningEnabledHost;
+			this.reasoningEnabledInput = reasoningEnabledInput;
+
+			// Budget slider: only visible for budget-slider models (Anthropic extended thinking,
+			// Gemini `thinkingConfig.thinkingBudget`). Mirrors Void's `VoidSlider` inside the
+			// `ReasoningOptionSlider` branch where `reasoningBudgetSlider.type === 'budget_slider'`.
+			const reasoningBudgetHost = document.createElement("div");
+			reasoningBudgetHost.className = "vsclone-thread-reasoning-budget hidden";
+			const reasoningBudgetLabel = document.createElement("span");
+			reasoningBudgetLabel.className = "vsclone-thread-reasoning-budget-label";
+			reasoningBudgetLabel.textContent = localize("vsclone.composer.reasoningBudget", "Thinking");
+			const reasoningBudgetInput = document.createElement("input");
+			reasoningBudgetInput.type = "range";
+			reasoningBudgetInput.className = "vsclone-thread-reasoning-budget-input";
+			reasoningBudgetInput.setAttribute(
+				"aria-label",
+				localize("vsclone.composer.reasoningBudget.aria", "Reasoning token budget"),
+			);
+			const reasoningBudgetValue = document.createElement("span");
+			reasoningBudgetValue.className = "vsclone-thread-reasoning-budget-value";
+			reasoningBudgetHost.appendChild(reasoningBudgetLabel);
+			reasoningBudgetHost.appendChild(reasoningBudgetInput);
+			reasoningBudgetHost.appendChild(reasoningBudgetValue);
+			controls.appendChild(reasoningBudgetHost);
+			this.reasoningBudgetContainer = reasoningBudgetHost;
+			this.reasoningBudgetInput = reasoningBudgetInput;
+			this.reasoningBudgetValueLabel = reasoningBudgetValue;
 		}
 
 		// "+" context menu button with popup for adding images, files, and toggling plan mode.
@@ -1117,6 +1181,38 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				),
 			);
 		}
+		if (this.reasoningEnabledInput) {
+			this._register(
+				addDisposableListener(
+					this.reasoningEnabledInput,
+					EventType.CHANGE,
+					() => {
+						void this.updateReasoningEnabledSelection();
+					},
+				),
+			);
+		}
+		if (this.reasoningBudgetInput) {
+			this._register(
+				addDisposableListener(
+					this.reasoningBudgetInput,
+					'input',
+					() => {
+						// Live-update the value label as the user drags before committing persistence on change.
+						this.updateReasoningBudgetValueLabelFromInput();
+					},
+				),
+			);
+			this._register(
+				addDisposableListener(
+					this.reasoningBudgetInput,
+					EventType.CHANGE,
+					() => {
+						void this.updateReasoningBudgetSelection();
+					},
+				),
+			);
+		}
 
 		this.composerFocusDisposable.value = toDisposable(() => {
 			input.blur();
@@ -1125,6 +1221,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.updateComposerState();
 		this.refreshPlanModeControl();
 		this.refreshReasoningEffortControl();
+		this.refreshReasoningEnabledControl();
+		this.refreshReasoningBudgetControl();
 		if (this.modelSwitcher) {
 			void this.settingsService.refreshState();
 		}
@@ -1826,13 +1924,18 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const runtimeState = this.getThreadRuntimeState(this.activeThreadId);
+		// Prune the sticky reasoning-panel state map to ids that still exist in the current runtime
+		// snapshot. Prevents unbounded growth across long sessions or thread switches.
+		this.pruneReasoningPanelStateForRuntime(runtimeState);
+		// Refresh rebuilds the transcript DOM from scratch, so dispose markdown renderers from
+		// the previous pass before rendering the next pass. Clearing must happen BEFORE the render
+		// call so listeners added during render (e.g. the reasoning-toggle listener) are not
+		// immediately disposed along with the prior pass.
+		this.renderedMarkdownDisposables.clear();
 		const runtimeNodes = runtimeState
 			? this.renderRuntimeConversationNodes(runtimeState)
 			: [];
 		const hasRuntimeNodes = runtimeNodes.length > 0;
-		// Refresh rebuilds the transcript DOM from scratch, so dispose markdown renderers from
-		// the previous pass before replacing nodes to avoid leaking listeners.
-		this.renderedMarkdownDisposables.clear();
 		this.conversationList.replaceChildren();
 		this.conversationList.classList.toggle("hidden", !hasRuntimeNodes);
 		this.conversationEmptyState.classList.toggle(
@@ -1929,52 +2032,83 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private renderRuntimeAssistantNarrationBlock(
 		messages: readonly Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>[],
 	): HTMLElement | undefined {
-		const visibleMessages = messages
-			.map(message => ({ message, text: this.stripRuntimeAssistantWorkflowMarkup(message.content).trim() }))
-			.filter(entry => entry.text.length > 0);
-		if (visibleMessages.length === 0) {
+		// Void renders `chatMessage.reasoning` for every assistant message. An intermediate
+		// assistant turn whose only substance is a think-then-call-tool step still needs its
+		// reasoning panel rendered even though its visible text is empty. Classify each message
+		// so the final block can include both visible narration and reasoning-only turns.
+		type NarrationEntry = {
+			readonly message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>;
+			readonly text: string;
+			readonly reasoning: string;
+		};
+		const entries: NarrationEntry[] = messages
+			.map(message => ({
+				message,
+				text: this.stripRuntimeAssistantWorkflowMarkup(message.content).trim(),
+				reasoning: message.reasoning?.trim() ?? '',
+			}))
+			.filter(entry => entry.text.length > 0 || entry.reasoning.length > 0);
+		if (entries.length === 0) {
 			return undefined;
 		}
 
-		const totalChars = visibleMessages.reduce((sum, entry) => sum + entry.text.length, 0);
-		const qualifierText = totalChars <= 400
-			? localize('vsclone.thread.thought.briefly', 'briefly')
-			: totalChars <= 1600
-				? localize('vsclone.thread.thought.moment', 'for a moment')
-				: localize('vsclone.thread.thought.while', 'for a while');
+		const visibleMessages = entries.filter(entry => entry.text.length > 0);
+		const messagesWithReasoning = entries.filter(entry => entry.reasoning.length > 0);
 
 		const item = document.createElement('div');
 		item.className = 'vsclone-thread-message assistant runtime runtime-thought';
 
-		const details = document.createElement('details');
-		details.className = 'vsclone-thinking-block';
-
-		const summary = document.createElement('summary');
-		summary.className = 'vsclone-thinking-summary';
-
-		const label = document.createElement('span');
-		label.className = 'vsclone-thinking-summary-label';
-
-		const verb = document.createElement('strong');
-		verb.textContent = localize('vsclone.thread.thought.past', 'Thought');
-		label.appendChild(verb);
-
-		const qualifier = document.createElement('span');
-		qualifier.className = 'vsclone-thinking-summary-qualifier';
-		qualifier.textContent = qualifierText;
-		label.appendChild(qualifier);
-
-		summary.appendChild(label);
-		details.appendChild(summary);
-
-		const content = document.createElement('div');
-		content.className = 'vsclone-thinking-content';
-		for (const entry of visibleMessages) {
-			this.appendMarkdownSegment(content, entry.text, 'vsclone-thinking-step');
+		// Render the reasoning panel for every intermediate assistant message that has reasoning,
+		// regardless of whether the same message also has visible text. Mirrors Void, which renders
+		// `chatMessage.reasoning` for every assistant message via its `ReasoningWrapper` before the
+		// message content, so a thought-then-tool turn and a thought-then-reply turn both surface
+		// their thinking. Visible text from these messages still renders once inside the "Thought"
+		// details block below, so the reasoning panel is never double-rendered.
+		for (const entry of messagesWithReasoning) {
+			const reasoningBlock = this.renderAssistantReasoningBlock(entry.message, this.activeThreadId ?? '');
+			if (reasoningBlock) {
+				item.appendChild(reasoningBlock);
+			}
 		}
-		details.appendChild(content);
 
-		item.appendChild(details);
+		if (visibleMessages.length > 0) {
+			const totalChars = visibleMessages.reduce((sum, entry) => sum + entry.text.length, 0);
+			const qualifierText = totalChars <= 400
+				? localize('vsclone.thread.thought.briefly', 'briefly')
+				: totalChars <= 1600
+					? localize('vsclone.thread.thought.moment', 'for a moment')
+					: localize('vsclone.thread.thought.while', 'for a while');
+
+			const details = document.createElement('details');
+			details.className = 'vsclone-thinking-block';
+
+			const summary = document.createElement('summary');
+			summary.className = 'vsclone-thinking-summary';
+
+			const label = document.createElement('span');
+			label.className = 'vsclone-thinking-summary-label';
+
+			const verb = document.createElement('strong');
+			verb.textContent = localize('vsclone.thread.thought.past', 'Thought');
+			label.appendChild(verb);
+
+			const qualifier = document.createElement('span');
+			qualifier.className = 'vsclone-thinking-summary-qualifier';
+			qualifier.textContent = qualifierText;
+			label.appendChild(qualifier);
+
+			summary.appendChild(label);
+			details.appendChild(summary);
+
+			const content = document.createElement('div');
+			content.className = 'vsclone-thinking-content';
+			for (const entry of visibleMessages) {
+				this.appendMarkdownSegment(content, entry.text, 'vsclone-thinking-step');
+			}
+			details.appendChild(content);
+
+			item.appendChild(details);
+		}
 		return item;
 	}
 
@@ -2062,6 +2196,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const body = document.createElement('div');
 		body.className = 'vsclone-thread-message-body';
+		// Reasoning block renders above the assistant prose so the transcript reads top-to-bottom:
+		// "Thought through X, then said Y." Mirrors Void's `ReasoningWrapper` placement inside
+		// `AssistantMessageComponent`.
+		const reasoningBlock = this.renderAssistantReasoningBlock(message, threadId);
+		if (reasoningBlock) {
+			body.appendChild(reasoningBlock);
+		}
 		if (visibleText.trim().length > 0) {
 			if (visibleText.includes("<<<<<<< SEARCH") || this.looksLikePartialSearchReplaceBlock(visibleText)) {
 				this.renderSearchReplaceAwareText(body, visibleText, false);
@@ -2091,6 +2232,132 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}
 		}
 		return item;
+	}
+
+	/**
+	 * Mirrors Void's `ReasoningWrapper` + `ChatMarkdownRender` stack inside `AssistantMessageComponent`.
+	 * While the assistant is still streaming reasoning (no text yet), the panel is open by default so
+	 * the user sees the model think in real time. Once final text arrives, the panel collapses to a
+	 * compact "Reasoning" summary that stays clickable to re-expand. Manual toggles are sticky across
+	 * the re-renders triggered by every streaming delta.
+	 */
+	private renderAssistantReasoningBlock(
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
+		threadId: string,
+	): HTMLElement | undefined {
+		const reasoningText = message.reasoning?.trim();
+		if (!reasoningText) {
+			return undefined;
+		}
+
+		const isLastMessage = this.isLastRuntimeMessage(threadId, message.id);
+		const isStreaming = isLastMessage && this.isRuntimeStreamingForThread(threadId);
+		// Match Void's `isDoneReasoning = !!chatMessage.displayContent`: the model finished thinking
+		// the moment a visible text token shows up in the assistant turn.
+		const hasVisibleText = this.stripRuntimeAssistantWorkflowMarkup(message.content).trim().length > 0;
+		const isWriting = isStreaming && !hasVisibleText;
+
+		// Default open while still writing, collapsed once text or final reasoning is in. Respect an
+		// explicit user toggle above either default -- mirrors the `useEffect` + local `isOpen` state
+		// inside Void's `ReasoningWrapper` component.
+		const existing = this.reasoningPanelStateByMessageId.get(message.id);
+		const defaultOpen = isWriting;
+		const open = existing?.userToggled ? existing.open : defaultOpen;
+		if (!existing || !existing.userToggled) {
+			this.reasoningPanelStateByMessageId.set(message.id, { userToggled: false, open: defaultOpen });
+		}
+
+		const details = document.createElement('details');
+		details.className = 'vsclone-thinking-block vsclone-reasoning-block';
+
+		// Attach the toggle listener BEFORE flipping `details.open` programmatically. Setting
+		// `details.open = true` queues a `toggle` event; without the guard, that event would fire
+		// asynchronously and mark the panel as user-toggled, preventing the intended auto-collapse
+		// when final text arrives. The `isProgrammaticToggle` flag lets the first programmatic open
+		// pass through without recording a user preference.
+		let isProgrammaticToggle = false;
+		this.renderedMarkdownDisposables.add(addDisposableListener(details, 'toggle', () => {
+			if (isProgrammaticToggle) {
+				isProgrammaticToggle = false;
+				return;
+			}
+			this.reasoningPanelStateByMessageId.set(message.id, {
+				userToggled: true,
+				open: details.open,
+			});
+		}));
+		if (open) {
+			isProgrammaticToggle = true;
+			details.open = true;
+		}
+
+		const summary = document.createElement('summary');
+		summary.className = 'vsclone-thinking-summary';
+
+		const label = document.createElement('span');
+		label.className = 'vsclone-thinking-summary-label';
+
+		const verb = document.createElement('strong');
+		// Mirror Void's `ReasoningWrapper`: the title stays 'Reasoning' at every phase; the spinner
+		// appended below is what signals "still writing".
+		verb.textContent = localize('vsclone.thread.reasoning.title', 'Reasoning');
+		label.appendChild(verb);
+
+		if (isWriting) {
+			const spinner = document.createElement('span');
+			spinner.className = 'codicon codicon-loading codicon-modifier-spin vsclone-reasoning-summary-spinner';
+			spinner.setAttribute('aria-hidden', 'true');
+			label.appendChild(spinner);
+		}
+
+		summary.appendChild(label);
+		details.appendChild(summary);
+
+		const content = document.createElement('div');
+		content.className = 'vsclone-thinking-content';
+		this.appendMarkdownSegment(content, reasoningText, 'vsclone-thinking-step');
+		details.appendChild(content);
+
+		return details;
+	}
+
+	/**
+	 * Drop sticky reasoning-panel state for messages that no longer exist in the current runtime
+	 * snapshot (thread switch, runtime reset, etc.). Keeps the map bounded across long sessions.
+	 */
+	private pruneReasoningPanelStateForRuntime(runtimeState: IVSCloneThreadRuntimeState | undefined): void {
+		if (this.reasoningPanelStateByMessageId.size === 0) {
+			return;
+		}
+		if (!runtimeState) {
+			this.reasoningPanelStateByMessageId.clear();
+			return;
+		}
+		const liveIds = new Set<string>();
+		for (const message of runtimeState.messages) {
+			if (message.role === 'assistant') {
+				liveIds.add(message.id);
+			}
+		}
+		for (const id of Array.from(this.reasoningPanelStateByMessageId.keys())) {
+			if (!liveIds.has(id)) {
+				this.reasoningPanelStateByMessageId.delete(id);
+			}
+		}
+	}
+
+	private isRuntimeStreamingForThread(threadId: string): boolean {
+		const state = this.getThreadRuntimeState(threadId);
+		return state?.streamState.kind !== undefined && state.streamState.kind !== 'idle';
+	}
+
+	private isLastRuntimeMessage(threadId: string, messageId: string): boolean {
+		const state = this.getThreadRuntimeState(threadId);
+		if (!state) {
+			return false;
+		}
+		const last = state.messages.at(-1);
+		return last?.id === messageId;
 	}
 
 	private renderRuntimeErrorMessage(rawErrorText: string): HTMLElement {
@@ -4245,6 +4512,18 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			this.reasoningEffortSelect.disabled =
 				composerBusy || reasoningControlHidden;
 		}
+		if (this.reasoningEnabledInput) {
+			const reasoningEnabledHidden =
+				this.reasoningEnabledContainer?.classList.contains('hidden') ?? true;
+			this.reasoningEnabledInput.disabled =
+				composerBusy || reasoningEnabledHidden;
+		}
+		if (this.reasoningBudgetInput) {
+			const reasoningBudgetHidden =
+				this.reasoningBudgetContainer?.classList.contains('hidden') ?? true;
+			this.reasoningBudgetInput.disabled =
+				composerBusy || reasoningBudgetHidden;
+		}
 		this.refreshPlanModeControl(composerBusy);
 		if (modelRunBusy || this.submittingPrompt) {
 			this.composerInput.placeholder = localize(
@@ -4364,6 +4643,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.modelSwitcher?.refresh();
 		this.refreshPlanModeControl();
 		this.refreshReasoningEffortControl();
+		this.refreshReasoningEnabledControl();
+		this.refreshReasoningBudgetControl();
 	}
 
 	private getCurrentComposerMode(): VSCloneChatMode {
@@ -4423,35 +4704,74 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const selectedModelDescriptor = this.settingsService.getModel(
 			selectedModel.modelIdentifier,
 		);
-		const supportedReasoningLevels =
-			selectedModelDescriptor?.reasoningEffortLevels;
-		if (!supportedReasoningLevels || supportedReasoningLevels.length === 0) {
-			return {
-				...selectedModel,
-				threadId: threadId ?? undefined,
-				reasoningEffort: undefined,
-			};
+		const reasoningCapabilities = selectedModelDescriptor?.capabilities.reasoningCapabilities || undefined;
+		const reasoningSlider = reasoningCapabilities?.reasoningSlider;
+		const canTurnOff = reasoningCapabilities?.canTurnOffReasoning === true;
+
+		// Live-read every visible reasoning control (effort select, enabled checkbox, budget range)
+		// so a Send click immediately after flipping a knob picks up the new value before storage
+		// settle events propagate. Mirrors `ReasoningOptionSlider`'s onChange handlers in Void.
+		let resolvedReasoningEffort = selectedModel.reasoningEffort;
+		let resolvedReasoningEnabled = selectedModel.reasoningEnabled;
+		let resolvedReasoningBudget = selectedModel.reasoningBudget;
+
+		if (reasoningSlider?.type === 'effort_slider') {
+			const supportedReasoningLevels = reasoningSlider.values;
+			const selectedFromControl =
+				this.reasoningEffortContainer && !this.reasoningEffortContainer.classList.contains('hidden')
+					? (this.reasoningEffortSelect?.value as VSCloneReasoningEffortLevel | undefined)
+					: undefined;
+			resolvedReasoningEffort =
+				selectedFromControl && supportedReasoningLevels.includes(selectedFromControl)
+					? selectedFromControl
+					: selectedModel.reasoningEffort && supportedReasoningLevels.includes(selectedModel.reasoningEffort)
+						? selectedModel.reasoningEffort
+						: reasoningSlider.default;
+			// Mirror Void's effort-slider onChange: the `'none'` sentinel in a model that can be
+			// turned off means reasoning is disabled, regardless of any previously-persisted
+			// `reasoningEnabled` value. Without this the Send path would emit `reasoning: { effort }`
+			// for the off selection because the live-read ignored the off semantics.
+			if (canTurnOff && resolvedReasoningEffort === 'none') {
+				resolvedReasoningEnabled = false;
+			} else if (canTurnOff && selectedFromControl !== undefined && selectedFromControl !== 'none') {
+				resolvedReasoningEnabled = true;
+			}
+		} else if (!reasoningSlider) {
+			// No slider: effort has no meaning for this model.
+			resolvedReasoningEffort = undefined;
 		}
 
-		// Read directly from the visible select so a quick Send click right after changing the dropdown
-		// uses the new value even before storage/event propagation catches up.
-		const selectedFromControl = this.reasoningEffortSelect?.value as
-			| VSCloneReasoningEffortLevel
-			| undefined;
-		const resolvedReasoningEffort =
-			selectedFromControl &&
-				supportedReasoningLevels.includes(selectedFromControl)
-				? selectedFromControl
-				: selectedModel.reasoningEffort &&
-					supportedReasoningLevels.includes(selectedModel.reasoningEffort)
-					? selectedModel.reasoningEffort
-					: (selectedModelDescriptor.defaultReasoningEffort ??
-						supportedReasoningLevels[0]);
+		if (canTurnOff && !reasoningSlider
+			&& this.reasoningEnabledContainer && !this.reasoningEnabledContainer.classList.contains('hidden')
+			&& this.reasoningEnabledInput) {
+			resolvedReasoningEnabled = this.reasoningEnabledInput.checked;
+		}
+
+		if (reasoningSlider?.type === 'budget_slider'
+			&& this.reasoningBudgetContainer && !this.reasoningBudgetContainer.classList.contains('hidden')
+			&& this.reasoningBudgetInput) {
+			const { min: rawMin, max } = reasoningSlider;
+			const stepCount = 8;
+			const stepSize = Math.max(1, Math.round((max - rawMin) / stepCount));
+			const valueIfOff = rawMin - stepSize;
+			const rawValue = Number(this.reasoningBudgetInput.value);
+			if (!Number.isNaN(rawValue)) {
+				const isOff = canTurnOff && rawValue === valueIfOff;
+				// Mirror Void's `ReasoningOptionSlider` onChange: persist the raw slider value even
+				// at the off notch, and flip `reasoningEnabled` to reflect on/off. The send-path
+				// sendable-info helper treats `reasoningEnabled: false` as off regardless of the
+				// stored budget.
+				resolvedReasoningEnabled = !isOff;
+				resolvedReasoningBudget = rawValue;
+			}
+		}
 
 		return {
 			...selectedModel,
 			threadId: threadId ?? undefined,
 			reasoningEffort: resolvedReasoningEffort,
+			reasoningEnabled: resolvedReasoningEnabled,
+			reasoningBudget: resolvedReasoningBudget,
 		};
 	}
 
@@ -4468,25 +4788,42 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const selectedModelDescriptor = selectedModel
 			? this.settingsService.getModel(selectedModel.modelIdentifier)
 			: undefined;
-		const supportedReasoningLevels =
-			selectedModelDescriptor?.reasoningEffortLevels;
-		if (
-			!selectedModel ||
-			!supportedReasoningLevels ||
-			supportedReasoningLevels.length === 0
-		) {
+		// Mirror Void's `ReasoningOptionSlider` branch for `reasoningSlider.type === 'effort_slider'`:
+		// the effort picker is visible only when the model exposes an effort-slider capability, and
+		// its options come from `reasoningSlider.values` (not the derived `reasoningEffortLevels`
+		// union, which also covers budget-slider models via a different control).
+		const reasoningCapabilities = selectedModelDescriptor?.capabilities.reasoningCapabilities || undefined;
+		const reasoningSlider = reasoningCapabilities?.reasoningSlider;
+		if (!selectedModel || !reasoningSlider || reasoningSlider.type !== 'effort_slider') {
 			this.reasoningEffortContainer.classList.add("hidden");
 			this.reasoningEffortSelect.replaceChildren();
 			this.updateComposerState();
 			return;
 		}
 
-		const selectedReasoningEffort =
-			selectedModel.reasoningEffort &&
+		// Mirror Void's `ReasoningOptionSlider` effort-slider branch: `min = canTurnOffReasoning ? -1 : 0`.
+		// The off slot is exposed only when the model supports being turned off AND the catalog lists
+		// the `'none'` sentinel among the selectable values. Otherwise the picker only shows real
+		// effort levels, and the enabled state stays sticky-on for non-off-capable models.
+		const canTurnOff = reasoningCapabilities?.canTurnOffReasoning === true;
+		const catalogValues = reasoningSlider.values;
+		const exposeOffOption = canTurnOff && catalogValues.includes('none');
+		const supportedReasoningLevels = exposeOffOption
+			? catalogValues
+			: catalogValues.filter((level) => level !== 'none');
+		const defaultReasoningEffort = reasoningSlider.default;
+		// If reasoning is disabled (`reasoningEnabled: false`) and the off option is available,
+		// reflect that state by selecting `'none'`. Mirrors Void's `value = isReasoningEnabled && currentEffort ? indexOf(currentEffort) : valueIfOff`.
+		const storedReasoningEnabled = selectedModel.reasoningEnabled;
+		const effectiveOff = exposeOffOption && storedReasoningEnabled === false;
+		const selectedReasoningEffort = effectiveOff
+			? 'none'
+			: selectedModel.reasoningEffort &&
 				supportedReasoningLevels.includes(selectedModel.reasoningEffort)
 				? selectedModel.reasoningEffort
-				: (selectedModelDescriptor.defaultReasoningEffort ??
-					supportedReasoningLevels[0]);
+				: supportedReasoningLevels.includes(defaultReasoningEffort)
+					? defaultReasoningEffort
+					: supportedReasoningLevels[0];
 
 		this.reasoningEffortSelect.replaceChildren(
 			...supportedReasoningLevels.map((level) => {
@@ -4514,21 +4851,34 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const selectedModelDescriptor = selectedModel
 			? this.settingsService.getModel(selectedModel.modelIdentifier)
 			: undefined;
-		const supportedReasoningLevels =
-			selectedModelDescriptor?.reasoningEffortLevels;
-		if (
-			!selectedModel ||
-			!supportedReasoningLevels ||
-			supportedReasoningLevels.length === 0
-		) {
+		// Mirror `refreshReasoningEffortControl`: only react when the active model owns an effort
+		// slider, so we don't persist effort values for budget-slider or toggle-only models.
+		const reasoningCapabilities = selectedModelDescriptor?.capabilities.reasoningCapabilities || undefined;
+		const reasoningSlider = reasoningCapabilities?.reasoningSlider;
+		if (!selectedModel || !reasoningSlider || reasoningSlider.type !== 'effort_slider') {
 			return;
 		}
+		const canTurnOff = reasoningCapabilities?.canTurnOffReasoning === true;
+		const supportedReasoningLevels = reasoningSlider.values;
 
 		const nextReasoningEffort = this.reasoningEffortSelect
 			.value as VSCloneReasoningEffortLevel;
+		if (!supportedReasoningLevels.includes(nextReasoningEffort)) {
+			return;
+		}
+
+		// Mirror Void's `ReasoningOptionSlider` effort-slider onChange:
+		// `{ reasoningEnabled: !isOff, reasoningEffort: values[newVal] ?? undefined }`.
+		// VSClone uses the `'none'` sentinel value as the off slot (rather than Void's synthetic -1
+		// index), so picking `'none'` with `canTurnOffReasoning` flips the persisted enabled flag to
+		// false. That makes `getVSCloneIsReasoningEnabledState` return false, short-circuiting
+		// `getVSCloneSendableReasoningInfo` to null so the OpenAI Responses builder omits the
+		// `reasoning` field entirely instead of emitting `{ effort: 'minimal' }`.
+		const isOff = canTurnOff && nextReasoningEffort === 'none';
+		const nextReasoningEnabled = !isOff;
 		if (
-			!supportedReasoningLevels.includes(nextReasoningEffort) ||
-			selectedModel.reasoningEffort === nextReasoningEffort
+			selectedModel.reasoningEffort === nextReasoningEffort &&
+			(selectedModel.reasoningEnabled ?? true) === nextReasoningEnabled
 		) {
 			return;
 		}
@@ -4540,9 +4890,224 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				threadId: this.activeThreadId,
 				location: "chat",
 				reasoningEffort: nextReasoningEffort,
+				reasoningEnabled: nextReasoningEnabled,
 				selectedAt: Date.now(),
 			},
 		);
+	}
+
+	/**
+	 * Mirrors Void's `ReasoningOptionSlider` branch for `canTurnOffReasoning && !reasoningBudgetSlider`:
+	 * models that support thinking but cannot expose a budget or effort knob show a simple on/off
+	 * toggle next to the model picker. The Chat feature defaults to enabled to match Void, so the
+	 * visible checkbox reflects the effective enabled state rather than the stored `reasoningEnabled`
+	 * value alone.
+	 */
+	private refreshReasoningEnabledControl(): void {
+		if (!this.reasoningEnabledContainer || !this.reasoningEnabledInput) {
+			return;
+		}
+
+		const selectedModel = this.settingsService.getCurrentSelectionForFeature(
+			this.activeThreadId ?? '',
+			'chat',
+		);
+		const selectedModelDescriptor = selectedModel
+			? this.settingsService.getModel(selectedModel.modelIdentifier)
+			: undefined;
+		const reasoningCapabilities = selectedModelDescriptor?.capabilities.reasoningCapabilities || undefined;
+		// Only show the toggle when the model can be switched off entirely and there is no slider
+		// taking ownership of the enabled state. For budget sliders the leftmost "off" notch doubles
+		// as the disable control; for effort sliders the effort value itself includes the off state.
+		// This matches Void: `canTurnOffReasoning && !reasoningBudgetSlider` is the standalone-toggle
+		// branch in `ReasoningOptionSlider`.
+		const canTurnOff = reasoningCapabilities?.canTurnOffReasoning === true;
+		const hasSlider = !!reasoningCapabilities?.reasoningSlider;
+		if (!selectedModel || !canTurnOff || hasSlider) {
+			this.reasoningEnabledContainer.classList.add('hidden');
+			this.updateComposerState();
+			return;
+		}
+
+		// Chat defaults to reasoning-on when the stored option is absent, mirroring Void's
+		// `getIsReasoningEnabledState` default branch for the Chat feature.
+		const effectiveEnabled = selectedModel.reasoningEnabled ?? true;
+		this.reasoningEnabledInput.checked = effectiveEnabled;
+		this.reasoningEnabledContainer.classList.remove('hidden');
+		this.updateComposerState();
+	}
+
+	private async updateReasoningEnabledSelection(): Promise<void> {
+		if (!this.reasoningEnabledInput) {
+			return;
+		}
+
+		const selectedModel = this.settingsService.getCurrentSelectionForFeature(
+			this.activeThreadId ?? '',
+			'chat',
+		);
+		if (!selectedModel) {
+			return;
+		}
+
+		const nextEnabled = this.reasoningEnabledInput.checked;
+		if ((selectedModel.reasoningEnabled ?? true) === nextEnabled) {
+			return;
+		}
+
+		await this.settingsService.setSelectionForFeature(this.activeThreadId ?? '', {
+			...selectedModel,
+			threadId: this.activeThreadId,
+			location: 'chat',
+			reasoningEnabled: nextEnabled,
+			selectedAt: Date.now(),
+		});
+	}
+
+	/**
+	 * Mirrors Void's `ReasoningOptionSlider` branch for `reasoningBudgetSlider?.type === 'budget_slider'`:
+	 * Anthropic extended thinking and Gemini `thinkingConfig.thinkingBudget` get a range slider whose
+	 * current value is shown as token count next to the control. When the model also supports turning
+	 * reasoning off, the slider's leftmost "off" notch doubles as the disable switch.
+	 */
+	private refreshReasoningBudgetControl(): void {
+		if (!this.reasoningBudgetContainer || !this.reasoningBudgetInput) {
+			return;
+		}
+
+		const selectedModel = this.settingsService.getCurrentSelectionForFeature(
+			this.activeThreadId ?? '',
+			'chat',
+		);
+		const selectedModelDescriptor = selectedModel
+			? this.settingsService.getModel(selectedModel.modelIdentifier)
+			: undefined;
+		const reasoningCapabilities = selectedModelDescriptor?.capabilities.reasoningCapabilities || undefined;
+		const reasoningSlider = reasoningCapabilities?.reasoningSlider;
+		if (!selectedModel || !reasoningSlider || reasoningSlider.type !== 'budget_slider') {
+			this.reasoningBudgetContainer.classList.add('hidden');
+			this.updateComposerState();
+			return;
+		}
+
+		const canTurnOff = reasoningCapabilities?.canTurnOffReasoning === true;
+		const { min: rawMin, max, default: defaultVal } = reasoningSlider;
+		// Step size approximated from Void: 8 notches across the configured [min, max] range gives the
+		// same coarse-grained control that `VoidSlider` renders next to the picker.
+		const stepCount = 8;
+		const stepSize = Math.max(1, Math.round((max - rawMin) / stepCount));
+		const valueIfOff = rawMin - stepSize;
+		const min = canTurnOff ? valueIfOff : rawMin;
+		const effectiveEnabled = selectedModel.reasoningEnabled ?? true;
+		const storedBudget = selectedModel.reasoningBudget;
+		// Mirror Void's `ReasoningOptionSlider`: when enabled, use the stored budget (even if it
+		// equals `valueIfOff` from a previous off state) falling back to the default; when disabled,
+		// pin to the off notch regardless of the stored value.
+		const value = effectiveEnabled
+			? (storedBudget ?? defaultVal)
+			: valueIfOff;
+
+		this.reasoningBudgetInput.min = String(min);
+		this.reasoningBudgetInput.max = String(max);
+		this.reasoningBudgetInput.step = String(stepSize);
+		this.reasoningBudgetInput.value = String(value);
+		this.reasoningBudgetContainer.classList.remove('hidden');
+		this.updateReasoningBudgetValueLabel(value, effectiveEnabled);
+		this.updateComposerState();
+	}
+
+	private async updateReasoningBudgetSelection(): Promise<void> {
+		if (!this.reasoningBudgetInput) {
+			return;
+		}
+
+		const selectedModel = this.settingsService.getCurrentSelectionForFeature(
+			this.activeThreadId ?? '',
+			'chat',
+		);
+		const selectedModelDescriptor = selectedModel
+			? this.settingsService.getModel(selectedModel.modelIdentifier)
+			: undefined;
+		const reasoningCapabilities = selectedModelDescriptor?.capabilities.reasoningCapabilities || undefined;
+		const reasoningSlider = reasoningCapabilities?.reasoningSlider;
+		if (!selectedModel || !reasoningSlider || reasoningSlider.type !== 'budget_slider') {
+			return;
+		}
+
+		const canTurnOff = reasoningCapabilities?.canTurnOffReasoning === true;
+		const { min: rawMin, max } = reasoningSlider;
+		const stepCount = 8;
+		const stepSize = Math.max(1, Math.round((max - rawMin) / stepCount));
+		const valueIfOff = rawMin - stepSize;
+		const rawValue = Number(this.reasoningBudgetInput.value);
+		if (Number.isNaN(rawValue)) {
+			return;
+		}
+
+		const isOff = canTurnOff && rawValue === valueIfOff;
+		const nextEnabled = !isOff;
+		// Mirror Void's `ReasoningOptionSlider` onChange: persist the raw slider value even when it
+		// lands on the off notch, and drive the enabled/disabled state via `reasoningEnabled`. The
+		// `getVSCloneSendableReasoningInfo` helper + provider send paths treat
+		// `reasoningEnabled: false` as off regardless of the stored budget value.
+		const nextBudget = rawValue;
+		if (
+			(selectedModel.reasoningEnabled ?? true) === nextEnabled
+			&& selectedModel.reasoningBudget === nextBudget
+		) {
+			return;
+		}
+
+		await this.settingsService.setSelectionForFeature(this.activeThreadId ?? '', {
+			...selectedModel,
+			threadId: this.activeThreadId,
+			location: 'chat',
+			reasoningEnabled: nextEnabled,
+			reasoningBudget: nextBudget,
+			selectedAt: Date.now(),
+		});
+	}
+
+	/**
+	 * Live-update the token count shown next to the budget slider as the user drags. Persistence
+	 * still waits for the `change` event so one commit lands per pointer-release.
+	 */
+	private updateReasoningBudgetValueLabelFromInput(): void {
+		if (!this.reasoningBudgetInput) {
+			return;
+		}
+		const selectedModel = this.settingsService.getCurrentSelectionForFeature(
+			this.activeThreadId ?? '',
+			'chat',
+		);
+		const selectedModelDescriptor = selectedModel
+			? this.settingsService.getModel(selectedModel.modelIdentifier)
+			: undefined;
+		const reasoningCapabilities = selectedModelDescriptor?.capabilities.reasoningCapabilities || undefined;
+		const reasoningSlider = reasoningCapabilities?.reasoningSlider;
+		if (!reasoningSlider || reasoningSlider.type !== 'budget_slider') {
+			return;
+		}
+		const canTurnOff = reasoningCapabilities?.canTurnOffReasoning === true;
+		const { min: rawMin, max } = reasoningSlider;
+		const stepCount = 8;
+		const stepSize = Math.max(1, Math.round((max - rawMin) / stepCount));
+		const valueIfOff = rawMin - stepSize;
+		const rawValue = Number(this.reasoningBudgetInput.value);
+		if (Number.isNaN(rawValue)) {
+			return;
+		}
+		const enabled = !(canTurnOff && rawValue === valueIfOff);
+		this.updateReasoningBudgetValueLabel(enabled ? rawValue : valueIfOff, enabled);
+	}
+
+	private updateReasoningBudgetValueLabel(value: number, enabled: boolean): void {
+		if (!this.reasoningBudgetValueLabel) {
+			return;
+		}
+		this.reasoningBudgetValueLabel.textContent = enabled
+			? localize('vsclone.composer.reasoningBudget.tokens', '{0} tokens', value)
+			: localize('vsclone.composer.reasoningBudget.off', 'Thinking disabled');
 	}
 
 	private toReasoningEffortLabel(level: VSCloneReasoningEffortLevel): string {

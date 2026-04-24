@@ -25,6 +25,17 @@ export interface IVSCloneModelSelection {
 	modelId: string;
 	modelName: string;
 	reasoningEffort?: VSCloneReasoningEffortLevel;
+	/**
+	 * Mirrors Void's `ModelSelectionOptions.reasoningEnabled`. Persisted on the selection so the
+	 * toggle shown next to the model picker survives reloads. Only meaningful for models whose
+	 * capability metadata sets `canTurnOffReasoning: true`.
+	 */
+	reasoningEnabled?: boolean;
+	/**
+	 * Mirrors Void's `ModelSelectionOptions.reasoningBudget`. Persisted alongside `reasoningEffort`
+	 * so budget-slider models (Anthropic, Gemini thinking) remember the chosen token budget.
+	 */
+	reasoningBudget?: number;
 	selectedAt: number;
 }
 

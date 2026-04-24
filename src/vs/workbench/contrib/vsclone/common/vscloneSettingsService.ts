@@ -78,6 +78,18 @@ export interface IVSCloneSettingsService {
 	getIneligibilityRecord(modelIdentifier: string): IVSCloneModelIneligibilityRecord | undefined;
 	markModelIneligible(modelIdentifier: string, reason: string): Promise<void>;
 	clearIneligibilityForVendor(vendor: VSCloneModelVendor): Promise<void>;
+	/**
+	 * Capability-aware sanitization of reasoning fields for the given model. Drops fields whose
+	 * capability is absent on the current model so stale persisted values cannot survive a model
+	 * capability change. Mirrors the normalization applied to `IVSCloneModelSelection` on load.
+	 */
+	sanitizeReasoningFields(modelIdentifier: string, fields: IVSCloneReasoningFieldOverrides): IVSCloneReasoningFieldOverrides;
+}
+
+export interface IVSCloneReasoningFieldOverrides {
+	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
+	readonly reasoningEnabled?: boolean;
+	readonly reasoningBudget?: number;
 }
 
 interface IVSCloneStoredSettingsPayload {
@@ -130,6 +142,8 @@ function toLocationSelection(selection: VSCloneFeatureModelSelection | undefined
 		modelId: selection.modelId,
 		modelName: selection.modelName,
 		reasoningEffort: selection.reasoningEffort,
+		reasoningEnabled: selection.reasoningEnabled,
+		reasoningBudget: selection.reasoningBudget,
 		selectedAt: selection.selectedAt,
 	};
 }
@@ -221,6 +235,8 @@ function toFeatureSelection(selection: IVSCloneModelSelection): VSCloneFeatureMo
 		modelId: selection.modelId,
 		modelName: selection.modelName,
 		reasoningEffort: selection.reasoningEffort,
+		reasoningEnabled: selection.reasoningEnabled,
+		reasoningBudget: selection.reasoningBudget,
 		selectedAt: selection.selectedAt,
 	};
 }
@@ -303,6 +319,8 @@ function selectionsEqual(first: IVSCloneModelSelection | undefined, second: IVSC
 		&& first.modelId === second.modelId
 		&& first.modelName === second.modelName
 		&& first.reasoningEffort === second.reasoningEffort
+		&& first.reasoningEnabled === second.reasoningEnabled
+		&& first.reasoningBudget === second.reasoningBudget
 		&& first.selectedAt === second.selectedAt;
 }
 
@@ -534,6 +552,7 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 			? selectableModels.findIndex(model => model.identifier === currentSelection.modelIdentifier)
 			: -1;
 		const nextModel = selectableModels[(currentIndex + 1 + selectableModels.length) % selectableModels.length];
+		const sameModelAsBefore = currentSelection?.modelIdentifier === nextModel.identifier;
 		const nextSelection: IVSCloneModelSelection = {
 			threadId: normalizeVSCloneThreadId(threadId),
 			location,
@@ -544,9 +563,13 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 			// Cycling preserves the current level when the user stays on the same model, but otherwise
 			// falls back to the model/location default so switching providers does not carry invalid
 			// reasoning settings into a different model family.
-			reasoningEffort: currentSelection?.modelIdentifier === nextModel.identifier
-				? this.resolveReasoningEffort(currentSelection.reasoningEffort, nextModel, location)
+			reasoningEffort: sameModelAsBefore
+				? this.resolveReasoningEffort(currentSelection?.reasoningEffort, nextModel, location)
 				: this.resolveReasoningEffort(undefined, nextModel, location),
+			// Toggle and budget are model-specific: clear them on a model switch so a budget from a
+			// different family (e.g. Anthropic 4k tokens) does not leak into an OpenAI-effort model.
+			reasoningEnabled: sameModelAsBefore ? currentSelection?.reasoningEnabled : undefined,
+			reasoningBudget: sameModelAsBefore ? currentSelection?.reasoningBudget : undefined,
 			selectedAt: Date.now(),
 		};
 
@@ -711,7 +734,7 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 		const featureSelections = this.buildFeatureSelections(selectionState.selectedByLocation, models);
 		const modelSelectionOfFeature = this.toFeatureSelectionMap(featureSelections);
 		const featureDefaults = this.toFeatureDefaults(modelSelectionOfFeature);
-		const threadSelections = this.toThreadSelections(selectionState.selectedByThread);
+		const threadSelections = this.toThreadSelections(selectionState.selectedByThread, modelByIdentifier);
 		const threadSelectionSnapshots = this.toThreadSelectionSnapshots(threadSelections);
 		const recentModels = this.toRecentModels(selectionState, modelByIdentifier);
 		const ineligibilityRecords = this.collectIneligibilityRecords();
@@ -846,6 +869,12 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 			};
 		}
 
+		const sanitized = this.sanitizeReasoningFieldsForModel(model, location, {
+			reasoningEffort: selection.reasoningEffort,
+			reasoningEnabled: selection.reasoningEnabled,
+			reasoningBudget: selection.reasoningBudget,
+		});
+
 		return {
 			threadId,
 			location,
@@ -853,9 +882,87 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 			vendor: model.vendor,
 			modelId: model.modelId,
 			modelName: model.modelName,
-			reasoningEffort: this.resolveReasoningEffort(selection.reasoningEffort, model, location),
+			reasoningEffort: sanitized.reasoningEffort,
+			reasoningEnabled: sanitized.reasoningEnabled,
+			reasoningBudget: sanitized.reasoningBudget,
 			selectedAt: selection.selectedAt,
 		};
+	}
+
+	sanitizeReasoningFields(modelIdentifier: string, fields: IVSCloneReasoningFieldOverrides): IVSCloneReasoningFieldOverrides {
+		const model = this.state.models.find(candidate => candidate.identifier === modelIdentifier);
+		if (!model) {
+			return { ...fields };
+		}
+		return this.sanitizeReasoningFieldsForModel(model, undefined, fields);
+	}
+
+	// Drop persisted reasoning fields whose capability is absent on the current model so a stale
+	// `reasoningEnabled: false` cannot survive a capability change and flip a non-toggleable model
+	// into "off". Mirrors Void's capability-shaped selection normalization.
+	private sanitizeReasoningFieldsForModel(
+		model: IVSCloneSettingsModelState,
+		location: IVSCloneChatLocation | undefined,
+		fields: IVSCloneReasoningFieldOverrides,
+	): IVSCloneReasoningFieldOverrides {
+		const capabilities = model.capabilities.reasoningCapabilities;
+		const reasoningSlider = capabilities ? capabilities.reasoningSlider : undefined;
+		const canTurnOffReasoning = capabilities ? capabilities.canTurnOffReasoning === true : false;
+		const preservedReasoningEnabled = canTurnOffReasoning ? fields.reasoningEnabled : undefined;
+		const preservedReasoningBudget = reasoningSlider?.type === 'budget_slider'
+			? this.resolveReasoningBudgetForSlider(fields.reasoningBudget, reasoningSlider, canTurnOffReasoning)
+			: undefined;
+		const preservedReasoningEffort = reasoningSlider?.type === 'effort_slider'
+			? (location ? this.resolveReasoningEffort(fields.reasoningEffort, model, location) : this.resolveReasoningEffortForModel(fields.reasoningEffort, model))
+			: undefined;
+
+		return {
+			reasoningEffort: preservedReasoningEffort,
+			reasoningEnabled: preservedReasoningEnabled,
+			reasoningBudget: preservedReasoningBudget,
+		};
+	}
+
+	private resolveReasoningEffortForModel(
+		preferred: VSCloneReasoningEffortLevel | undefined,
+		model: IVSCloneSettingsModelState,
+	): VSCloneReasoningEffortLevel | undefined {
+		// Pure capability-aware sanitization: pass through only if the preferred effort is still
+		// listed on the model, otherwise drop it. Unlike `resolveReasoningEffort`, this never invents
+		// a default so the caller can distinguish "not specified" from "explicit choice."
+		if (preferred && model.reasoningEffortLevels?.includes(preferred)) {
+			return preferred;
+		}
+		return undefined;
+	}
+
+	/**
+	 * Capability-aware sanitization for a persisted `reasoningBudget`. Void never hot-swaps a model's
+	 * budget range mid-session, so this defensive pass only fires in VSClone when capabilities drift
+	 * between sessions. Preserve the UI's off-notch value (`min - stepSize`, see `ReasoningOptionSlider`
+	 * at `vscloneUnifiedChatViewPane.ts:5041`) when the new slider still supports turning reasoning
+	 * off so the stored "off" state round-trips; drop any other out-of-range value so the slider's
+	 * default fires on load instead of treating a stale raw number as a live budget.
+	 */
+	private resolveReasoningBudgetForSlider(
+		preferred: number | undefined,
+		slider: { readonly type: 'budget_slider'; readonly min: number; readonly max: number; readonly default: number },
+		canTurnOffReasoning: boolean,
+	): number | undefined {
+		if (preferred === undefined) {
+			return undefined;
+		}
+		if (preferred >= slider.min && preferred <= slider.max) {
+			return preferred;
+		}
+		if (canTurnOffReasoning) {
+			const stepSize = Math.max(1, Math.round((slider.max - slider.min) / 8));
+			const valueIfOff = slider.min - stepSize;
+			if (preferred === valueIfOff) {
+				return preferred;
+			}
+		}
+		return undefined;
 	}
 
 	private resolveReasoningEffort(
@@ -947,12 +1054,29 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 		return featureDefaults;
 	}
 
-	private toThreadSelections(selectedByThread: Readonly<Record<string, IVSCloneThreadSelectionMap>>): Record<string, IVSCloneThreadSelectionMap> {
+	private toThreadSelections(
+		selectedByThread: Readonly<Record<string, IVSCloneThreadSelectionMap>>,
+		modelByIdentifier: ReadonlyMap<string, IVSCloneSettingsModelState>,
+	): Record<string, IVSCloneThreadSelectionMap> {
 		return Object.fromEntries(
 			Object.entries(selectedByThread)
 				.filter(([threadId]) => !!normalizeVSCloneThreadId(threadId))
 				.map(([threadId, selections]) => [threadId, Object.fromEntries(
-					Object.entries(selections).map(([location, selection]) => [location, selection ? { ...selection, threadId } : undefined]),
+					// Route every persisted thread-scoped selection through normalizeSelection so capability
+					// changes on the underlying model drop stale reasoning fields at load time. Without this,
+					// a persisted `reasoningEnabled: false` would survive a model flipping to
+					// `canTurnOffReasoning: false` and incorrectly force reasoning off.
+					Object.entries(selections).map(([location, selection]) => [
+						location,
+						selection
+							? this.normalizeSelection(
+								location as IVSCloneChatLocation,
+								selection,
+								threadId,
+								modelByIdentifier.get(selection.modelIdentifier),
+							)
+							: undefined,
+					]),
 				) as IVSCloneThreadSelectionMap]),
 		);
 	}

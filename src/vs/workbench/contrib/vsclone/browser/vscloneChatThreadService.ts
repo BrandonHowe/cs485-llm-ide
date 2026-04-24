@@ -208,6 +208,8 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 			modelId: resolvedSelection?.modelId ?? '',
 			modelIdentifier: resolvedSelection?.modelIdentifier ?? '',
 			reasoningEffort: resolvedSelection?.reasoningEffort,
+			reasoningEnabled: resolvedSelection?.reasoningEnabled,
+			reasoningBudget: resolvedSelection?.reasoningBudget,
 			previousTurns,
 			systemMessage,
 			imageAttachments: options.imageAttachments,
@@ -322,7 +324,15 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 					break;
 				}
 				case 'assistant':
-					messages.push({ role: 'assistant', content: message.content });
+					// Preserve Anthropic signed reasoning blocks on user-turn follow-up sends so the
+					// Anthropic convert seam can replay the original signatures. Mirrors the runtime
+					// tool-loop path (`vscloneThreadRuntimeService.ts`) and Void's simple-message
+					// conversion in `convertToLLMMessageService.ts`.
+					messages.push({
+						role: 'assistant',
+						content: message.content,
+						...(message.anthropicReasoning ? { anthropicReasoning: message.anthropicReasoning } : {}),
+					});
 					break;
 				case 'tool':
 					if (message.type === 'success' || message.type === 'tool_error' || message.type === 'rejected') {
@@ -364,5 +374,7 @@ function sameThreadBoundSelection(left: IVSCloneModelSelection, right: IVSCloneM
 		&& left.vendor === right.vendor
 		&& left.modelId === right.modelId
 		&& left.modelName === right.modelName
-		&& left.reasoningEffort === right.reasoningEffort;
+		&& left.reasoningEffort === right.reasoningEffort
+		&& left.reasoningEnabled === right.reasoningEnabled
+		&& left.reasoningBudget === right.reasoningBudget;
 }

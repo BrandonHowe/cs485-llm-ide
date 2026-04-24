@@ -23,8 +23,9 @@ import {
 	type IVSCloneLLMMessageRequestHandle,
 	type IVSCloneLLMPreparedChatPayload,
 } from '../../common/vscloneLLMMessageTypes.js';
+import type { VSCloneReasoningEffortLevel } from '../../common/vscloneModelCapabilities.js';
 import type { IVSCloneOAuthService } from '../../common/vscloneOAuthService.js';
-import type { IVSCloneSettingsService } from '../../common/vscloneSettingsService.js';
+import type { IVSCloneReasoningFieldOverrides, IVSCloneSettingsService } from '../../common/vscloneSettingsService.js';
 import type { IVSCloneThreadRuntimeMessage } from '../../common/vscloneThreadRuntimeTypes.js';
 import type { IVSCloneToolExecutionService, IVSCloneToolRuntimeService } from '../../browser/vscloneToolExecutionService.js';
 import { TestVSCloneUnifiedChatBackendService } from '../common/vscloneTestUnifiedChatBackendService.js';
@@ -87,7 +88,9 @@ function createPreparedChatPayload(): IVSCloneLLMPreparedChatPayload {
 	};
 }
 
-function createSettingsService(): IVSCloneSettingsService {
+function createSettingsService(
+	sanitizeReasoningFields: (modelIdentifier: string, fields: IVSCloneReasoningFieldOverrides) => IVSCloneReasoningFieldOverrides = (_modelIdentifier, fields) => ({ ...fields }),
+): IVSCloneSettingsService {
 	return {
 		_serviceBrand: undefined,
 		onDidChangeState: Event.None,
@@ -143,6 +146,7 @@ function createSettingsService(): IVSCloneSettingsService {
 		getIneligibilityRecord: () => undefined,
 		markModelIneligible: async () => undefined,
 		clearIneligibilityForVendor: async () => undefined,
+		sanitizeReasoningFields,
 	};
 }
 
@@ -151,6 +155,8 @@ function createRuntimeService(
 	options: {
 		readonly llmMessageService: IVSCloneLLMMessageService;
 		readonly toolExecutionService: IVSCloneToolExecutionService;
+		readonly settingsService?: IVSCloneSettingsService;
+		readonly prepareChatRequest?: (requestOptions: IVSCloneChatTransportRequestOptions) => IVSCloneLLMPreparedChatPayload;
 	},
 	persistedStorage: Map<string, string> = new Map<string, string>(),
 ): VSCloneThreadRuntimeService {
@@ -172,9 +178,11 @@ function createRuntimeService(
 		getApiHeaders: async () => ({ Authorization: 'Bearer test-token' }),
 		isSignedIn: () => true,
 	};
+	const prepareChatRequest = options.prepareChatRequest
+		?? ((_requestOptions: IVSCloneChatTransportRequestOptions): IVSCloneLLMPreparedChatPayload => createPreparedChatPayload());
 	const convertToLLMMessageService: IVSCloneConvertToLLMMessageService = {
 		_serviceBrand: undefined,
-		prepareChatRequest: (_options: IVSCloneChatTransportRequestOptions): IVSCloneLLMPreparedChatPayload => createPreparedChatPayload(),
+		prepareChatRequest,
 		prepareFIMRequest: () => {
 			throw new Error('FIM conversion should not run in this runtime regression test.');
 		},
@@ -210,7 +218,7 @@ function createRuntimeService(
 		oauthService,
 		options.llmMessageService,
 		convertToLLMMessageService,
-		createSettingsService(),
+		options.settingsService ?? createSettingsService(),
 		toolRuntimeService,
 		options.toolExecutionService,
 		new TestVSCloneUnifiedChatBackendService(),
@@ -392,5 +400,131 @@ suite('VSCloneThreadRuntimeApprovalRegression', () => {
 		const toolMessages = state!.messages.filter((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }> => message.role === 'tool');
 		assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'rejected']);
 		assert.strictEqual(toolExecutionCount, 0);
+	});
+
+	test('resumed rejection sanitizes every capability-drifted persisted reasoning field before replay', async () => {
+		// Simulates the capability-drift scenario end-to-end: the initial runtime persists a
+		// tool_request whose run context carries stale values for all three reasoning fields
+		// (`reasoningEnabled`, `reasoningBudget`, `reasoningEffort`). The restored runtime is wired
+		// with a sanitizer that mirrors the full production behavior at
+		// `common/vscloneSettingsService.ts:903` -- dropping each field whose capability is absent on
+		// the restored model:
+		//   - `reasoningEnabled` is dropped because the restored model has `canTurnOffReasoning: false`
+		//   - `reasoningBudget` is dropped because the restored slider is an `effort_slider`
+		//   - `reasoningEffort` is dropped because the stale level is not listed on the new slider
+		// The `deepStrictEqual` on captured `prepareChatRequest` options pins R3's capability-drop
+		// branches AND R4's resume-sanitization wiring -- reverting either breaks this test.
+		const initialDisposables = store.add(new DisposableStore());
+		const restoredDisposables = store.add(new DisposableStore());
+		const persistedStorage = new Map<string, string>();
+		const staleBudget = 999_999;
+		const staleReasoningEffort: VSCloneReasoningEffortLevel = 'xhigh';
+		const initialRuntime = createRuntimeService(initialDisposables, {
+			llmMessageService: new ScriptedLLMMessageService([
+				(_request, observer) => {
+					observer.onFinalMessage?.({
+						fullText: 'Running this needs approval.',
+						fullReasoning: '',
+						anthropicReasoning: null,
+						toolCall: {
+							id: 'call-budget-drift',
+							name: 'run_command',
+							rawParams: { command: 'git status' },
+							doneParams: ['command'],
+							isDone: true,
+						},
+					});
+				},
+			]),
+			toolExecutionService: {
+				_serviceBrand: undefined,
+				executeTool: async () => ({ success: true, output: 'unexpected execution' }),
+			},
+		}, persistedStorage);
+
+		void initialRuntime.runThread({
+			threadId: 'thread-budget-drift',
+			turnId: 'thread-budget-drift:turn-1',
+			sequence: 1,
+			sessionResource: 'vsclone://api/thread-budget-drift',
+			promptText: 'Show me the repository status.',
+			mode: 'act',
+			vendor: 'openai',
+			modelId: 'gpt-5.3-codex',
+			modelIdentifier: 'openai/gpt-5.3-codex',
+			// All three persisted reasoning fields are stale relative to the restored model described
+			// below. They must each be dropped when the sanitizer runs prior to the rejection replay.
+			reasoningEnabled: false,
+			reasoningBudget: staleBudget,
+			reasoningEffort: staleReasoningEffort,
+		}).done.catch(() => undefined);
+
+		await waitForAwaitingApproval(initialRuntime, 'thread-budget-drift');
+
+		// Realistic capability shape for the restored model. Mirrors the three capability checks in
+		// `sanitizeReasoningFieldsForModel`: `canTurnOffReasoning:false` drops `reasoningEnabled`, the
+		// effort-slider type drops `reasoningBudget`, and the effort allow-list drops any stale effort
+		// value not listed. The `allowedEfforts` set deliberately omits the stale 'xhigh' value so the
+		// sanitizer drops it, matching Void's capability-aware effort allow-list.
+		const restoredCapabilities: { readonly canTurnOffReasoning: boolean; readonly sliderType: 'effort_slider' | 'budget_slider'; readonly allowedEfforts: ReadonlySet<VSCloneReasoningEffortLevel> } = {
+			canTurnOffReasoning: false,
+			sliderType: 'effort_slider',
+			allowedEfforts: new Set<VSCloneReasoningEffortLevel>(['high', 'medium', 'low']),
+		};
+		const capturedPrepareOptions: IVSCloneChatTransportRequestOptions[] = [];
+		const restoredRuntime = createRuntimeService(restoredDisposables, {
+			llmMessageService: new ScriptedLLMMessageService([
+				(_request, observer) => {
+					observer.onFinalMessage?.({
+						fullText: 'Okay, I will not run it.',
+						fullReasoning: '',
+						anthropicReasoning: null,
+					});
+				},
+			]),
+			toolExecutionService: {
+				_serviceBrand: undefined,
+				executeTool: async () => ({ success: true, output: 'unexpected execution' }),
+			},
+			settingsService: createSettingsService((_modelIdentifier, fields) => {
+				// Mirrors `VSCloneSettingsService#sanitizeReasoningFieldsForModel` symmetry: preserve
+				// `reasoningEnabled` only when the capability allows turning reasoning off, preserve
+				// `reasoningBudget` only for `budget_slider` models, and preserve `reasoningEffort`
+				// only for `effort_slider` models whose allow-list still lists the stored value.
+				const preservedReasoningEnabled = restoredCapabilities.canTurnOffReasoning
+					? fields.reasoningEnabled
+					: undefined;
+				const preservedReasoningBudget = restoredCapabilities.sliderType === 'budget_slider'
+					? fields.reasoningBudget
+					: undefined;
+				const preservedReasoningEffort = restoredCapabilities.sliderType === 'effort_slider'
+					&& fields.reasoningEffort !== undefined
+					&& restoredCapabilities.allowedEfforts.has(fields.reasoningEffort)
+					? fields.reasoningEffort
+					: undefined;
+				return {
+					reasoningEffort: preservedReasoningEffort,
+					reasoningEnabled: preservedReasoningEnabled,
+					reasoningBudget: preservedReasoningBudget,
+				};
+			}),
+			prepareChatRequest: requestOptions => {
+				capturedPrepareOptions.push(requestOptions);
+				return createPreparedChatPayload();
+			},
+		}, persistedStorage);
+
+		assert.strictEqual(restoredRuntime.getState('thread-budget-drift')?.streamState.kind, 'awaiting_user');
+		assert.strictEqual(restoredRuntime.rejectLatestToolRequest('thread-budget-drift', 'Command rejected after restore.'), true);
+		await waitForIdleThread(restoredRuntime, 'thread-budget-drift');
+
+		assert.deepStrictEqual(
+			capturedPrepareOptions.map(entry => ({
+				reasoningEnabled: entry.reasoningEnabled,
+				reasoningBudget: entry.reasoningBudget,
+				reasoningEffort: entry.reasoningEffort,
+			})),
+			[{ reasoningEnabled: undefined, reasoningBudget: undefined, reasoningEffort: undefined }],
+		);
 	});
 });

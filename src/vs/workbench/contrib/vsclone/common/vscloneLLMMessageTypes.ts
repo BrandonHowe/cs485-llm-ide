@@ -121,6 +121,18 @@ export interface IVSCloneLLMPreparedChatPayload {
 	readonly modelIdentifier: string;
 	readonly mode: VSCloneChatMode;
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
+	/**
+	 * Anthropic-style extended thinking opt-in. Defaults to "follow the model's default"; set to
+	 * `false` when the caller wants to explicitly suppress the thinking channel even on a capable
+	 * model. Separate from `reasoningEffort` so effort-slider models (OpenAI) keep a single field.
+	 */
+	readonly reasoningEnabled?: boolean;
+	/**
+	 * Anthropic-style reasoning budget in tokens. Mirrors Void's `ModelSelectionOptions.reasoningBudget`;
+	 * routed into Anthropic's `{ thinking: { type: 'enabled', budget_tokens } }` and Gemini's
+	 * `thinkingConfig.thinkingBudget`.
+	 */
+	readonly reasoningBudget?: number;
 	readonly messages: readonly IVSCloneLLMChatMessage[];
 	readonly separateSystemMessage?: string;
 }
@@ -190,7 +202,7 @@ export type IVSCloneLLMMessageReasoningBlock =
 	| {
 		readonly type: 'thinking';
 		readonly thinking: string;
-		readonly signature?: string;
+		readonly signature: string;
 	}
 	| {
 		readonly type: 'redacted_thinking';
