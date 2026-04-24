@@ -87,6 +87,7 @@ const googleSchemaTypeNumber = 'NUMBER' as VSCloneGoogleSchemaType;
 const googleSchemaTypeInteger = 'INTEGER' as VSCloneGoogleSchemaType;
 const googleSchemaTypeBoolean = 'BOOLEAN' as VSCloneGoogleSchemaType;
 const googleSchemaTypeArray = 'ARRAY' as VSCloneGoogleSchemaType;
+const googleNullOnlyEnumSentinel = '__vsclone_mcp_null_only__';
 
 const supportedAnthropicOAuthMessagesModelIds = new Set<string>([
 	'claude-haiku-4-5-20251001',
@@ -1242,6 +1243,10 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 		return undefined;
 	}
 
+	if (isNullOnlyJsonSchema(value)) {
+		return toGoogleNullOnlySchema(value);
+	}
+
 	const typeInfo = googleTypeInfoFromJsonSchemaType(value.type);
 	const schema: VSCloneGoogleSchema = {};
 	if (typeInfo.type) {
@@ -1287,6 +1292,21 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 		schema.anyOf = mergeGoogleAnyOf(schema.anyOf, anyOf.schemas);
 	}
 
+	return schema;
+}
+
+function toGoogleNullOnlySchema(value: Record<string, unknown>): VSCloneGoogleSchema {
+	const schema: VSCloneGoogleSchema = {
+		type: googleSchemaTypeString,
+		enum: [googleNullOnlyEnumSentinel],
+		nullable: true,
+	};
+	if (typeof value.description === 'string') {
+		schema.description = value.description;
+	}
+
+	// Gemini has nullable schemas but no null-only type. A private enum sentinel keeps the
+	// non-null side tightly constrained instead of degrading `{ const: null }` to `{}`.
 	return schema;
 }
 
