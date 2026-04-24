@@ -8,7 +8,7 @@ import { PlatformToString, platform } from '../../../../base/common/platform.js'
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService, IFileStat } from '../../../../platform/files/common/files.js';
 import { type VSCloneModelVendor } from './vscloneOAuthTypes.js';
-import { formatToolDefinitionsForPrompt } from './vscloneToolDefinitions.js';
+import { formatToolDefinitionsForPrompt, type IVSCloneToolDefinition } from './vscloneToolDefinitions.js';
 import type { IVSCloneContextSelection } from './vscloneContextSelectionTypes.js';
 
 /**
@@ -115,13 +115,14 @@ export function assembleVSCloneSystemMessage(
 	context: IVSClonePromptContext,
 	vendor: VSCloneModelVendor,
 	mode: VSCloneChatMode,
+	toolDefinitions?: readonly IVSCloneToolDefinition[],
 ): string {
 	return [
 		...VSCLONE_BASE_SYSTEM_PROMPT_LINES,
 		'',
 		...getVSCloneSystemInformationSection(vendor),
 		'',
-		formatToolDefinitionsForPrompt(mode),
+		formatToolDefinitionsForPrompt(mode, toolDefinitions),
 		'',
 		...getVSCloneActiveFileSection(context.activeFile),
 		'',

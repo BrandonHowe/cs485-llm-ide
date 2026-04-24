@@ -29,6 +29,12 @@ export interface IVSCloneToolDefinition {
 	readonly approvalType?: VSCloneToolApprovalType;
 	readonly planModeAllowed: boolean;
 	readonly parameters: readonly IVSCloneToolParameterDefinition[];
+	/**
+	 * MCP tools already publish a JSON schema. Keep that schema intact for native tool calling so
+	 * arbitrary server arguments do not have to be flattened into VSClone's built-in string-only
+	 * parameter model.
+	 */
+	readonly inputSchema?: IVSCloneToolJsonSchema;
 }
 
 export interface IVSCloneToolResultPayload {
@@ -38,11 +44,16 @@ export interface IVSCloneToolResultPayload {
 
 export interface IVSCloneToolJsonSchema {
 	readonly type: 'object';
-	readonly properties: Readonly<Record<string, {
-		readonly type: 'string';
+	readonly properties?: Readonly<Record<string, {
+		readonly type?: string;
 		readonly description: string;
+		readonly enum?: readonly string[];
+		readonly items?: unknown;
+		readonly properties?: unknown;
+		readonly additionalProperties?: unknown;
 	}>>;
 	readonly required?: readonly string[];
+	readonly additionalProperties?: unknown;
 }
 
 const editFileChangesParameterDescription = 'One or more SEARCH/REPLACE edit blocks using the exact delimiter lines <<<<<<< SEARCH, =======, and >>>>>>> REPLACE. Do not send prose or summaries in this field.';
@@ -148,10 +159,13 @@ export const VSCLONE_TOOL_DEFINITIONS: readonly IVSCloneToolDefinition[] = [
 	},
 ] as const;
 
-export function getVSCloneVisibleToolDefinitions(mode: VSCloneChatMode = 'act'): readonly IVSCloneToolDefinition[] {
+export function getVSCloneVisibleToolDefinitions(
+	mode: VSCloneChatMode = 'act',
+	toolDefinitions: readonly IVSCloneToolDefinition[] = VSCLONE_TOOL_DEFINITIONS,
+): readonly IVSCloneToolDefinition[] {
 	return mode === 'plan'
-		? VSCLONE_TOOL_DEFINITIONS.filter(tool => tool.planModeAllowed)
-		: VSCLONE_TOOL_DEFINITIONS;
+		? toolDefinitions.filter(tool => tool.planModeAllowed)
+		: toolDefinitions;
 }
 
 /**
@@ -160,6 +174,10 @@ export function getVSCloneVisibleToolDefinitions(mode: VSCloneChatMode = 'act'):
  * transport only has to adapt field names at the final SDK boundary.
  */
 export function toVSCloneToolJsonSchema(tool: IVSCloneToolDefinition): IVSCloneToolJsonSchema {
+	if (tool.inputSchema) {
+		return tool.inputSchema;
+	}
+
 	const properties: Record<string, { type: 'string'; description: string }> = {};
 	const required: string[] = [];
 
@@ -184,8 +202,11 @@ export function toVSCloneToolJsonSchema(tool: IVSCloneToolDefinition): IVSCloneT
  * Prompt formatting still filters the visible tool list by mode, but the instructions now match
  * native tool calling instead of teaching the model to emit XML wrappers in assistant text.
  */
-export function formatToolDefinitionsForPrompt(mode: VSCloneChatMode = 'act'): string {
-	const visibleTools = getVSCloneVisibleToolDefinitions(mode);
+export function formatToolDefinitionsForPrompt(
+	mode: VSCloneChatMode = 'act',
+	toolDefinitions: readonly IVSCloneToolDefinition[] = VSCLONE_TOOL_DEFINITIONS,
+): string {
+	const visibleTools = getVSCloneVisibleToolDefinitions(mode, toolDefinitions);
 	const lines: string[] = [
 		'## Available Tools',
 		mode === 'plan'

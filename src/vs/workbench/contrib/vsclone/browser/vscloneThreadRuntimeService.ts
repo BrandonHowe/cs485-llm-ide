@@ -247,6 +247,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			reasoningEnabled: options.reasoningEnabled,
 			reasoningBudget: options.reasoningBudget,
 			systemMessage: options.systemMessage,
+			toolDefinitions: options.toolDefinitions,
 			imageAttachments: options.imageAttachments,
 			contextSelections: options.contextSelections,
 		};
@@ -1074,6 +1075,10 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					previousTurns: messages.slice(0, -1),
 					currentTurn,
 					systemMessage: options.systemMessage,
+					// Resolve the current dynamic catalog at each model call. MCP servers can appear
+					// after the thread starts, while provider-side native tool declarations must still
+					// match the renderer runtime that dispatches the selected call.
+					toolDefinitions: options.toolDefinitions ?? this.toolRuntimeService.listToolDefinitions(options.mode),
 				}),
 			}, {
 				onText: payload => {

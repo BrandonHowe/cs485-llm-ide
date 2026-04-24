@@ -1668,4 +1668,3 @@ function countLines(text: string): number {
 	const trimmed = text.endsWith('\n') ? text.slice(0, -1) : text;
 	return trimmed.split('\n').length;
 }
-

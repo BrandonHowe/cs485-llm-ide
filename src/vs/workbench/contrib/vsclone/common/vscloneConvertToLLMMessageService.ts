@@ -68,6 +68,7 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					reasoningBudget: options.reasoningBudget,
 					messages: prepareOpenAIMessages(simpleMessages),
 					separateSystemMessage,
+					toolDefinitions: options.toolDefinitions,
 				};
 			case 'anthropic':
 				return {
@@ -80,6 +81,7 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					reasoningBudget: options.reasoningBudget,
 					messages: prepareAnthropicMessages(simpleMessages),
 					separateSystemMessage,
+					toolDefinitions: options.toolDefinitions,
 				};
 			case 'google':
 				return {
@@ -92,6 +94,7 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					reasoningBudget: options.reasoningBudget,
 					messages: prepareGeminiMessages(simpleMessages),
 					separateSystemMessage,
+					toolDefinitions: options.toolDefinitions,
 				};
 		}
 	}

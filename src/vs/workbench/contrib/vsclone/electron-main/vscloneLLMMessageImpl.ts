@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '../../../../nls.js';
+import { hasKey } from '../../../../base/common/types.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import {
 	defaultOAuthProviderConfig,
@@ -659,7 +660,7 @@ function buildOpenAIChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 		instructions: prepared.separateSystemMessage?.trim() || defaultSystemMessage,
 		store: false,
 		input: buildOpenAIInput(prepared.messages as readonly IVSCloneOpenAILLMChatMessage[]),
-		tools: buildOpenAITools(prepared.mode),
+		tools: buildOpenAITools(prepared),
 		parallel_tool_calls: false,
 		stream: true as const,
 	};
@@ -685,24 +686,25 @@ function buildAnthropicChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 		{ isReasoningEnabled: reasoningFragment !== null },
 	);
 
+	const anthropicReasoningFragment = clampAnthropicThinkingBudget(reasoningFragment, reservedOutputTokenSpace ?? 4_096);
 	const baseRequest = {
 		model: apiModelId,
 		messages: prepared.messages as readonly IVSCloneAnthropicLLMChatMessage[],
 		max_tokens: reservedOutputTokenSpace ?? 4_096,
 		system: prepared.separateSystemMessage?.trim() || defaultSystemMessage,
-		tools: buildAnthropicTools(prepared.mode),
+		tools: buildAnthropicTools(prepared),
 		tool_choice: {
 			type: 'auto',
 			disable_parallel_tool_use: true,
 		},
 	};
 
-	return reasoningFragment ? { ...baseRequest, ...reasoningFragment } : baseRequest;
+	return anthropicReasoningFragment ? { ...baseRequest, ...anthropicReasoningFragment } : baseRequest;
 }
 
 function buildGoogleChatRequest(prepared: IVSCloneLLMPreparedChatPayload, signal: AbortSignal) {
 	const apiModelId = resolveVSCloneApiModelId('google', prepared.modelId);
-	const googleTools = buildGoogleTools(prepared.mode);
+	const googleTools = buildGoogleTools(prepared);
 	const reasoningFragment = buildProviderReasoningFragment(prepared);
 	return {
 		model: apiModelId,
@@ -742,6 +744,28 @@ function buildProviderReasoningFragment(prepared: IVSCloneLLMPreparedChatPayload
 	);
 	const settings = getVSCloneProviderReasoningIOSettings(prepared.vendor);
 	return settings.input?.includeInPayload?.(info) ?? null;
+}
+
+function clampAnthropicThinkingBudget(fragment: Record<string, unknown> | null, maxTokens: number): Record<string, unknown> | null {
+	const thinking = fragment?.thinking;
+	if (!thinking || typeof thinking !== 'object' || !hasKey(thinking, { budget_tokens: true })) {
+		return fragment;
+	}
+	const thinkingPayload = thinking as { readonly budget_tokens?: unknown };
+	if (typeof thinkingPayload.budget_tokens !== 'number') {
+		return fragment;
+	}
+
+	// Anthropic requires `thinking.budget_tokens` to be strictly lower than `max_tokens`. The UI
+	// slider can intentionally reach the full reserved output budget, so clamp only the transport
+	// payload and leave the persisted user selection unchanged.
+	return {
+		...fragment,
+		thinking: {
+			...thinking,
+			budget_tokens: Math.min(thinkingPayload.budget_tokens, Math.max(1, maxTokens - 1)),
+		},
+	};
 }
 
 function getFIMEndpointMode(_prepared: IVSCloneLLMPreparedFIMPayload): VSCloneFIMEndpointMode {
@@ -1170,8 +1194,8 @@ function buildOpenAIInput(messages: readonly IVSCloneOpenAILLMChatMessage[]) {
 	return input;
 }
 
-function buildOpenAITools(mode: IVSCloneLLMPreparedChatPayload['mode']): VSCloneOpenAIFunctionTool[] {
-	return getVSCloneVisibleToolDefinitions(mode).map(tool => ({
+function buildOpenAITools(prepared: IVSCloneLLMPreparedChatPayload): VSCloneOpenAIFunctionTool[] {
+	return getVSCloneVisibleToolDefinitions(prepared.mode, prepared.toolDefinitions).map(tool => ({
 		type: 'function',
 		name: tool.name,
 		description: tool.description,
@@ -1180,16 +1204,16 @@ function buildOpenAITools(mode: IVSCloneLLMPreparedChatPayload['mode']): VSClone
 	}));
 }
 
-function buildAnthropicTools(mode: IVSCloneLLMPreparedChatPayload['mode']): VSCloneAnthropicTool[] {
-	return getVSCloneVisibleToolDefinitions(mode).map(tool => ({
+function buildAnthropicTools(prepared: IVSCloneLLMPreparedChatPayload): VSCloneAnthropicTool[] {
+	return getVSCloneVisibleToolDefinitions(prepared.mode, prepared.toolDefinitions).map(tool => ({
 		name: tool.name,
 		description: tool.description,
 		input_schema: cloneToolJsonSchema(toVSCloneToolJsonSchema(tool)) as VSCloneAnthropicToolInputSchema,
 	}));
 }
 
-function buildGoogleTools(mode: IVSCloneLLMPreparedChatPayload['mode']): Array<{ functionDeclarations: VSCloneGoogleFunctionDeclaration[] }> {
-	const functionDeclarations: VSCloneGoogleFunctionDeclaration[] = getVSCloneVisibleToolDefinitions(mode).map(tool => {
+function buildGoogleTools(prepared: IVSCloneLLMPreparedChatPayload): Array<{ functionDeclarations: VSCloneGoogleFunctionDeclaration[] }> {
+	const functionDeclarations: VSCloneGoogleFunctionDeclaration[] = getVSCloneVisibleToolDefinitions(prepared.mode, prepared.toolDefinitions).map(tool => {
 		// Build the schema imperatively so TypeScript keeps the Google SDK's schema shape instead of
 		// widening `Object.fromEntries(...)` to a loose `{ type: "STRING" }` record.
 		const properties: Record<string, VSCloneGoogleSchema> = {};
@@ -1287,7 +1311,7 @@ function parseToolArgsJson(value: string): Record<string, string> {
 			return {};
 		}
 		return Object.fromEntries(
-			Object.entries(parsed).map(([key, entryValue]) => [key, String(entryValue)]),
+			Object.entries(parsed).map(([key, entryValue]) => [key, stringifyToolParamValue(entryValue)]),
 		);
 	} catch {
 		return {};
@@ -1344,20 +1368,25 @@ function toVSCloneToolCallFromAnthropicMessage(
 		: {};
 	return {
 		name: toolUseBlock.name,
-		rawParams: Object.fromEntries(Object.entries(rawInput).map(([key, value]) => [key, String(value)])),
+		rawParams: Object.fromEntries(Object.entries(rawInput).map(([key, value]) => [key, stringifyToolParamValue(value)])),
 		doneParams: Object.keys(rawInput).sort(),
 		id: toolUseBlock.id,
 		isDone: true,
 	};
 }
 
+function stringifyToolParamValue(value: unknown): string {
+	return value && typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
 function cloneToolJsonSchema(schema: IVSCloneToolJsonSchema): Record<string, unknown> {
 	return {
 		type: schema.type,
 		properties: Object.fromEntries(
-			Object.entries(schema.properties).map(([name, property]) => [name, { ...property }]),
+			Object.entries(schema.properties ?? {}).map(([name, property]) => [name, { ...property }]),
 		),
 		...(schema.required ? { required: [...schema.required] } : {}),
+		...(schema.additionalProperties !== undefined ? { additionalProperties: schema.additionalProperties } : {}),
 	};
 }
 

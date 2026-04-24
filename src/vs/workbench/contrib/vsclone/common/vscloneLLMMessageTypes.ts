@@ -7,6 +7,7 @@ import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js'
 import type { IVSCloneCompletionPromptEnvelope } from './vscloneCompletionTypes.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
+import type { IVSCloneToolDefinition } from './vscloneToolDefinitions.js';
 
 /**
  * This transport intentionally sits one layer below the higher-level chat runtime. Callers hand
@@ -135,6 +136,12 @@ export interface IVSCloneLLMPreparedChatPayload {
 	readonly reasoningBudget?: number;
 	readonly messages: readonly IVSCloneLLMChatMessage[];
 	readonly separateSystemMessage?: string;
+	/**
+	 * Serialized at submit time because the main-process provider bridge cannot read renderer-side
+	 * MCP service state. This keeps native provider tool declarations aligned with the runtime that
+	 * will later dispatch the selected tool call.
+	 */
+	readonly toolDefinitions?: readonly IVSCloneToolDefinition[];
 }
 
 export interface IVSCloneLLMMessageChatRequest {

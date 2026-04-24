@@ -5,6 +5,7 @@
 
 import { CancellationToken, CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { CancellationError } from '../../../../base/common/errors.js';
+import { hasKey } from '../../../../base/common/types.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
@@ -16,9 +17,10 @@ import { localize } from '../../../../nls.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { QueryBuilder } from '../../../services/search/common/queryBuilder.js';
 import { isFileMatch, ISearchService, resultIsMatch } from '../../../services/search/common/search.js';
+import { IMcpService, McpToolVisibility, type IMcpTool } from '../../mcp/common/mcpTypes.js';
 import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
 import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
-import { type IVSCloneToolDefinition, type VSCloneToolApprovalType, VSCLONE_TOOL_DEFINITIONS } from '../common/vscloneToolDefinitions.js';
+import { type IVSCloneToolDefinition, type IVSCloneToolJsonSchema, type VSCloneToolApprovalType, VSCLONE_TOOL_DEFINITIONS } from '../common/vscloneToolDefinitions.js';
 import { formatToolResultWithDiff } from '../common/vscloneToolResultDiff.js';
 import { isVSCloneAmbiguousWorkspaceRelativePath, resolveVSCloneWorkspacePath } from '../common/vscloneWorkspacePaths.js';
 import { resolveContentEdits } from './vscloneEditCodeService.js';
@@ -91,18 +93,51 @@ interface IWorkspacePathResolution {
 export class VSCloneToolRuntimeService implements IVSCloneToolRuntimeService {
 	declare readonly _serviceBrand: undefined;
 
+	constructor(
+		@ILogService private readonly logService: ILogService,
+		@IMcpService private readonly mcpService?: IMcpService,
+	) {
+		// MCP collections can be extension-backed and lazily discovered. Kick discovery once from the
+		// runtime catalog owner so a chat started shortly after workbench load sees any installed MCP
+		// tools as soon as the platform service has them.
+		this.mcpService?.activateCollections().catch(error => {
+			this.logService.warn('[VSCloneToolRuntime] Failed to activate MCP collections for tool discovery.', error);
+		});
+	}
+
 	listToolDefinitions(mode: VSCloneChatMode = 'act'): readonly IVSCloneToolDefinition[] {
+		const definitions = [
+			...VSCLONE_TOOL_DEFINITIONS,
+			...this.getMcpToolDefinitions(),
+		];
 		return mode === 'plan'
-			? VSCLONE_TOOL_DEFINITIONS.filter(tool => tool.planModeAllowed)
-			: VSCLONE_TOOL_DEFINITIONS;
+			? definitions.filter(tool => tool.planModeAllowed)
+			: definitions;
 	}
 
 	getToolDefinition(toolName: string): IVSCloneToolDefinition | undefined {
-		return VSCLONE_TOOL_DEFINITIONS.find(tool => tool.name === normalizeToolName(toolName));
+		return this.listToolDefinitions('act').find(tool => tool.name === normalizeToolName(toolName));
 	}
 
 	getApprovalType(toolName: string): VSCloneToolApprovalType | undefined {
 		return this.getToolDefinition(toolName)?.approvalType;
+	}
+
+	private getMcpToolDefinitions(): readonly IVSCloneToolDefinition[] {
+		return this.getVisibleMcpTools().map(tool => ({
+			name: tool.id,
+			description: tool.definition.description ?? `Run MCP tool ${tool.referenceName}.`,
+			approvalType: 'MCP tools',
+			planModeAllowed: false,
+			parameters: mcpSchemaToParameterDefinitions(tool.definition.inputSchema),
+			inputSchema: mcpInputSchemaToVSCloneSchema(tool.definition.inputSchema),
+		}));
+	}
+
+	private getVisibleMcpTools(): readonly IMcpTool[] {
+		return this.mcpService?.servers.get().flatMap(server =>
+			server.tools.get().filter(tool => Boolean(tool.visibility & McpToolVisibility.Model)),
+		) ?? [];
 	}
 }
 
@@ -120,6 +155,7 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		@ILogService private readonly logService: ILogService,
 		@IVSCloneEditCodeService private readonly editCodeService: IVSCloneEditCodeService,
 		@IVSCloneTerminalToolService private readonly terminalToolService?: IVSCloneTerminalToolService,
+		@IMcpService private readonly mcpService?: IMcpService,
 	) {
 	}
 
@@ -145,6 +181,11 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 						normalizedToolName,
 					),
 				};
+			}
+
+			const mcpTool = this.findMcpTool(normalizedToolName);
+			if (mcpTool) {
+				return this.executeMcpTool(mcpTool, params, token);
 			}
 
 			switch (normalizedToolName) {
@@ -229,6 +270,31 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 				'```',
 				truncationNotice,
 			].filter(Boolean).join('\n'),
+		};
+	}
+
+	private findMcpTool(toolName: string): IMcpTool | undefined {
+		for (const server of this.mcpService?.servers.get() ?? []) {
+			const tool = server.tools.get().find(candidate =>
+				candidate.id === toolName
+				|| candidate.referenceName === toolName
+				|| candidate.definition.name === toolName,
+			);
+			if (tool && (tool.visibility & McpToolVisibility.Model)) {
+				return tool;
+			}
+		}
+		return undefined;
+	}
+
+	private async executeMcpTool(tool: IMcpTool, params: Record<string, string>, token: CancellationToken): Promise<IVSCloneToolExecutionResult> {
+		// Tool-call parameters are serialized through the provider bridge as strings for legacy
+		// built-ins. MCP tools can have structured schemas, so decode JSON-shaped values before
+		// calling the platform MCP service.
+		const result = await tool.call(decodeMcpToolParams(params), undefined, token);
+		return {
+			success: !result.isError,
+			output: formatMcpToolResult(result),
 		};
 	}
 
@@ -858,6 +924,94 @@ function summarizeToolParams(params: Record<string, string>): string {
 	}
 
 	return `${summary.slice(0, maxSummaryLength)}...`;
+}
+
+function mcpInputSchemaToVSCloneSchema(schema: unknown): IVSCloneToolJsonSchema {
+	if (isObjectSchema(schema)) {
+		return {
+			type: 'object',
+			properties: schema.properties as IVSCloneToolJsonSchema['properties'],
+			required: Array.isArray(schema.required) ? schema.required.filter((entry): entry is string => typeof entry === 'string') : undefined,
+			additionalProperties: schema.additionalProperties,
+		};
+	}
+	return {
+		type: 'object',
+		properties: {},
+	};
+}
+
+function mcpSchemaToParameterDefinitions(schema: unknown): readonly IVSCloneToolDefinition['parameters'][number][] {
+	if (!isObjectSchema(schema) || !schema.properties || typeof schema.properties !== 'object') {
+		return [];
+	}
+
+	const required = new Set(Array.isArray(schema.required) ? schema.required.filter((entry): entry is string => typeof entry === 'string') : []);
+	return Object.entries(schema.properties).map(([name, value]) => ({
+		name,
+		required: required.has(name),
+		description: getMcpSchemaPropertyDescription(value),
+	}));
+}
+
+function getMcpSchemaPropertyDescription(value: unknown): string {
+	if (value && typeof value === 'object' && hasKey(value, { description: true })) {
+		const property = value as { readonly description?: unknown };
+		if (typeof property.description === 'string') {
+			return property.description;
+		}
+	}
+	return 'MCP tool argument.';
+}
+
+function isObjectSchema(value: unknown): value is { readonly properties?: unknown; readonly required?: unknown; readonly additionalProperties?: unknown } {
+	return !!value && typeof value === 'object';
+}
+
+function decodeMcpToolParams(params: Record<string, string>): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(params).map(([key, value]) => [key, decodeMcpToolParam(value)]));
+}
+
+function decodeMcpToolParam(value: string): unknown {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return value;
+	}
+	try {
+		return JSON.parse(trimmed);
+	} catch {
+		return value;
+	}
+}
+
+function formatMcpToolResult(result: { readonly content?: readonly unknown[]; readonly structuredContent?: unknown; readonly isError?: boolean }): string {
+	const output: string[] = [];
+	if (result.structuredContent !== undefined) {
+		output.push(JSON.stringify(result.structuredContent, undefined, 2));
+	}
+	for (const part of result.content ?? []) {
+		output.push(formatMcpToolContentPart(part));
+	}
+	return output.filter(Boolean).join('\n\n') || (result.isError ? 'MCP tool returned an error with no content.' : 'MCP tool completed with no content.');
+}
+
+function formatMcpToolContentPart(part: unknown): string {
+	if (!part || typeof part !== 'object') {
+		return String(part);
+	}
+	if (hasKey(part, { type: true, text: true })) {
+		const textPart = part as { readonly type?: unknown; readonly text?: unknown };
+		if (textPart.type === 'text' && typeof textPart.text === 'string') {
+			return textPart.text;
+		}
+	}
+	if (hasKey(part, { type: true, resource: true })) {
+		const resourcePart = part as { readonly type?: unknown; readonly resource?: unknown };
+		if (resourcePart.type === 'resource') {
+			return JSON.stringify(resourcePart.resource, undefined, 2);
+		}
+	}
+	return JSON.stringify(part, undefined, 2);
 }
 
 function truncateText(value: string, maxChars: number): { text: string; truncatedChars: number } {

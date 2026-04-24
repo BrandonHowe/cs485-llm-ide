@@ -11,7 +11,7 @@ import type { IVSCloneLLMMessageReasoningBlock } from './vscloneLLMMessageTypes.
 import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
-import type { VSCloneToolApprovalType } from './vscloneToolDefinitions.js';
+import type { IVSCloneToolDefinition, VSCloneToolApprovalType } from './vscloneToolDefinitions.js';
 
 export type VSCloneThreadRuntimeCatalogStatus = 'active' | 'completed' | 'failed' | 'archived';
 export type VSCloneThreadRuntimeCatalogTab = 'all' | 'active' | 'archived';
@@ -162,6 +162,7 @@ export interface IVSCloneThreadRuntimeRunContext {
 	readonly reasoningEnabled?: boolean;
 	readonly reasoningBudget?: number;
 	readonly systemMessage?: string;
+	readonly toolDefinitions?: readonly IVSCloneToolDefinition[];
 	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 	readonly contextSelections?: readonly IVSCloneContextSelection[];
 }
@@ -301,6 +302,7 @@ export interface IVSCloneThreadRuntimeRunOptions {
 	readonly reasoningBudget?: number;
 	readonly previousTurns?: readonly IVSCloneChatTransportConversationMessage[];
 	readonly systemMessage?: string;
+	readonly toolDefinitions?: readonly IVSCloneToolDefinition[];
 	readonly imageAttachments?: readonly IVSCloneImageAttachment[];
 	/**
 	 * Raw selection metadata for display. The `promptText` sent to the LLM has already been enriched

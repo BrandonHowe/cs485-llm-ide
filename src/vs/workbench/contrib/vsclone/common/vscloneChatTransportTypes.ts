@@ -8,6 +8,7 @@ import type { IVSCloneLLMMessageReasoningBlock } from './vscloneLLMMessageTypes.
 import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
+import type { IVSCloneToolDefinition } from './vscloneToolDefinitions.js';
 
 /**
  * Image attachments are persisted as base64 payloads so restored runtime turns can reconstruct
@@ -92,4 +93,5 @@ export interface IVSCloneChatTransportRequestOptions {
 	readonly previousTurns?: readonly IVSCloneChatTransportConversationMessage[];
 	readonly currentTurn: IVSCloneChatTransportConversationMessage;
 	readonly systemMessage?: string;
+	readonly toolDefinitions?: readonly IVSCloneToolDefinition[];
 }
