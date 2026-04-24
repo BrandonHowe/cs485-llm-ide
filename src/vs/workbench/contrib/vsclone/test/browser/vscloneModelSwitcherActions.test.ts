@@ -17,6 +17,7 @@ interface IViewPaneStub {
 	openModelPicker(): void;
 	refreshModelCatalog(): Promise<void>;
 	manageProviders(): Promise<void>;
+	openSettingsPage(): void;
 	resetModelSelection(): Promise<void>;
 	switchToNextModel(): Promise<void>;
 }
@@ -31,6 +32,7 @@ function createPaneStub() {
 		openModelPicker: 0,
 		refreshModelCatalog: 0,
 		manageProviders: 0,
+		openSettingsPage: 0,
 		resetModelSelection: 0,
 		switchToNextModel: 0,
 	};
@@ -47,6 +49,9 @@ function createPaneStub() {
 		},
 		async manageProviders() {
 			calls.manageProviders += 1;
+		},
+		openSettingsPage: () => {
+			calls.openSettingsPage += 1;
 		},
 		async resetModelSelection() {
 			calls.resetModelSelection += 1;
@@ -114,6 +119,7 @@ suite('VSCloneModelSwitcherActions', () => {
 			[VSCloneModelSwitcherCommandIds.openPicker, 'Open VSClone Model Picker'],
 			[VSCloneModelSwitcherCommandIds.refreshCatalog, 'Refresh VSClone Model Catalog'],
 			[VSCloneModelSwitcherCommandIds.manageProviders, 'Manage VSClone Providers'],
+			[VSCloneModelSwitcherCommandIds.openSettings, 'Open VSClone Settings'],
 			[VSCloneModelSwitcherCommandIds.resetSelection, 'Reset VSClone Model Selection'],
 			[VSCloneModelSwitcherCommandIds.switchToNextModel, 'Switch VSClone To Next Model'],
 		] as const;
@@ -142,6 +148,7 @@ suite('VSCloneModelSwitcherActions', () => {
 			[VSCloneModelSwitcherCommandIds.openPicker, 'openModelPicker', 'openModelPicker'] as const,
 			[VSCloneModelSwitcherCommandIds.refreshCatalog, 'refreshModelCatalog', 'refreshModelCatalog'] as const,
 			[VSCloneModelSwitcherCommandIds.manageProviders, 'manageProviders', 'manageProviders'] as const,
+			[VSCloneModelSwitcherCommandIds.openSettings, 'openSettingsPage', 'openSettingsPage'] as const,
 			[VSCloneModelSwitcherCommandIds.resetSelection, 'resetModelSelection', 'resetModelSelection'] as const,
 			[VSCloneModelSwitcherCommandIds.switchToNextModel, 'switchToNextModel', 'switchToNextModel'] as const,
 		];

@@ -167,6 +167,166 @@
 	max-width: 280px;
 }
 
+.vsclone-thread-messages.hidden,
+.vsclone-thread-composer.hidden,
+.vsclone-thread-model-switcher.hidden,
+.vsclone-settings-page.hidden {
+	display: none;
+}
+
+.vsclone-settings-page {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: 14px;
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.vsclone-settings-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.vsclone-settings-header h2,
+.vsclone-settings-section h3 {
+	margin: 0;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+	letter-spacing: 0;
+}
+
+.vsclone-settings-header h2 {
+	font-size: 18px;
+}
+
+.vsclone-settings-header p,
+.vsclone-settings-section p {
+	margin: 4px 0 0;
+	color: var(--vscode-descriptionForeground);
+	line-height: 1.4;
+}
+
+.vsclone-settings-icon-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 5px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	cursor: pointer;
+}
+
+.vsclone-settings-icon-button:hover,
+.vsclone-settings-action-button:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.vsclone-settings-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 12px;
+	padding-top: 12px;
+}
+
+.vsclone-settings-section {
+	min-width: 0;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	padding: 12px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 64%, var(--vscode-editor-background) 36%);
+}
+
+.vsclone-settings-section h3 {
+	font-size: 13px;
+}
+
+.vsclone-settings-section p {
+	font-size: 12px;
+}
+
+.vsclone-settings-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	min-height: 38px;
+	padding: 9px 0;
+	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent 30%);
+}
+
+.vsclone-settings-section > .vsclone-settings-row:first-of-type,
+.vsclone-settings-section > .vsclone-settings-action-button:first-of-type {
+	margin-top: 10px;
+}
+
+.vsclone-settings-row-copy {
+	min-width: 0;
+}
+
+.vsclone-settings-row-title {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+	overflow-wrap: anywhere;
+}
+
+.vsclone-settings-row-description {
+	margin-top: 2px;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	overflow-wrap: anywhere;
+}
+
+.vsclone-settings-toggle {
+	flex: none;
+}
+
+.vsclone-settings-number-control {
+	display: grid;
+	grid-template-columns: minmax(86px, 1fr) 44px;
+	align-items: center;
+	gap: 8px;
+	min-width: 140px;
+}
+
+.vsclone-settings-number-control input {
+	width: 100%;
+}
+
+.vsclone-settings-number-control span,
+.vsclone-settings-metric {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+
+.vsclone-settings-action-button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 7px;
+	width: 100%;
+	min-height: 30px;
+	margin-top: 8px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 5px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	cursor: pointer;
+	font-size: 12px;
+}
+
 .vsclone-thread-message {
 	display: flex;
 	flex-direction: column;

@@ -19,7 +19,7 @@ import { VSCloneUnifiedChatViewPane } from '../../browser/vscloneUnifiedChatView
 import { VSCloneThreadCommandIds } from '../../browser/vscloneThreadActions.js';
 import { VSCloneModelSwitcherCommandIds } from '../../browser/vscloneModelSwitcherActions.js';
 import { VSCloneOAuthCommandIds } from '../../browser/vscloneOAuthActions.js';
-import { VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from '../../browser/vscloneAutocompleteService.js';
+import { VSCloneAutocompleteDebounceMsMaximum, VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from '../../browser/vscloneAutocompleteService.js';
 import { VSCloneChatRailWidthSetting } from '../../common/vscloneChatViewSettings.js';
 
 function assertCommandRegistered(commandId: string): void {
@@ -86,6 +86,7 @@ suite('VSCloneContribution', () => {
 		assert.strictEqual(properties[VSCloneAutocompleteDebounceMsSetting]?.type, 'number');
 		assert.strictEqual(properties[VSCloneAutocompleteDebounceMsSetting]?.default, 500);
 		assert.strictEqual(properties[VSCloneAutocompleteDebounceMsSetting]?.minimum, 0);
+		assert.strictEqual(properties[VSCloneAutocompleteDebounceMsSetting]?.maximum, VSCloneAutocompleteDebounceMsMaximum);
 		assert.strictEqual(properties[VSCloneAutocompleteDebounceMsSetting]?.scope, ConfigurationScope.WINDOW);
 	});
 

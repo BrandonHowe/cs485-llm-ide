@@ -38,6 +38,7 @@ import { IVSCloneLLMMessageService } from './vscloneLLMMessageService.js';
 
 export const VSCloneAutocompleteEnabledSetting = 'vsclone.autocomplete.enabled';
 export const VSCloneAutocompleteDebounceMsSetting = 'vsclone.autocomplete.debounceMs';
+export const VSCloneAutocompleteDebounceMsMaximum = 2000;
 export const VSCloneInlineSuggestionVisibleContextKey = new RawContextKey<boolean>('vsclone.inlineSuggestionVisible', false, localize('vsclone.inlineSuggestionVisible', "Whether a VSClone inline suggestion is visible."));
 
 const defaultDebounceMs = 500;

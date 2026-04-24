@@ -37,7 +37,7 @@ import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSClonePlanModeService, VSClonePlanModeService } from '../common/vsclonePlanModeService.js';
 import { IVSCloneSettingsService, VSCloneSettingsService } from '../common/vscloneSettingsService.js';
 import { IVSCloneThreadModelSelectionService, VSCloneThreadModelSelectionService } from '../common/backend/vscloneThreadModelSelectionService.js';
-import { VSCloneAutocompleteService, VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from './vscloneAutocompleteService.js';
+import { VSCloneAutocompleteService, VSCloneAutocompleteDebounceMsMaximum, VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting } from './vscloneAutocompleteService.js';
 import { IVSCloneLLMMessageService, VSCloneLLMMessageService } from './vscloneLLMMessageService.js';
 import { IVSCloneMentionSearchService, VSCloneMentionSearchService } from './vscloneMentionSearchService.js';
 import { IVSCloneThreadRuntimeService, VSCloneThreadRuntimeService } from './vscloneThreadRuntimeService.js';
@@ -139,6 +139,7 @@ function registerVSCloneContribution(): void {
 				type: 'number',
 				default: 500,
 				minimum: 0,
+				maximum: VSCloneAutocompleteDebounceMsMaximum,
 				description: localize('vsclone.configuration.autocomplete.debounceMs', 'Delay in milliseconds before VSClone requests an inline completion after typing stops.'),
 				scope: ConfigurationScope.WINDOW,
 			},

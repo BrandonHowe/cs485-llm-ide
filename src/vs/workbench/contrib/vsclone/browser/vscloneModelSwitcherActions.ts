@@ -14,6 +14,7 @@ export const VSCloneModelSwitcherCommandIds = {
 	openPicker: 'vsclone.modelSwitcher.openPicker',
 	refreshCatalog: 'vsclone.modelSwitcher.refreshCatalog',
 	manageProviders: 'vsclone.modelSwitcher.manageProviders',
+	openSettings: 'vsclone.openSettings',
 	resetSelection: 'vsclone.modelSwitcher.resetSelection',
 	switchToNextModel: 'vsclone.modelSwitcher.switchToNextModel',
 } as const;
@@ -86,6 +87,21 @@ export function registerVSCloneModelSwitcherActions(): void {
 		override async run(accessor: ServicesAccessor): Promise<void> {
 			const view = await getVSCloneView(accessor, true);
 			await view?.manageProviders();
+		}
+	});
+
+	registerAction2(class VSCloneOpenSettingsAction extends Action2 {
+		constructor() {
+			super({
+				id: VSCloneModelSwitcherCommandIds.openSettings,
+				title: localize2('vsclone.openSettings', 'Open VSClone Settings'),
+				f1: true,
+			});
+		}
+
+		override async run(accessor: ServicesAccessor): Promise<void> {
+			const view = await getVSCloneView(accessor, true);
+			view?.openSettingsPage();
 		}
 	});
 

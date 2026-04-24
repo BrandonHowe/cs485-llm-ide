@@ -53,6 +53,7 @@ import {
 	type IVSCloneModelSelection,
 } from "../common/vscloneModelSelectionTypes.js";
 import { IVSCloneSettingsService } from "../common/vscloneSettingsService.js";
+import type { IVSCloneSettingsProviderState } from "../common/vscloneSettingsTypes.js";
 import { VSCloneThreadRail } from "./vscloneThreadRail.js";
 import { IVSCloneChatThreadService } from "./vscloneChatThreadService.js";
 import { VSCloneModelSwitcherWidget } from "./vscloneModelSwitcherWidget.js";
@@ -84,9 +85,18 @@ import { IVSCloneMentionSearchService, type IVSCloneMentionResult } from "./vscl
 import { CancellationTokenSource } from "../../../../base/common/cancellation.js";
 import { ILanguageService } from "../../../../editor/common/languages/language.js";
 import { ICodeEditorService } from "../../../../editor/browser/services/codeEditorService.js";
+import { VSCloneAutocompleteDebounceMsMaximum } from "./vscloneAutocompleteService.js";
 
 const railWidthSetting = VSCloneChatRailWidthSetting;
 const modelSwitcherEnabledSetting = "vsclone.modelSwitcher.enabled";
+const autocompleteEnabledSetting = "vsclone.autocomplete.enabled";
+const autocompleteDebounceMsSetting = "vsclone.autocomplete.debounceMs";
+const booleanSettingDefaults: Record<string, boolean> = {
+	// Keep settings-page toggles aligned with registered configuration defaults when the
+	// configuration service has no explicit profile value yet.
+	[modelSwitcherEnabledSetting]: true,
+	[autocompleteEnabledSetting]: true,
+};
 const railMinWidth = 220;
 const railMaxWidth = 520;
 const compactRailBreakpoint = 900;
@@ -337,9 +347,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private conversationContainer: HTMLElement | undefined;
 	private conversationList: HTMLElement | undefined;
 	private conversationEmptyState: HTMLElement | undefined;
+	private settingsContainer: HTMLElement | undefined;
+	private settingsFocusTarget: HTMLElement | undefined;
 	private composerInput: HTMLTextAreaElement | undefined;
 	private composerSendButton: HTMLButtonElement | undefined;
 	private modelSwitcher: VSCloneModelSwitcherWidget | undefined;
+	private modelSwitcherHost: HTMLElement | undefined;
 	private planModeContainer: HTMLElement | undefined;
 	private planModeSwitchButton: HTMLButtonElement | undefined;
 	private addContextMenuToggle: HTMLSpanElement | undefined;
@@ -397,6 +410,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private isCompactLayout = false;
 	private bodyWidth = 0;
 	private submittingPrompt = false;
+	private settingsVisible = false;
+	private conversationHasContent = false;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -445,13 +460,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			hoverService,
 		);
 
-		this.railWidth = Math.min(
-			railMaxWidth,
-			Math.max(
-				railMinWidth,
-				this.configurationService.getValue<number>(railWidthSetting) ?? 320,
-			),
-		);
+		this.railWidth = this.getConfiguredRailWidth();
 
 		this._register(
 			this.rail.onDidSelectThread((threadId) => {
@@ -518,6 +527,25 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this._register(
 			this.settingsService.onDidChangeState(() => {
 				this.refreshModelControls();
+				if (this.settingsVisible) {
+					this.renderSettingsPage();
+				}
+			}),
+		);
+		this._register(
+			this.configurationService.onDidChangeConfiguration((event) => {
+				if (!event.affectsConfiguration("vsclone")) {
+					return;
+				}
+				if (event.affectsConfiguration(modelSwitcherEnabledSetting)) {
+					this.updateModelSwitcherVisibility();
+				}
+				if (event.affectsConfiguration(railWidthSetting)) {
+					this.updateRailWidthFromConfiguration();
+				}
+				if (this.settingsVisible) {
+					this.renderSettingsPage();
+				}
 			}),
 		);
 
@@ -526,6 +554,16 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	override focus(): void {
 		super.focus();
+		if (!this.catalogReady || this.railVisible) {
+			this.rail.focusSearch();
+			return;
+		}
+		if (this.settingsVisible) {
+			// Settings mode hides the composer, so focus must remain on a visible settings control
+			// when the workbench asks the view pane to restore focus.
+			this.settingsFocusTarget?.focus();
+			return;
+		}
 		this.focusInput();
 	}
 
@@ -556,6 +594,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	openModelPicker(): void {
+		if (!this.isModelSwitcherEnabled()) {
+			// The widget may still be constructed so related controls can refresh together, but
+			// command entry points must not open UI that configuration has intentionally hidden.
+			return;
+		}
 		this.modelSwitcher?.open();
 	}
 
@@ -568,6 +611,22 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		await this.providerConfigurationBridge.openManageProvidersPicker();
 		await this.settingsService.refreshState();
 		this.refreshModelControls();
+		if (this.settingsVisible) {
+			this.renderSettingsPage();
+		}
+	}
+
+	openSettingsPage(): void {
+		this.settingsVisible = true;
+		// Settings render inside the conversation region, so close the thread rail first to avoid
+		// focusing controls that are still covered by the rail surface.
+		this.railVisible = false;
+		this.applyRailLayout();
+		const focusTarget = this.renderSettingsPage();
+		this.updateConversationModeVisibility();
+		// Opening settings hides the composer; focus must move with the visible surface so keyboard
+		// users and screen readers are not left in hidden composer or menu content.
+		focusTarget?.focus();
 	}
 
 	async resetModelSelection(): Promise<void> {
@@ -616,6 +675,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.activeThreadId = targetThreadId;
 		this.rail.setSelectedThread(targetThreadId);
 		this.railVisible = false;
+		// Thread navigation is a return to chat content, so clear the settings surface before
+		// focusing the composer to avoid sending focus into UI that remains visually hidden.
+		this.settingsVisible = false;
 		this.refreshPlanModeControl();
 		this.refreshModelControls();
 		this.refreshConversation();
@@ -727,6 +789,21 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		threadButton.setAttribute("aria-label", threadButtonLabel);
 		actions.appendChild(threadButton);
 
+		const settingsButton = document.createElement("button");
+		settingsButton.type = "button";
+		settingsButton.className = "vsclone-thread-action-overflow";
+		const settingsButtonLabel = localize(
+			"vsclone.thread.actions.settings",
+			"Open settings",
+		);
+		settingsButton.title = settingsButtonLabel;
+		settingsButton.setAttribute("aria-label", settingsButtonLabel);
+		const settingsButtonIcon = document.createElement("span");
+		settingsButtonIcon.className = "codicon codicon-settings-gear";
+		settingsButtonIcon.setAttribute("aria-hidden", "true");
+		settingsButton.appendChild(settingsButtonIcon);
+		actions.appendChild(settingsButton);
+
 		const messages = document.createElement("div");
 		messages.className = "vsclone-thread-messages";
 		// Announce newly appended message bubbles without repeatedly reading the whole transcript.
@@ -746,6 +823,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			"Start a new chat from the composer below.",
 		);
 		this.conversationEmptyState = emptyState;
+
+		const settings = document.createElement("div");
+		settings.className = "vsclone-settings-page hidden";
+		this.settingsContainer = settings;
 
 		const composer = document.createElement("div");
 		composer.className = "vsclone-thread-composer";
@@ -797,90 +878,88 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.mentionMenuItems = [];
 		this.mentionMenuActiveIndex = 0;
 		this.mentionMenuTriggerStart = -1;
+		this.modelSwitcherHost = undefined;
 
-		const modelSwitcherEnabled =
-			this.configurationService.getValue<boolean>(
-				modelSwitcherEnabledSetting,
-			) ?? true;
-		if (modelSwitcherEnabled) {
-			const modelSwitcherHost = document.createElement("div");
-			modelSwitcherHost.className = "vsclone-thread-model-switcher";
-			controls.appendChild(modelSwitcherHost);
-			try {
-				this.modelSwitcher = this._register(
-					new VSCloneModelSwitcherWidget(
-						this.settingsService,
-						this.providerConfigurationBridge,
-						() => this.getModelSwitcherContext(),
-					),
-				);
-				this.modelSwitcher.render(modelSwitcherHost);
-			} catch (error) {
-				onUnexpectedError(error);
-				modelSwitcherHost.remove();
-				this.modelSwitcher = undefined;
-			}
-
-			const reasoningEffortHost = document.createElement("div");
-			reasoningEffortHost.className = "vsclone-thread-reasoning-level hidden";
-			const reasoningEffortSelect = document.createElement("select");
-			reasoningEffortSelect.className = "vsclone-thread-reasoning-level-select";
-			reasoningEffortSelect.setAttribute(
-				"aria-label",
-				localize("vsclone.composer.reasoningEffort", "Reasoning level"),
+		const modelSwitcherHost = document.createElement("div");
+		modelSwitcherHost.className = "vsclone-thread-model-switcher";
+		this.modelSwitcherHost = modelSwitcherHost;
+		controls.appendChild(modelSwitcherHost);
+		try {
+			this.modelSwitcher = this._register(
+				new VSCloneModelSwitcherWidget(
+					this.settingsService,
+					this.providerConfigurationBridge,
+					() => this.getModelSwitcherContext(),
+				),
 			);
-			reasoningEffortHost.appendChild(reasoningEffortSelect);
-			controls.appendChild(reasoningEffortHost);
-			this.reasoningEffortContainer = reasoningEffortHost;
-			this.reasoningEffortSelect = reasoningEffortSelect;
-
-			// Enabled toggle: only visible for models whose capability metadata sets
-			// `canTurnOffReasoning: true` AND has no `reasoningSlider`. When a slider exists
-			// (budget_slider or effort_slider) it owns the on/off affordance itself. Mirrors the
-			// `VoidSwitch` Void renders when reasoning can be explicitly suppressed without a slider.
-			const reasoningEnabledHost = document.createElement("div");
-			reasoningEnabledHost.className = "vsclone-thread-reasoning-enabled hidden";
-			const reasoningEnabledLabel = document.createElement("span");
-			reasoningEnabledLabel.className = "vsclone-thread-reasoning-enabled-label";
-			reasoningEnabledLabel.textContent = localize("vsclone.composer.reasoningEnabled", "Thinking");
-			const reasoningEnabledInput = document.createElement("input");
-			reasoningEnabledInput.type = "checkbox";
-			reasoningEnabledInput.className = "vsclone-thread-reasoning-enabled-input";
-			reasoningEnabledInput.setAttribute(
-				"aria-label",
-				localize("vsclone.composer.reasoningEnabled.aria", "Toggle reasoning"),
-			);
-			reasoningEnabledHost.appendChild(reasoningEnabledLabel);
-			reasoningEnabledHost.appendChild(reasoningEnabledInput);
-			controls.appendChild(reasoningEnabledHost);
-			this.reasoningEnabledContainer = reasoningEnabledHost;
-			this.reasoningEnabledInput = reasoningEnabledInput;
-
-			// Budget slider: only visible for budget-slider models (Anthropic extended thinking,
-			// Gemini `thinkingConfig.thinkingBudget`). Mirrors Void's `VoidSlider` inside the
-			// `ReasoningOptionSlider` branch where `reasoningBudgetSlider.type === 'budget_slider'`.
-			const reasoningBudgetHost = document.createElement("div");
-			reasoningBudgetHost.className = "vsclone-thread-reasoning-budget hidden";
-			const reasoningBudgetLabel = document.createElement("span");
-			reasoningBudgetLabel.className = "vsclone-thread-reasoning-budget-label";
-			reasoningBudgetLabel.textContent = localize("vsclone.composer.reasoningBudget", "Thinking");
-			const reasoningBudgetInput = document.createElement("input");
-			reasoningBudgetInput.type = "range";
-			reasoningBudgetInput.className = "vsclone-thread-reasoning-budget-input";
-			reasoningBudgetInput.setAttribute(
-				"aria-label",
-				localize("vsclone.composer.reasoningBudget.aria", "Reasoning token budget"),
-			);
-			const reasoningBudgetValue = document.createElement("span");
-			reasoningBudgetValue.className = "vsclone-thread-reasoning-budget-value";
-			reasoningBudgetHost.appendChild(reasoningBudgetLabel);
-			reasoningBudgetHost.appendChild(reasoningBudgetInput);
-			reasoningBudgetHost.appendChild(reasoningBudgetValue);
-			controls.appendChild(reasoningBudgetHost);
-			this.reasoningBudgetContainer = reasoningBudgetHost;
-			this.reasoningBudgetInput = reasoningBudgetInput;
-			this.reasoningBudgetValueLabel = reasoningBudgetValue;
+			this.modelSwitcher.render(modelSwitcherHost);
+		} catch (error) {
+			onUnexpectedError(error);
+			modelSwitcherHost.remove();
+			this.modelSwitcherHost = undefined;
+			this.modelSwitcher = undefined;
 		}
+		this.updateModelSwitcherVisibility();
+
+		const reasoningEffortHost = document.createElement("div");
+		reasoningEffortHost.className = "vsclone-thread-reasoning-level hidden";
+		const reasoningEffortSelect = document.createElement("select");
+		reasoningEffortSelect.className = "vsclone-thread-reasoning-level-select";
+		reasoningEffortSelect.setAttribute(
+			"aria-label",
+			localize("vsclone.composer.reasoningEffort", "Reasoning level"),
+		);
+		reasoningEffortHost.appendChild(reasoningEffortSelect);
+		controls.appendChild(reasoningEffortHost);
+		this.reasoningEffortContainer = reasoningEffortHost;
+		this.reasoningEffortSelect = reasoningEffortSelect;
+
+		// Enabled toggle: only visible for models whose capability metadata sets
+		// `canTurnOffReasoning: true` AND has no `reasoningSlider`. When a slider exists
+		// (budget_slider or effort_slider) it owns the on/off affordance itself. Mirrors the
+		// `VoidSwitch` Void renders when reasoning can be explicitly suppressed without a slider.
+		const reasoningEnabledHost = document.createElement("div");
+		reasoningEnabledHost.className = "vsclone-thread-reasoning-enabled hidden";
+		const reasoningEnabledLabel = document.createElement("span");
+		reasoningEnabledLabel.className = "vsclone-thread-reasoning-enabled-label";
+		reasoningEnabledLabel.textContent = localize("vsclone.composer.reasoningEnabled", "Thinking");
+		const reasoningEnabledInput = document.createElement("input");
+		reasoningEnabledInput.type = "checkbox";
+		reasoningEnabledInput.className = "vsclone-thread-reasoning-enabled-input";
+		reasoningEnabledInput.setAttribute(
+			"aria-label",
+			localize("vsclone.composer.reasoningEnabled.aria", "Toggle reasoning"),
+		);
+		reasoningEnabledHost.appendChild(reasoningEnabledLabel);
+		reasoningEnabledHost.appendChild(reasoningEnabledInput);
+		controls.appendChild(reasoningEnabledHost);
+		this.reasoningEnabledContainer = reasoningEnabledHost;
+		this.reasoningEnabledInput = reasoningEnabledInput;
+
+		// Budget slider: only visible for budget-slider models (Anthropic extended thinking,
+		// Gemini `thinkingConfig.thinkingBudget`). Mirrors Void's `VoidSlider` inside the
+		// `ReasoningOptionSlider` branch where `reasoningBudgetSlider.type === 'budget_slider'`.
+		const reasoningBudgetHost = document.createElement("div");
+		reasoningBudgetHost.className = "vsclone-thread-reasoning-budget hidden";
+		const reasoningBudgetLabel = document.createElement("span");
+		reasoningBudgetLabel.className = "vsclone-thread-reasoning-budget-label";
+		reasoningBudgetLabel.textContent = localize("vsclone.composer.reasoningBudget", "Thinking");
+		const reasoningBudgetInput = document.createElement("input");
+		reasoningBudgetInput.type = "range";
+		reasoningBudgetInput.className = "vsclone-thread-reasoning-budget-input";
+		reasoningBudgetInput.setAttribute(
+			"aria-label",
+			localize("vsclone.composer.reasoningBudget.aria", "Reasoning token budget"),
+		);
+		const reasoningBudgetValue = document.createElement("span");
+		reasoningBudgetValue.className = "vsclone-thread-reasoning-budget-value";
+		reasoningBudgetHost.appendChild(reasoningBudgetLabel);
+		reasoningBudgetHost.appendChild(reasoningBudgetInput);
+		reasoningBudgetHost.appendChild(reasoningBudgetValue);
+		controls.appendChild(reasoningBudgetHost);
+		this.reasoningBudgetContainer = reasoningBudgetHost;
+		this.reasoningBudgetInput = reasoningBudgetInput;
+		this.reasoningBudgetValueLabel = reasoningBudgetValue;
 
 		// "+" context menu button with popup for adding images, files, and toggling plan mode.
 		const addContextRoot = document.createElement('div');
@@ -1004,6 +1083,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		composer.appendChild(hint);
 
 		parent.appendChild(actions);
+		parent.appendChild(settings);
 		parent.appendChild(messages);
 		parent.appendChild(emptyState);
 		parent.appendChild(composer);
@@ -1012,6 +1092,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			addDisposableListener(threadButton, EventType.CLICK, () => {
 				this.railVisible = true;
 				this.applyRailLayout();
+			}),
+		);
+
+		this._register(
+			addDisposableListener(settingsButton, EventType.CLICK, () => {
+				this.openSettingsPage();
 			}),
 		);
 
@@ -1226,6 +1312,302 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		if (this.modelSwitcher) {
 			void this.settingsService.refreshState();
 		}
+		this.updateConversationModeVisibility();
+	}
+
+	private updateConversationModeVisibility(): void {
+		this.settingsContainer?.classList.toggle("hidden", !this.settingsVisible);
+		this.conversationList?.classList.toggle("hidden", this.settingsVisible);
+		// Settings mode temporarily hides chat chrome, but closing it must restore the
+		// message-aware empty state instead of showing the placeholder over an existing thread.
+		this.conversationEmptyState?.classList.toggle("hidden", this.settingsVisible || this.conversationHasContent);
+		this.composerInput?.closest(".vsclone-thread-composer")?.classList.toggle("hidden", this.settingsVisible);
+	}
+
+	private updateModelSwitcherVisibility(): void {
+		const modelSwitcherEnabled = this.isModelSwitcherEnabled();
+		if (!modelSwitcherEnabled) {
+			// Closing before hiding clears the switcher's internal open state so re-enabling the
+			// setting never resurrects a previously open menu.
+			this.modelSwitcher?.close();
+		}
+		this.modelSwitcherHost?.classList.toggle("hidden", !modelSwitcherEnabled);
+		this.refreshReasoningEffortControl();
+		this.refreshReasoningEnabledControl();
+		this.refreshReasoningBudgetControl();
+	}
+
+	private isModelSwitcherEnabled(): boolean {
+		return this.configurationService.getValue<boolean>(modelSwitcherEnabledSetting) ?? true;
+	}
+
+	private renderSettingsPage(): HTMLElement | undefined {
+		const settings = this.settingsContainer;
+		if (!settings) {
+			this.settingsFocusTarget = undefined;
+			return undefined;
+		}
+
+		const state = this.settingsService.getState();
+		const modelSwitcherEnabled = this.isModelSwitcherEnabled();
+		const activeFocusKey = this.getActiveSettingsFocusKey(settings);
+		settings.replaceChildren();
+
+		const header = document.createElement("div");
+		header.className = "vsclone-settings-header";
+		const headerCopy = document.createElement("div");
+		const title = document.createElement("h2");
+		title.textContent = localize("vsclone.settings.title", "VSClone Settings");
+		const subtitle = document.createElement("p");
+		subtitle.textContent = localize("vsclone.settings.subtitle", "Tune models, providers, context, edits, and privacy for the built-in assistant.");
+		headerCopy.appendChild(title);
+		headerCopy.appendChild(subtitle);
+		header.appendChild(headerCopy);
+
+		const closeButton = document.createElement("button");
+		closeButton.type = "button";
+		closeButton.className = "vsclone-settings-icon-button";
+		this.setSettingsFocusKey(closeButton, "settings.close");
+		closeButton.title = localize("vsclone.settings.close", "Back to chat");
+		closeButton.setAttribute("aria-label", closeButton.title);
+		const closeIcon = document.createElement("span");
+		closeIcon.className = "codicon codicon-close";
+		closeIcon.setAttribute("aria-hidden", "true");
+		closeButton.appendChild(closeIcon);
+		closeButton.addEventListener(EventType.CLICK, () => {
+			this.settingsVisible = false;
+			this.updateConversationModeVisibility();
+			this.focusInput();
+		});
+		header.appendChild(closeButton);
+		settings.appendChild(header);
+		this.settingsFocusTarget = closeButton;
+
+		const grid = document.createElement("div");
+		grid.className = "vsclone-settings-grid";
+		grid.appendChild(this.createSettingsSection(
+			localize("vsclone.settings.providers.title", "Providers"),
+			localize("vsclone.settings.providers.description", "Enable the accounts and model families available to chat and autocomplete."),
+			state.providers.map(provider => this.createProviderRow(provider)),
+		));
+		grid.appendChild(this.createSettingsSection(
+			localize("vsclone.settings.models.title", "Models"),
+			localize("vsclone.settings.models.description", "Defaults are picked by capability so each workflow starts on a useful model."),
+			[
+				this.createSettingsMetric(localize("vsclone.settings.models.available", "Available models"), String(state.models.filter(model => model.isSelectable).length)),
+				this.createSettingsMetric(localize("vsclone.settings.models.recent", "Recent"), state.recentModelIdentifiers.slice(0, 3).join(", ") || localize("vsclone.settings.models.none", "None")),
+				// This action opens the composer-hosted picker, so omit it when that picker is
+				// disabled instead of navigating users toward hidden composer UI.
+				...(modelSwitcherEnabled ? [this.createSettingsButtonRow("models.pick", localize("vsclone.settings.models.pick", "Choose model"), "codicon-symbol-misc", () => {
+					this.settingsVisible = false;
+					this.updateConversationModeVisibility();
+					this.openModelPicker();
+				})] : []),
+				this.createSettingsButtonRow("models.refresh", localize("vsclone.settings.models.refresh", "Refresh catalog"), "codicon-refresh", () => { void this.refreshModelCatalog(); }),
+			],
+		));
+		grid.appendChild(this.createSettingsSection(
+			localize("vsclone.settings.experience.title", "Experience"),
+			localize("vsclone.settings.experience.description", "Controls for the chat rail, model picker, and inline completion behavior."),
+			[
+				this.createBooleanSettingRow(modelSwitcherEnabledSetting, localize("vsclone.settings.modelSwitcher", "Model picker in composer")),
+				this.createBooleanSettingRow(autocompleteEnabledSetting, localize("vsclone.settings.autocomplete", "Inline autocomplete")),
+				this.createNumberSettingRow(autocompleteDebounceMsSetting, localize("vsclone.settings.autocompleteDelay", "Autocomplete delay"), 0, VSCloneAutocompleteDebounceMsMaximum, "ms"),
+				this.createNumberSettingRow(railWidthSetting, localize("vsclone.settings.railWidth", "Thread rail width"), railMinWidth, railMaxWidth, "px"),
+			],
+		));
+		grid.appendChild(this.createSettingsSection(
+			localize("vsclone.settings.agent.title", "Agent Behavior"),
+			localize("vsclone.settings.agent.description", "Current guardrails that are enforced by the runtime."),
+			[
+				this.createSettingsMetric(localize("vsclone.settings.agent.terminalApproval", "Terminal tools"), localize("vsclone.settings.agent.explicitApproval", "Require approval")),
+				this.createSettingsMetric(localize("vsclone.settings.agent.editApproval", "Edit tools"), this.threadRuntimeService.isAutoApproveEdits()
+					? localize("vsclone.settings.agent.editApproval.auto", "Auto-approve enabled")
+					: localize("vsclone.settings.agent.editApproval.manual", "Require approval")),
+				this.createSettingsMetric(localize("vsclone.settings.agent.deleteThreads", "Thread deletion"), localize("vsclone.settings.agent.deleteThreads.railConfirmed", "Rail row deletion confirms")),
+			],
+		));
+		grid.appendChild(this.createSettingsSection(
+			localize("vsclone.settings.privacy.title", "Privacy"),
+			localize("vsclone.settings.privacy.description", "Current data handling status for VSClone settings and chat content."),
+			[
+				this.createSettingsMetric(localize("vsclone.settings.privacy.telemetry", "Usage telemetry"), localize("vsclone.settings.privacy.telemetryUnavailable", "No VSClone telemetry sender")),
+				this.createSettingsMetric(localize("vsclone.settings.privacy.storage", "Provider preferences"), localize("vsclone.settings.privacy.profileScoped", "Profile scoped")),
+				this.createSettingsMetric(localize("vsclone.settings.privacy.prompts", "Prompt content"), localize("vsclone.settings.privacy.localHistory", "Stored in local chat history")),
+			],
+		));
+		settings.appendChild(grid);
+		const restoredFocusTarget = activeFocusKey ? this.findSettingsFocusTarget(settings, activeFocusKey) : undefined;
+		if (restoredFocusTarget) {
+			// Settings updates rebuild the page after configuration/provider changes. The stable key
+			// reconnects focus to the equivalent control so keyboard users do not get dropped onto
+			// the document body when replaceChildren removes the active element.
+			this.settingsFocusTarget = restoredFocusTarget;
+			restoredFocusTarget.focus();
+		}
+		return this.settingsFocusTarget;
+	}
+
+	private getActiveSettingsFocusKey(settings: HTMLElement): string | undefined {
+		const activeElement = settings.ownerDocument.activeElement;
+		if (!(activeElement instanceof HTMLElement) || !settings.contains(activeElement)) {
+			return undefined;
+		}
+		return activeElement.closest<HTMLElement>("[data-vsclone-settings-focus-key]")?.dataset.vscloneSettingsFocusKey;
+	}
+
+	private setSettingsFocusKey(element: HTMLElement, key: string): void {
+		element.dataset.vscloneSettingsFocusKey = key;
+	}
+
+	private findSettingsFocusTarget(settings: HTMLElement, key: string): HTMLElement | undefined {
+		for (const element of settings.querySelectorAll<HTMLElement>("[data-vsclone-settings-focus-key]")) {
+			if (element.dataset.vscloneSettingsFocusKey === key) {
+				return element;
+			}
+		}
+		return undefined;
+	}
+
+	private createSettingsSection(title: string, description: string, rows: readonly HTMLElement[]): HTMLElement {
+		const section = document.createElement("section");
+		section.className = "vsclone-settings-section";
+		const heading = document.createElement("h3");
+		heading.textContent = title;
+		const copy = document.createElement("p");
+		copy.textContent = description;
+		section.appendChild(heading);
+		section.appendChild(copy);
+		for (const row of rows) {
+			section.appendChild(row);
+		}
+		return section;
+	}
+
+	private createProviderRow(provider: IVSCloneSettingsProviderState): HTMLElement {
+		return this.createSettingsToggleRow(
+			`provider.${provider.vendor}`,
+			provider.displayName,
+			provider.status === "available"
+				? localize("vsclone.settings.provider.ready", "{0} selectable models", provider.selectableModelCount)
+				: localize("vsclone.settings.provider.signIn", "Sign in required"),
+			provider.enabled,
+			async (enabled) => {
+				await this.settingsService.setProviderEnabled(provider.vendor, enabled);
+				await this.settingsService.refreshState();
+			},
+		);
+	}
+
+	private createBooleanSettingRow(key: string, label: string): HTMLElement {
+		return this.createSettingsToggleRow(
+			`setting.${key}`,
+			label,
+			key,
+			this.configurationService.getValue<boolean>(key) ?? booleanSettingDefaults[key] ?? false,
+			async (enabled) => {
+				// Let the configuration service pick the write target so workspace-scoped values are
+				// updated in place instead of being shadowed by a forced user-level override.
+				await this.configurationService.updateValue(key, enabled);
+			},
+		);
+	}
+
+	private createNumberSettingRow(key: string, label: string, min: number, max: number, suffix: string): HTMLElement {
+		const row = document.createElement("div");
+		row.className = "vsclone-settings-row";
+		const labelContainer = document.createElement("div");
+		labelContainer.className = "vsclone-settings-row-copy";
+		const title = document.createElement("div");
+		title.className = "vsclone-settings-row-title";
+		title.textContent = label;
+		const description = document.createElement("div");
+		description.className = "vsclone-settings-row-description";
+		description.textContent = key;
+		labelContainer.appendChild(title);
+		labelContainer.appendChild(description);
+
+		const control = document.createElement("div");
+		control.className = "vsclone-settings-number-control";
+		const input = document.createElement("input");
+		input.type = "range";
+		this.setSettingsFocusKey(input, `setting.${key}`);
+		input.setAttribute("aria-label", label);
+		input.min = String(min);
+		input.max = String(max);
+		input.step = "10";
+		input.value = String(this.configurationService.getValue<number>(key) ?? min);
+		const value = document.createElement("span");
+		value.textContent = `${input.value}${suffix}`;
+		input.addEventListener(EventType.INPUT, () => {
+			value.textContent = `${input.value}${suffix}`;
+		});
+		input.addEventListener(EventType.CHANGE, () => {
+			// Use the effective configuration target here for the same reason as boolean toggles:
+			// the custom page should not create a user override when a workspace value is active.
+			void this.configurationService.updateValue(key, Number(input.value));
+		});
+		control.appendChild(input);
+		control.appendChild(value);
+		row.appendChild(labelContainer);
+		row.appendChild(control);
+		return row;
+	}
+
+	private createSettingsToggleRow(focusKey: string, label: string, description: string, checked: boolean, onChange: (checked: boolean) => Promise<void>): HTMLElement {
+		const row = document.createElement("div");
+		row.className = "vsclone-settings-row";
+		const copy = document.createElement("div");
+		copy.className = "vsclone-settings-row-copy";
+		const title = document.createElement("div");
+		title.className = "vsclone-settings-row-title";
+		title.textContent = label;
+		const detail = document.createElement("div");
+		detail.className = "vsclone-settings-row-description";
+		detail.textContent = description;
+		copy.appendChild(title);
+		copy.appendChild(detail);
+
+		const toggle = document.createElement("input");
+		toggle.type = "checkbox";
+		toggle.className = "vsclone-settings-toggle";
+		this.setSettingsFocusKey(toggle, focusKey);
+		toggle.checked = checked;
+		toggle.setAttribute("aria-label", label);
+		toggle.addEventListener(EventType.CHANGE, () => {
+			void onChange(toggle.checked);
+		});
+		row.appendChild(copy);
+		row.appendChild(toggle);
+		return row;
+	}
+
+	private createSettingsMetric(label: string, value: string): HTMLElement {
+		const row = document.createElement("div");
+		row.className = "vsclone-settings-row metric";
+		const title = document.createElement("div");
+		title.className = "vsclone-settings-row-title";
+		title.textContent = label;
+		const metric = document.createElement("div");
+		metric.className = "vsclone-settings-metric";
+		metric.textContent = value;
+		row.appendChild(title);
+		row.appendChild(metric);
+		return row;
+	}
+
+	private createSettingsButtonRow(focusKey: string, label: string, iconClass: string, onClick: () => void): HTMLElement {
+		const button = document.createElement("button");
+		button.type = "button";
+		button.className = "vsclone-settings-action-button";
+		this.setSettingsFocusKey(button, focusKey);
+		const icon = document.createElement("span");
+		icon.className = `codicon ${iconClass}`;
+		icon.setAttribute("aria-hidden", "true");
+		button.appendChild(icon);
+		button.appendChild(document.createTextNode(label));
+		button.addEventListener(EventType.CLICK, onClick);
+		return button;
 	}
 
 	private renderConversationFallback(parent: HTMLElement): void {
@@ -1936,12 +2318,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			? this.renderRuntimeConversationNodes(runtimeState)
 			: [];
 		const hasRuntimeNodes = runtimeNodes.length > 0;
+		this.conversationHasContent = hasRuntimeNodes;
 		this.conversationList.replaceChildren();
-		this.conversationList.classList.toggle("hidden", !hasRuntimeNodes);
-		this.conversationEmptyState.classList.toggle(
-			"hidden",
-			hasRuntimeNodes,
-		);
 		if (hasRuntimeNodes) {
 			this.conversationList.append(...runtimeNodes);
 		}
@@ -1949,6 +2327,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.updateComposerState();
 		this.refreshModelControls();
 		this.scheduleScrollToBottom();
+		this.updateConversationModeVisibility();
 	}
 
 	private renderRuntimeConversationNodes(
@@ -4574,17 +4953,38 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return false;
 	}
 
+	private getConfiguredRailWidth(): number {
+		return Math.min(
+			railMaxWidth,
+			Math.max(
+				railMinWidth,
+				this.configurationService.getValue<number>(railWidthSetting) ?? 320,
+			),
+		);
+	}
+
+	private updateRailWidthFromConfiguration(): void {
+		const width = this.getConfiguredRailWidth();
+		if (width === this.railWidth) {
+			return;
+		}
+		this.railWidth = width;
+		// The settings slider writes configuration outside the drag path, so apply the layout here
+		// to keep any currently visible rail in sync with the stored width immediately.
+		this.applyRailLayout();
+	}
+
 	private applyRailLayout(): void {
 		if (!this.rootContainer || !this.railContainer || !this.railResizeHandle) {
 			return;
 		}
 
 		this.rootContainer.classList.toggle("rail-hidden", !this.railVisible);
-		this.rootContainer.classList.toggle("thread-rail-screen", this.railVisible);
-		this.railContainer.style.width = this.railVisible ? "100%" : "0px";
-		this.railResizeHandle.style.display = "none";
+		this.rootContainer.classList.toggle("thread-rail-screen", this.railVisible && this.isCompactLayout);
+		this.railContainer.style.width = this.railVisible ? `${this.railWidth}px` : "0px";
+		this.railResizeHandle.style.display = this.railVisible && !this.isCompactLayout ? "" : "none";
 		if (this.conversationContainer) {
-			this.conversationContainer.style.display = this.railVisible ? "none" : "";
+			this.conversationContainer.style.display = this.railVisible && this.isCompactLayout ? "none" : "";
 		}
 	}
 
@@ -4780,6 +5180,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
+		if (!this.isModelSwitcherEnabled()) {
+			// The reasoning selector is an extension of composer model selection; hiding it with
+			// the picker preserves the prior single-control composer when the switcher is disabled.
+			this.reasoningEffortContainer.classList.add("hidden");
+			this.reasoningEffortSelect.replaceChildren();
+			this.updateComposerState();
+			return;
+		}
+
 		const selectedModel =
 			this.settingsService.getCurrentSelectionForFeature(
 				this.activeThreadId ?? "",
@@ -4908,6 +5317,14 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return;
 		}
 
+		if (!this.isModelSwitcherEnabled()) {
+			// Reasoning controls are extensions of composer model selection, so hide them with the
+			// picker to preserve the configured single-control composer.
+			this.reasoningEnabledContainer.classList.add('hidden');
+			this.updateComposerState();
+			return;
+		}
+
 		const selectedModel = this.settingsService.getCurrentSelectionForFeature(
 			this.activeThreadId ?? '',
 			'chat',
@@ -4972,6 +5389,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	 */
 	private refreshReasoningBudgetControl(): void {
 		if (!this.reasoningBudgetContainer || !this.reasoningBudgetInput) {
+			return;
+		}
+
+		if (!this.isModelSwitcherEnabled()) {
+			// Budget sliders belong to model selection just like the picker and effort dropdown.
+			this.reasoningBudgetContainer.classList.add('hidden');
+			this.updateComposerState();
 			return;
 		}
 
@@ -5273,6 +5697,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private showComposerForNewChat(): void {
 		this.activeThreadId = undefined;
 		this.rail.setSelectedThread(undefined);
+		// New chat starts in composer mode even if the user opened it from settings.
+		this.settingsVisible = false;
 		this.refreshPlanModeControl();
 		this.refreshModelControls();
 		this.refreshConversation();
@@ -5281,4 +5707,3 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.focusInput();
 	}
 }
-
