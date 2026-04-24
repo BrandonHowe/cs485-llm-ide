@@ -306,7 +306,12 @@ function renderModelSwitcherBody(
 				<div key={section.label}>
 					<div className="vsclone-model-switcher-section">
 						<span className="vsclone-model-switcher-section-label">{section.label}</span>
-						{section.count !== undefined ? <span className="vsclone-model-switcher-section-count">{section.count}</span> : null}
+						{section.count !== undefined ? (
+							<Fragment>
+								<span className="vsclone-model-switcher-section-separator" aria-hidden="true">·</span>
+								<span className="vsclone-model-switcher-section-count">{section.count}</span>
+							</Fragment>
+						) : null}
 					</div>
 					{section.models.map(model => {
 						const isSelected = selected?.modelIdentifier === model.identifier;
@@ -328,7 +333,6 @@ function renderModelSwitcherBody(
 								}}
 							>
 								<span className="vsclone-model-switcher-row-label" title={model.modelName}>{model.modelName}</span>
-								{isSelected ? <Codicon icon="codicon-check" extraClassName="vsclone-model-switcher-row-check" /> : null}
 								{!model.isSelectable ? (
 									<Fragment>
 										<Codicon icon="codicon-lock" extraClassName="vsclone-model-switcher-row-lock" />
@@ -386,7 +390,7 @@ export function VSCloneModelSwitcherView(props: IVSCloneModelSwitcherViewProps) 
 				<div className="vsclone-model-switcher-menu-body">
 					{renderModelSwitcherBody(props.state, props.sections, props.selected, props.onRefreshCatalog, props.onManageProviders, props.onSelectModel)}
 				</div>
-				<div className={props.showResetAction ? 'vsclone-model-switcher-menu-footer' : 'vsclone-model-switcher-menu-footer single-action'}>
+				<div className="vsclone-model-switcher-menu-footer single-action">
 					<button
 						type="button"
 						className="vsclone-model-switcher-footer-button"
@@ -398,19 +402,6 @@ export function VSCloneModelSwitcherView(props: IVSCloneModelSwitcherViewProps) 
 						<Codicon icon="codicon-settings-gear" />
 						<span>{localize('vsclone.modelSwitcher.manageProviders', 'Manage Providers')}</span>
 					</button>
-					{props.showResetAction ? (
-						<button
-							type="button"
-							className="vsclone-model-switcher-footer-button"
-							onClick={(event) => {
-								event.stopPropagation();
-								props.onResetSelection();
-							}}
-						>
-							<Codicon icon="codicon-history" />
-							<span>{localize('vsclone.modelSwitcher.resetSelection', 'Reset Selection')}</span>
-						</button>
-					) : null}
 				</div>
 			</div>
 		</div>

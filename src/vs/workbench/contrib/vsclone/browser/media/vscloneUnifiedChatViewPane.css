@@ -2131,21 +2131,21 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 10px 12px;
+	padding: 6px 10px;
 	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 85%, transparent 15%);
 }
 
 .vsclone-model-switcher-menu-title {
-	font-size: 14px;
+	font-size: 12px;
 	font-weight: 700;
 	line-height: 1.15;
 }
 
 .vsclone-model-switcher-refresh {
-	height: 26px;
-	width: 26px;
+	height: 22px;
+	width: 22px;
 	border: none;
-	border-radius: 5px;
+	border-radius: 4px;
 	cursor: pointer;
 	background: transparent;
 	color: var(--vscode-editor-foreground);
@@ -2156,7 +2156,7 @@
 }
 
 .vsclone-model-switcher-refresh .codicon {
-	font-size: 16px;
+	font-size: 14px;
 }
 
 .vsclone-model-switcher-refresh:hover {
@@ -2167,33 +2167,38 @@
 .vsclone-model-switcher-menu-body {
 	max-height: min(360px, 56vh);
 	overflow: auto;
-	padding: 6px 8px;
+	padding: 4px 6px;
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: 1px;
 }
 
 .vsclone-model-switcher-section {
 	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	padding: 0 10px;
-	height: 32px;
-	border-radius: 5px;
-	background: color-mix(in srgb, var(--vscode-editor-background) 72%, black 28%);
+	align-items: baseline;
+	gap: 4px;
+	padding: 6px 8px 2px;
+	height: auto;
+	background: transparent;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 52%, transparent 48%);
 }
 
 .vsclone-model-switcher-section-label {
-	font-size: 11px;
-	font-weight: 700;
-	letter-spacing: 0.1em;
-	opacity: 0.82;
+	font-size: 9px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.vsclone-model-switcher-section-separator {
+	font-size: 10px;
+	line-height: 1;
 }
 
 .vsclone-model-switcher-section-count {
-	font-size: 12px;
-	opacity: 0.64;
-	font-weight: 550;
+	font-size: 10px;
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
 }
 
 .vsclone-model-switcher-row {
@@ -2201,13 +2206,13 @@
 	border-radius: 4px;
 	background: transparent;
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 92%, white 8%);
-	min-height: 32px;
-	padding: 0 10px;
+	min-height: 26px;
+	padding: 0 8px;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
 	align-items: center;
-	column-gap: 10px;
-	row-gap: 2px;
+	column-gap: 8px;
+	row-gap: 1px;
 	cursor: pointer;
 	text-align: left;
 	width: 100%;
@@ -2223,80 +2228,70 @@
 	color: var(--vscode-button-foreground);
 }
 
+.vsclone-model-switcher-row.selected .vsclone-model-switcher-row-label {
+	font-weight: 650;
+}
+
 .vsclone-model-switcher-row.locked {
-	min-height: 50px;
-	padding-top: 6px;
-	padding-bottom: 5px;
+	min-height: 42px;
+	padding-top: 4px;
+	padding-bottom: 4px;
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 72%, transparent 28%);
 }
 
 .vsclone-model-switcher-row-label {
 	grid-column: 1;
 	grid-row: 1;
-	font-size: 13px;
+	font-size: 12px;
 	font-weight: 580;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
-.vsclone-model-switcher-row-check,
 .vsclone-model-switcher-row-lock {
 	grid-column: 2;
 	grid-row: 1;
 	flex: none;
-	font-size: 15px;
+	font-size: 13px;
 	opacity: 0.86;
 }
 
 .vsclone-model-switcher-row-subtext {
 	grid-column: 1 / span 2;
 	grid-row: 2;
-	font-size: 11px;
+	font-size: 10px;
 	opacity: 0.68;
 	line-height: 1.2;
 	padding-top: 1px;
 }
 
-.vsclone-model-switcher-row.selected .vsclone-model-switcher-row-check {
-	opacity: 1;
-}
-
 .vsclone-model-switcher-menu-footer {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: minmax(0, 1fr);
 	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 85%, transparent 15%);
 	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 42%, transparent 58%);
 }
 
-.vsclone-model-switcher-menu-footer.single-action {
-	grid-template-columns: minmax(0, 1fr);
-}
-
 .vsclone-model-switcher-footer-button {
-	height: 38px;
+	height: 30px;
 	border: none;
-	border-right: 1px solid color-mix(in srgb, var(--vscode-panel-border) 80%, transparent 20%);
 	background: transparent;
 	color: var(--vscode-button-secondaryForeground);
-	font-size: 12px;
+	font-size: 11px;
 	font-weight: 600;
 	cursor: pointer;
 	display: inline-flex;
 	align-items: center;
 	justify-content: flex-start;
 	gap: 6px;
-	padding: 0 12px;
+	padding: 0 10px;
 	line-height: 1.15;
 	text-align: left;
 }
 
-.vsclone-model-switcher-footer-button:last-child {
-	border-right: none;
-}
-
 .vsclone-model-switcher-footer-button .codicon {
-	font-size: 14px;
+	font-size: 13px;
 	opacity: 0.78;
 }
 

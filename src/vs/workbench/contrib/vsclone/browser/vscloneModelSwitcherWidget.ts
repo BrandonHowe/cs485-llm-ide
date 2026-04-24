@@ -114,14 +114,6 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		await this.providerBridge.openManageProvidersPicker();
 	}
 
-	async resetCurrentSelection(): Promise<void> {
-		const context = this.getContext();
-		if (!context.threadId) {
-			return;
-		}
-		await this.settingsService.resetSelectionForThread(context.threadId);
-	}
-
 	async switchToNextModel(): Promise<void> {
 		const context = this.getContext();
 		await this.settingsService.switchToNextModel(context.threadId, context.location);
@@ -149,8 +141,6 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 		const buttonAriaLabel = selection
 			? localize('vsclone.modelSwitcher.aria.currentModel', 'Model: {0}', selection.modelName)
 			: localize('vsclone.modelSwitcher.aria.selectModel', 'Select model');
-		const context = this.getContext();
-		const showResetAction = !!context.threadId && this.settingsService.hasSelectionForThread(context.threadId);
 
 		return {
 			isOpen: this.isOpen,
@@ -161,7 +151,6 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 			state,
 			selected,
 			sections,
-			showResetAction,
 			rootRef: element => { this.root = element ?? undefined; },
 			buttonRef: element => { this.button = element ?? undefined; },
 			onToggleOpen: () => {
@@ -173,12 +162,6 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 			},
 			onRefreshCatalog: () => { void this.settingsService.refreshState(); },
 			onManageProviders: () => { void this.providerBridge.openManageProvidersPicker(); },
-			onResetSelection: () => {
-				if (!context.threadId) {
-					return;
-				}
-				void this.settingsService.resetSelectionForThread(context.threadId);
-			},
 			onSelectModel: model => this.selectModel(model, selected),
 		};
 	}
@@ -209,10 +192,16 @@ export class VSCloneModelSwitcherWidget extends Disposable {
 				continue;
 			}
 
+			// Google lists Gemini in ascending generation order from the catalog, which buries the
+			// newest Gemini models at the bottom. Reverse so the most recent preview surfaces first.
+			const orderedModels = provider.vendor === 'google'
+				? [...providerModels].reverse()
+				: providerModels;
+
 			sections.push({
 				label: provider.displayName.toUpperCase(),
 				count: provider.modelCount,
-				models: providerModels,
+				models: orderedModels,
 			});
 		}
 

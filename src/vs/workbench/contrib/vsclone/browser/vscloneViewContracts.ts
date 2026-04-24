@@ -55,13 +55,11 @@ export interface IVSCloneModelSwitcherViewProps {
 	state: IVSCloneSettingsState;
 	selected: IVSCloneModelSelection | undefined;
 	sections: readonly IVSCloneModelSwitcherSection[];
-	showResetAction: boolean;
 	rootRef: (element: HTMLElement | null) => void;
 	buttonRef: (element: HTMLButtonElement | null) => void;
 	onToggleOpen: () => void;
 	onRefreshCatalog: () => void;
 	onManageProviders: () => void;
-	onResetSelection: () => void;
 	onSelectModel: (model: IVSCloneSettingsModelState) => void;
 }
 

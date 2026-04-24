@@ -187,24 +187,25 @@ suite('VSCloneModelSwitcherWidget', () => {
 		assert.ok((container.textContent || '').includes('Sign in to a provider to get started'));
 	});
 
-	test('footer shows reset only for explicit thread selection', async () => {
-		const withThread = await createHarness('thread-1');
-		const withThreadModel = withThread.settingsService.getSelectableModels()[0];
-		assert.ok(withThreadModel);
-		await withThread.settingsService.setSelectionForFeature('thread-1', {
+	test('selected rows use fill without a checkmark', async () => {
+		const { settingsService, widget, container } = await createHarness();
+		const firstModel = settingsService.getSelectableModels()[0];
+		assert.ok(firstModel);
+		await settingsService.setSelectionForFeature('thread-1', {
 			threadId: 'thread-1',
 			location: 'chat',
-			modelIdentifier: withThreadModel.identifier,
-			vendor: withThreadModel.vendor,
-			modelId: withThreadModel.modelId,
-			modelName: withThreadModel.modelName,
+			modelIdentifier: firstModel.identifier,
+			vendor: firstModel.vendor,
+			modelId: firstModel.modelId,
+			modelName: firstModel.modelName,
 			selectedAt: Date.now(),
 		});
-		withThread.widget.open();
-		assert.ok((withThread.container.textContent || '').includes('Reset Selection'));
+		widget.open();
 
-		const withoutThread = await createHarness('');
-		withoutThread.widget.open();
-		assert.ok(!(withoutThread.container.textContent || '').includes('Reset Selection'));
+		const selectedRow = container.querySelector('.vsclone-model-switcher-row.selected');
+		assert.ok(selectedRow);
+		assert.strictEqual(selectedRow?.querySelector('.vsclone-model-switcher-row-check'), null);
+		assert.strictEqual(selectedRow?.querySelector('.codicon-check'), null);
+		assert.strictEqual((container.textContent || '').includes('Reset Selection'), false);
 	});
 });
