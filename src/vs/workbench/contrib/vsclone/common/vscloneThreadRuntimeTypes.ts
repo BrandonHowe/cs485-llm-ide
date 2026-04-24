@@ -10,7 +10,7 @@ import type { IVSCloneImageAttachment } from './vscloneImageAttachmentTypes.js';
 import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
-import type { VSCloneToolApprovalType } from './vscloneToolDefinitions.js';
+import type { VSCloneToolApprovalType, VSCloneToolParams } from './vscloneToolDefinitions.js';
 
 export type VSCloneThreadRuntimeCatalogStatus = 'active' | 'completed' | 'failed' | 'archived';
 export type VSCloneThreadRuntimeCatalogTab = 'all' | 'active' | 'archived';
@@ -191,7 +191,7 @@ export interface IVSCloneThreadRuntimeToolRequestMessage {
 	readonly type: 'tool_request';
 	readonly toolName: string;
 	readonly approvalType?: VSCloneToolApprovalType;
-	readonly params: Record<string, string>;
+	readonly params: VSCloneToolParams;
 	readonly requestedAt: number;
 	readonly snapshots: readonly IVSCloneThreadRuntimeSnapshot[];
 	readonly run: IVSCloneThreadRuntimeRunContext;
@@ -204,7 +204,7 @@ export interface IVSCloneThreadRuntimeToolProgressMessage {
 	readonly type: 'running_now';
 	readonly toolName: string;
 	readonly approvalType?: VSCloneToolApprovalType;
-	readonly params: Record<string, string>;
+	readonly params: VSCloneToolParams;
 }
 
 export interface IVSCloneThreadRuntimeToolResultMessage {
@@ -214,7 +214,7 @@ export interface IVSCloneThreadRuntimeToolResultMessage {
 	readonly type: Exclude<VSCloneThreadToolMessageType, 'tool_request' | 'running_now'>;
 	readonly toolName: string;
 	readonly approvalType?: VSCloneToolApprovalType;
-	readonly params: Record<string, string>;
+	readonly params: VSCloneToolParams;
 	readonly output?: string;
 	readonly success?: boolean;
 }

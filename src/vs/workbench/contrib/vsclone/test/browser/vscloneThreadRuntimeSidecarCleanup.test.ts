@@ -138,6 +138,7 @@ suite('VSCloneThreadRuntimeSidecarCleanup', () => {
 		};
 		const toolRuntimeService: IVSCloneToolRuntimeService = {
 			_serviceBrand: undefined,
+			prepareToolDefinitions: async () => [],
 			listToolDefinitions: () => [],
 			getToolDefinition: () => undefined,
 			getApprovalType: () => undefined,

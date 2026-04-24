@@ -20,7 +20,7 @@ import type { IVSCloneChatTransportConversationMessage } from '../common/vsclone
 import { IVSCloneLLMMessageRequestHandle, type IVSCloneLLMMessageToolCall } from '../common/vscloneLLMMessageTypes.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneSettingsService } from '../common/vscloneSettingsService.js';
-import { formatToolResult, type VSCloneToolApprovalType } from '../common/vscloneToolDefinitions.js';
+import { formatToolResult, type IVSCloneToolDefinition, type VSCloneToolApprovalType, type VSCloneToolParams } from '../common/vscloneToolDefinitions.js';
 import { resolveVSCloneWorkspacePath } from '../common/vscloneWorkspacePaths.js';
 import {
 	IVSCloneThreadRuntimeAssistantEditApplication,
@@ -108,7 +108,7 @@ interface IPendingApproval {
 	readonly deferred: DeferredPromise<VSCloneThreadToolApprovalDecision>;
 	readonly requestedAt: number;
 	readonly toolName: string;
-	readonly params: Record<string, string>;
+	readonly params: VSCloneToolParams;
 	readonly approvalType?: VSCloneToolApprovalType;
 	status: 'pending' | 'approved' | 'rejected';
 	snapshotPromise?: Promise<readonly IVSCloneThreadRuntimeSnapshot[]>;
@@ -121,6 +121,7 @@ interface IActiveThreadExecution {
 	readonly runContext: IVSCloneThreadRuntimeRunContext;
 	pendingApproval: IPendingApproval | undefined;
 	activeRequest: IVSCloneLLMMessageRequestHandle | undefined;
+	activeModelPreparationTokenSource: CancellationTokenSource | undefined;
 	activeToolTokenSource: CancellationTokenSource | undefined;
 	cancelled: boolean;
 	finished: boolean;
@@ -140,6 +141,7 @@ interface ILoopIterationResult {
 	readonly responseText: string;
 	readonly responseTranscriptText: string;
 	readonly toolCall?: IVSCloneLLMMessageToolCall;
+	readonly toolCallApprovalType?: VSCloneToolApprovalType;
 	readonly errorMessage?: string;
 	readonly aborted: boolean;
 }
@@ -246,15 +248,19 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					return;
 				}
 				execution.cancelled = true;
-				// The runtime owns both the streaming request and the currently running tool. Cancelling
-				// both here keeps the single thread-level stop action aligned with the execution branch.
+				// The runtime owns every cancellable stage in the active branch. Cancelling each handle
+				// here keeps the single thread-level stop action aligned with the execution branch.
 				execution.activeRequest?.cancel();
+				// Tool definition preparation may autostart MCP servers before a provider request exists.
+				// Cancelling that token closes the gap where Stop could otherwise still allow a request.
+				execution.activeModelPreparationTokenSource?.cancel();
 				execution.activeToolTokenSource?.cancel();
 			},
 			pendingCheckpointByToolKey,
 			runContext,
 			pendingApproval: undefined,
 			activeRequest: undefined,
+			activeModelPreparationTokenSource: undefined,
 			activeToolTokenSource: undefined,
 			cancelled: false,
 			finished: false,
@@ -794,6 +800,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			runContext: pendingToolRequest.run,
 			pendingApproval: undefined,
 			activeRequest: undefined,
+			activeModelPreparationTokenSource: undefined,
 			activeToolTokenSource: toolTokenSource,
 			cancelled: false,
 			finished: false,
@@ -896,6 +903,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					options.threadId,
 					toolCall.name,
 					toolCall.rawParams,
+					iterationResult.toolCallApprovalType,
 					execution.pendingCheckpointByToolKey,
 					execution.runContext,
 				);
@@ -959,7 +967,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 
 	private async executeToolWithCancellation(
 		toolName: string,
-		params: Record<string, string>,
+		params: VSCloneToolParams,
 		mode: VSCloneChatMode,
 		execution: IActiveThreadExecution,
 	): Promise<IVSCloneToolExecutionResult> {
@@ -1004,6 +1012,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		let responseText = '';
 		let responseTranscriptText = '';
 		let toolCall: IVSCloneLLMMessageToolCall | undefined;
+		let advertisedToolDefinitions: readonly IVSCloneToolDefinition[] = [];
 		let errorMessage: string | undefined;
 		let aborted = false;
 
@@ -1027,6 +1036,26 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				};
 			}
 
+			const toolDefinitionTokenSource = new CancellationTokenSource();
+			execution.activeModelPreparationTokenSource = toolDefinitionTokenSource;
+			try {
+				// MCP activation/autostart happens before `sendChatRequest()`, so it needs the same
+				// execution-level cancellation path as the eventual provider request.
+				advertisedToolDefinitions = await this.toolRuntimeService.prepareToolDefinitions(options.mode, toolDefinitionTokenSource.token);
+			} finally {
+				if (execution.activeModelPreparationTokenSource === toolDefinitionTokenSource) {
+					execution.activeModelPreparationTokenSource = undefined;
+				}
+				toolDefinitionTokenSource.dispose();
+			}
+			if (execution.cancelled) {
+				return {
+					responseText,
+					responseTranscriptText,
+					toolCall,
+					aborted: true,
+				};
+			}
 			const request = this.llmMessageService.sendChatRequest({
 				kind: 'chat',
 				auth: {
@@ -1045,7 +1074,8 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					reasoningEffort: options.reasoningEffort,
 					previousTurns: messages.slice(0, -1),
 					currentTurn,
-					systemMessage: options.systemMessage,
+					systemMessage: appendDynamicToolPrompt(options.systemMessage, advertisedToolDefinitions),
+					toolDefinitions: advertisedToolDefinitions,
 				}),
 			}, {
 				onText: payload => {
@@ -1083,13 +1113,26 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				execution.activeRequest = undefined;
 			}
 		} catch (error) {
-			errorMessage = error instanceof Error ? error.message : String(error);
+			if (execution.cancelled) {
+				// Cancellable pre-request work can reject as it unwinds. Treat that as an abort so Stop
+				// does not surface a synthetic runtime error for the turn the user intentionally stopped.
+				aborted = true;
+			} else {
+				errorMessage = error instanceof Error ? error.message : String(error);
+			}
 		}
 
+		const toolCallName = toolCall?.name;
 		return {
 			responseText,
 			responseTranscriptText,
 			toolCall,
+			// Approval must be derived from the same snapshot advertised to the model. The live
+			// MCP registry can temporarily lose a tool between advertisement and execution, and
+			// re-querying it here would downgrade an MCP approval requirement to auto-approved.
+			toolCallApprovalType: toolCallName
+				? advertisedToolDefinitions.find(tool => tool.name === toolCallName)?.approvalType
+				: undefined,
 			errorMessage,
 			aborted,
 		};
@@ -1168,7 +1211,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	 */
 	private async executePersistedToolWithSafety(
 		toolName: string,
-		params: Record<string, string>,
+		params: VSCloneToolParams,
 		mode: IVSCloneThreadRuntimeRunContext['mode'],
 		tokenSource: CancellationTokenSource,
 	): Promise<IVSCloneToolExecutionResult> {
@@ -1194,11 +1237,16 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	private async recordToolRequested(
 		threadId: string,
 		toolName: string,
-		params: Record<string, string>,
+		params: VSCloneToolParams,
+		snapshotApprovalType: VSCloneToolApprovalType | undefined,
 		pendingCheckpointByToolKey: Map<string, readonly IVSCloneThreadRuntimeSnapshot[]>,
 		runContext: IVSCloneThreadRuntimeRunContext,
 	): Promise<VSCloneThreadToolApprovalDecision> {
-		const approvalType = this.toolRuntimeService.getApprovalType(toolName);
+		const approvalType = snapshotApprovalType
+			?? this.toolRuntimeService.getApprovalType(toolName)
+			// MCP provider names are generated as `mcp_<hash>_<name>`. If a legacy call path lacks
+			// snapshot metadata and the live registry is between refreshes, keep MCP tools gated.
+			?? (toolName.startsWith('mcp_') ? 'MCP tools' : undefined);
 		const requestedAt = Date.now();
 		const toolRequestMessage = this.appendMessage(threadId, {
 			role: 'tool',
@@ -1298,7 +1346,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 	private recordToolResult(
 		threadId: string,
 		toolName: string,
-		params: Record<string, string>,
+		params: VSCloneToolParams,
 		result: IVSCloneToolExecutionResult,
 		pendingCheckpointByToolKey: Map<string, readonly IVSCloneThreadRuntimeSnapshot[]>,
 	): Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool' }> | undefined {
@@ -1338,7 +1386,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		return toolMessage;
 	}
 
-	private async captureCheckpointSnapshots(toolName: string, params: Record<string, string>): Promise<readonly IVSCloneThreadRuntimeSnapshot[]> {
+	private async captureCheckpointSnapshots(toolName: string, params: VSCloneToolParams): Promise<readonly IVSCloneThreadRuntimeSnapshot[]> {
 		const candidatePaths = this.getCheckpointCandidatePaths(toolName, params);
 		if (candidatePaths.length === 0) {
 			return [];
@@ -1370,11 +1418,11 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		return snapshots;
 	}
 
-	private getCheckpointCandidatePaths(toolName: string, params: Record<string, string>): readonly string[] {
+	private getCheckpointCandidatePaths(toolName: string, params: VSCloneToolParams): readonly string[] {
 		switch (toolName) {
 			case 'edit_file':
 			case 'create_file':
-				return params.path ? [params.path] : [];
+				return typeof params.path === 'string' && params.path.length > 0 ? [params.path] : [];
 			default:
 				return [];
 		}
@@ -2019,7 +2067,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			: undefined;
 	}
 
-	private getToolInvocationKey(toolName: string, params: Record<string, string>): string {
+	private getToolInvocationKey(toolName: string, params: VSCloneToolParams): string {
 		return `${toolName}:${JSON.stringify(params)}`;
 	}
 }
@@ -2035,6 +2083,36 @@ function normalizeAssistantTranscriptText(value: string): string {
 		.replace(/[ \t]+\n/g, '\n')
 		.replace(/\n{3,}/g, '\n\n')
 		.trim();
+}
+
+function appendDynamicToolPrompt(systemMessage: string | undefined, tools: readonly IVSCloneToolDefinition[]): string | undefined {
+	const mcpTools = tools.filter(tool => tool.approvalType === 'MCP tools');
+	const baseSystemMessage = systemMessage?.trim();
+	if (mcpTools.length === 0 || !baseSystemMessage) {
+		return systemMessage;
+	}
+
+	// The base prompt is assembled before MCP discovery settles. Append the live MCP subset here so
+	// the model sees the same dynamically discovered tools that the provider request advertises.
+	const lines = [
+		baseSystemMessage,
+		'',
+		'## Available MCP Tools',
+		'These tools are discovered from configured MCP servers and require MCP tools approval before execution.',
+		'',
+	];
+	for (const tool of mcpTools) {
+		lines.push(`### ${tool.name}`);
+		lines.push(tool.description);
+		if (tool.parameters.length > 0) {
+			lines.push('Parameters:');
+			for (const parameter of tool.parameters) {
+				lines.push(`- ${parameter.name} (${parameter.required ? 'required' : 'optional'}) - ${parameter.description}`);
+			}
+		}
+		lines.push('');
+	}
+	return lines.join('\n').trim();
 }
 
 function detectEligibilityFailureReason(

@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { timeout } from '../../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { hasKey } from '../../../../../base/common/types.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
@@ -35,6 +36,7 @@ interface ISequencedChatResponse {
 
 class SequencedLLMMessageService implements IVSCloneLLMMessageService {
 	declare readonly _serviceBrand: undefined;
+	requestCount = 0;
 
 	constructor(private readonly responses: ISequencedChatResponse[]) { }
 
@@ -43,6 +45,7 @@ class SequencedLLMMessageService implements IVSCloneLLMMessageService {
 	}
 
 	sendChatRequest(_request: IVSCloneLLMMessageChatRequest, observer: IVSCloneLLMMessageObserver = {}): IVSCloneLLMMessageRequestHandle {
+		this.requestCount++;
 		const response = this.responses.shift();
 		if (!response) {
 			throw new Error('Test exhausted the sequenced chat responses.');
@@ -85,6 +88,7 @@ suite('VSCloneThreadRuntimeService', () => {
 	function createService(
 		testDisposables: DisposableStore,
 		responses: ISequencedChatResponse[],
+		overrides: { readonly toolRuntimeService?: IVSCloneToolRuntimeService } = {},
 	): { service: VSCloneThreadRuntimeService; llmMessageService: SequencedLLMMessageService } {
 		const oauthService: IVSCloneOAuthService = {
 			_serviceBrand: undefined,
@@ -154,8 +158,9 @@ suite('VSCloneThreadRuntimeService', () => {
 			markModelIneligible: async () => undefined,
 			clearIneligibilityForVendor: async () => undefined,
 		};
-		const toolRuntimeService: IVSCloneToolRuntimeService = {
+		const toolRuntimeService: IVSCloneToolRuntimeService = overrides.toolRuntimeService ?? {
 			_serviceBrand: undefined,
+			prepareToolDefinitions: async () => [],
 			listToolDefinitions: () => [],
 			getToolDefinition: () => undefined,
 			getApprovalType: toolName => toolName === 'run_terminal_command' ? 'terminal' : undefined,
@@ -243,7 +248,61 @@ suite('VSCloneThreadRuntimeService', () => {
 		assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'rejected']);
 		// Tool terminal states share one result-message interface, so an explicit runtime guard keeps
 		// this assertion aligned with the actual message shape instead of over-constraining the type.
-		assert.ok(rejectedMessage && 'output' in rejectedMessage);
+		assert.ok(rejectedMessage && hasKey(rejectedMessage, { output: true }));
 		assert.strictEqual(rejectedMessage.output, 'Rejected by the test harness.');
+	});
+
+	test('cancels tool definition preparation before sending a chat request', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const prepareStarted = new DeferredPromise<void>();
+		const prepareCancelled = new DeferredPromise<void>();
+		let tokenWasCancelled = false;
+		const toolRuntimeService: IVSCloneToolRuntimeService = {
+			_serviceBrand: undefined,
+			prepareToolDefinitions: async (_mode, token) => {
+				prepareStarted.complete();
+				if (token?.isCancellationRequested) {
+					tokenWasCancelled = true;
+					return [];
+				}
+				const listener = token?.onCancellationRequested(() => {
+					tokenWasCancelled = true;
+					prepareCancelled.complete();
+				});
+				try {
+					// The regression lives in this pre-request window: cancellation must reach tool
+					// preparation so the runtime can stop before constructing a new provider request.
+					await prepareCancelled.p;
+					return [];
+				} finally {
+					listener?.dispose();
+				}
+			},
+			listToolDefinitions: () => [],
+			getToolDefinition: () => undefined,
+			getApprovalType: () => undefined,
+		};
+		const { service, llmMessageService } = createService(testDisposables, [
+			{ fullText: 'This response should never be requested.' },
+		], { toolRuntimeService });
+
+		const handle = service.runThread({
+			threadId: 'thread-cancel-prepare',
+			turnId: 'thread-cancel-prepare:turn-1',
+			sequence: 1,
+			sessionResource: 'vsclone://api/thread-cancel-prepare',
+			promptText: 'Inspect the workspace',
+			mode: 'act',
+			vendor: 'openai',
+			modelId: 'gpt-5.3-codex',
+			modelIdentifier: 'openai/gpt-5.3-codex',
+		});
+
+		await prepareStarted.p;
+		handle.cancel();
+		await handle.done;
+
+		assert.strictEqual(tokenWasCancelled, true);
+		assert.strictEqual(llmMessageService.requestCount, 0);
 	});
 });

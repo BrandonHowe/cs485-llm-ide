@@ -17,11 +17,13 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { QueryBuilder } from '../../../../services/search/common/queryBuilder.js';
 import { ISearchService } from '../../../../services/search/common/search.js';
-import { VSCloneToolExecutionService } from '../../browser/vscloneToolExecutionService.js';
+import { VSCloneToolExecutionService, VSCloneToolRuntimeService } from '../../browser/vscloneToolExecutionService.js';
 import { IVSCloneEditCodeService, type VSCloneEditApplyResult } from '../../browser/vscloneEditCodeServiceInterface.js';
 import { IVSCloneTerminalToolService } from '../../browser/vscloneTerminalToolService.js';
 import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
 import { IVSClonePlanModeService } from '../../common/vsclonePlanModeService.js';
+import { IMcpService, McpToolVisibility, type IMcpServer, type IMcpTool } from '../../../mcp/common/mcpTypes.js';
+import type { MCP } from '../../../mcp/common/modelContextProtocol.js';
 
 interface IResolveStat {
 	readonly resource: URI;
@@ -262,7 +264,7 @@ class ToolExecutionHarness {
 		},
 	} as unknown as IInstantiationService;
 
-	createService(): VSCloneToolExecutionService {
+	createService(mcpService?: IMcpService): VSCloneToolExecutionService {
 		return new VSCloneToolExecutionService(
 			this.fileService,
 			this.workspaceContextService,
@@ -274,6 +276,7 @@ class ToolExecutionHarness {
 			this.logService as unknown as ILogService,
 			this.editCodeService,
 			this.terminalToolService,
+			mcpService,
 		);
 	}
 }
@@ -353,6 +356,55 @@ function muteConsoleForToolExecutionSuite(): { restore(): void } {
 	};
 }
 
+function createTestMcpTool(id: string, referenceName: string, callResult?: MCP.CallToolResult): IMcpTool & { readonly calls: Record<string, unknown>[] } {
+	const calls: Record<string, unknown>[] = [];
+	const defaultCallResult: MCP.CallToolResult = {
+		isError: false,
+		content: [{ type: 'text' as const, text: `called ${referenceName}` }],
+	};
+	const tool = {
+		id,
+		referenceName,
+		icons: {},
+		definition: {
+			name: referenceName,
+			description: `Test MCP tool ${referenceName}.`,
+			inputSchema: {
+				type: 'object',
+				properties: {
+					nested: { type: 'object' },
+				},
+			},
+		},
+		visibility: McpToolVisibility.Model,
+		call: async (params: Record<string, unknown>) => {
+			calls.push(params);
+			return callResult ?? defaultCallResult;
+		},
+		callWithProgress: async (params: Record<string, unknown>) => {
+			calls.push(params);
+			return callResult ?? defaultCallResult;
+		},
+		calls,
+	};
+	return tool as unknown as IMcpTool & { readonly calls: Record<string, unknown>[] };
+}
+
+function createTestMcpServer(id: string, label: string, tools: readonly IMcpTool[]): IMcpServer {
+	return {
+		definition: { id, label },
+		tools: { get: () => tools },
+	} as unknown as IMcpServer;
+}
+
+function createTestMcpService(servers: readonly IMcpServer[]): IMcpService {
+	return {
+		servers: { get: () => servers },
+		activateCollections: async () => undefined,
+		autostart: () => ({ get: () => ({ working: false }) }),
+	} as unknown as IMcpService;
+}
+
 suite('VSCloneToolExecutionService', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 	let mutedConsole: { restore(): void } | undefined;
@@ -424,6 +476,64 @@ suite('VSCloneToolExecutionService', () => {
 		assert.strictEqual(killResult.success, true);
 		assert.strictEqual(killResult.output, 'Closed persistent terminal 3.');
 		assert.deepStrictEqual(testHarness.killedPersistentTerminalIds, ['3']);
+	});
+
+	test('TE-04b gives all MCP tools collision-resistant provider names and dispatches by them', async () => {
+		const firstTool = createTestMcpTool('duplicate_safe_id', 'lookup');
+		const secondTool = createTestMcpTool('duplicate_safe_id', 'lookup');
+		const mcpService = createTestMcpService([
+			createTestMcpServer('server-one', 'Server One', [firstTool]),
+			createTestMcpServer('server-two', 'Server Two', [secondTool]),
+		]);
+		const runtimeService = new VSCloneToolRuntimeService(mcpService);
+		const toolDefinitions = runtimeService.listToolDefinitions('act').filter(tool => tool.approvalType === 'MCP tools');
+
+		assert.strictEqual(toolDefinitions.length, 2);
+		const providerNames = toolDefinitions.map(tool => tool.name);
+		assert.ok(providerNames.every(name => /^mcp_[0-9a-f]{8}_lookup$/.test(name)), providerNames.join(', '));
+		assert.ok(!providerNames.includes('duplicate_safe_id'));
+		assert.notStrictEqual(providerNames[0], providerNames[1]);
+
+		const executionService = new ToolExecutionHarness().createService(mcpService);
+		const result = await executionService.executeTool(providerNames[0]!, { nested: { value: 1 } }, 'act');
+
+		assert.deepStrictEqual(result, { success: true, output: 'called lookup' });
+		assert.deepStrictEqual(firstTool.calls, [{ nested: { value: 1 } }]);
+		assert.deepStrictEqual(secondTool.calls, []);
+	});
+
+	test('TE-04c filters MCP content by assistant audience and keeps structuredContent visible', async () => {
+		const tool = createTestMcpTool('structured_tool', 'lookup', {
+			isError: false,
+			content: [
+				{ type: 'text' as const, text: 'lookup complete' },
+				{ type: 'text' as const, text: 'assistant detail', annotations: { audience: ['assistant'] } },
+				{ type: 'text' as const, text: 'ui-only detail', annotations: { audience: ['user'] } },
+			],
+			structuredContent: {
+				items: [{ id: 1, title: 'Result' }],
+				nextCursor: 'abc',
+			},
+		});
+		const mcpService = createTestMcpService([createTestMcpServer('server-one', 'Server One', [tool])]);
+		const [toolDefinition] = new VSCloneToolRuntimeService(mcpService)
+			.listToolDefinitions('act')
+			.filter(tool => tool.approvalType === 'MCP tools');
+		const executionService = new ToolExecutionHarness().createService(mcpService);
+
+		const result = await executionService.executeTool(toolDefinition!.name, { nested: { query: 'Result' } }, 'act');
+
+		assert.deepStrictEqual(tool.calls, [{ nested: { query: 'Result' } }]);
+		assert.strictEqual(result.success, true);
+		assert.strictEqual(result.output, [
+			'lookup complete',
+			'assistant detail',
+			JSON.stringify({
+				items: [{ id: 1, title: 'Result' }],
+				nextCursor: 'abc',
+			}, null, 2),
+		].join('\n\n'));
+		assert.ok(!result.output.includes('ui-only detail'));
 	});
 
 	test('TE-03 dispatches terminal success and unknown-tool failure', async () => {

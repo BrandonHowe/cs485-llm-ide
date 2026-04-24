@@ -7,6 +7,7 @@ import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js'
 import type { IVSCloneCompletionPromptEnvelope } from './vscloneCompletionTypes.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
+import type { IVSCloneToolDefinition, VSCloneToolParams } from './vscloneToolDefinitions.js';
 
 /**
  * This transport intentionally sits one layer below the higher-level chat runtime. Callers hand
@@ -81,7 +82,7 @@ export type IVSCloneAnthropicLLMChatMessage =
 		readonly content: string | readonly (
 			| IVSCloneLLMMessageReasoningBlock
 			| { readonly type: 'text'; readonly text: string }
-			| { readonly type: 'tool_use'; readonly name: string; readonly input: Readonly<Record<string, string>>; readonly id: string }
+			| { readonly type: 'tool_use'; readonly name: string; readonly input: VSCloneToolParams; readonly id: string }
 		)[];
 	}
 	| {
@@ -98,7 +99,7 @@ export type IVSCloneGeminiLLMChatMessage =
 		readonly role: 'model';
 		readonly parts: readonly (
 			| { readonly text: string }
-			| { readonly functionCall: { readonly id: string; readonly name: string; readonly args: Readonly<Record<string, string>> } }
+			| { readonly functionCall: { readonly id: string; readonly name: string; readonly args: VSCloneToolParams } }
 		)[];
 	}
 	| {
@@ -123,6 +124,7 @@ export interface IVSCloneLLMPreparedChatPayload {
 	readonly reasoningEffort?: VSCloneReasoningEffortLevel;
 	readonly messages: readonly IVSCloneLLMChatMessage[];
 	readonly separateSystemMessage?: string;
+	readonly toolDefinitions?: readonly IVSCloneToolDefinition[];
 }
 
 export interface IVSCloneLLMMessageChatRequest {
@@ -180,7 +182,7 @@ export interface IVSCloneLLMMessageAbortRequest {
  */
 export interface IVSCloneLLMMessageToolCall {
 	readonly name: string;
-	readonly rawParams: Readonly<Record<string, string>>;
+	readonly rawParams: VSCloneToolParams;
 	readonly doneParams: readonly string[];
 	readonly id: string;
 	readonly isDone: boolean;

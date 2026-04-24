@@ -2547,11 +2547,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 	}
 
-	private describeCompactRuntimeToolTarget(toolName: string, params: Record<string, string>): string {
+	private describeCompactRuntimeToolTarget(toolName: string, params: Readonly<Record<string, unknown>>): string {
 		if (toolName === "search_for_files") {
-			return params.pattern ?? params.path ?? "";
+			return this.describeRuntimeToolParamValue(params.pattern) || this.describeRuntimeToolParamValue(params.path);
 		}
-		return params.path ?? "";
+		return this.describeRuntimeToolParamValue(params.path);
 	}
 
 	private renderRuntimeToolActions(
@@ -2708,13 +2708,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private renderRuntimeApprovalPreview(
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool"; readonly type: "tool_request" }>,
 	): HTMLElement | undefined {
-		const filePath = message.params.path;
+		if (message.approvalType === "MCP tools") {
+			return this.renderRuntimeMcpApprovalPreview(message.params);
+		}
+
+		const filePath = this.describeRuntimeToolParamValue(message.params.path);
 		if (!filePath) {
 			return undefined;
 		}
 
 		if (message.toolName === "edit_file") {
-			const changes = message.params.changes ?? "";
+			const changes = this.describeRuntimeToolParamValue(message.params.changes);
 			const blocks = parseApprovalSearchReplaceBlocks(changes);
 			if (blocks.length === 0) {
 				return undefined;
@@ -2743,18 +2747,32 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return undefined;
 	}
 
+	private renderRuntimeMcpApprovalPreview(params: Readonly<Record<string, unknown>>): HTMLElement {
+		const preview = document.createElement("div");
+		preview.className = "vsclone-runtime-approval-preview";
+
+		const code = document.createElement("pre");
+		code.className = "vsclone-runtime-approval-json";
+		// MCP tools can define arbitrary argument names, so the safest preview is a stable JSON
+		// summary of the exact params the model asked to send rather than a path/command heuristic.
+		code.textContent = this.serializeRuntimeApprovalJson(params);
+		preview.appendChild(code);
+		return preview;
+	}
+
 	private getRuntimeApprovalMessage(
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool"; readonly type: "tool_request" }>,
 	): string {
 		const params = message.params;
 		if (isFlatDiffRuntimeTool(message.toolName)) {
-			const filename = params.path ? (params.path.split("/").pop() ?? params.path) : undefined;
+			const filePath = this.describeRuntimeToolParamValue(params.path);
+			const filename = filePath ? (filePath.split("/").pop() ?? filePath) : undefined;
 			return filename
 				? localize("vsclone.thread.runtime.approval.edit", "Approve edit to {0}?", filename)
 				: localize("vsclone.thread.runtime.approval.editGeneric", "Approve file edit?");
 		}
 		if (message.approvalType === "terminal") {
-			const command = params.command;
+			const command = this.describeRuntimeToolParamValue(params.command);
 			return command
 				? localize("vsclone.thread.runtime.approval.run", "Approve running `{0}`?", command)
 				: localize("vsclone.thread.runtime.approval.terminal", "Approve terminal action?");
@@ -2834,10 +2852,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 	}
 
-	private describeRuntimeToolParams(params: Record<string, string>): string {
+	private describeRuntimeToolParams(params: Readonly<Record<string, unknown>>): string {
 		const detailKeys = ["path", "command", "query", "dir", "directory"];
 		for (const key of detailKeys) {
-			const value = params[key];
+			const value = this.describeRuntimeToolParamValue(params[key]);
 			if (value) {
 				return ` (${value})`;
 			}
@@ -2845,12 +2863,41 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return "";
 	}
 
-	private serializeRuntimeToolParams(params: Record<string, string>): string {
+	private serializeRuntimeToolParams(params: Readonly<Record<string, unknown>>): string {
 		return JSON.stringify(
 			Object.keys(params)
 				.sort((left, right) => left.localeCompare(right))
 				.map((key) => [key, params[key]]),
 		);
+	}
+
+	private serializeRuntimeApprovalJson(params: Readonly<Record<string, unknown>>): string {
+		const serialized = JSON.stringify(this.toStableRuntimeApprovalJson(params), null, 2) ?? "{}";
+		return serialized.length <= 4_000 ? serialized : `${serialized.slice(0, 4_000)}\n...`;
+	}
+
+	private toStableRuntimeApprovalJson(value: unknown): unknown {
+		if (Array.isArray(value)) {
+			return value.map(entry => this.toStableRuntimeApprovalJson(entry));
+		}
+		if (value && typeof value === "object") {
+			return Object.fromEntries(
+				Object.entries(value as Readonly<Record<string, unknown>>)
+					.sort(([left], [right]) => left.localeCompare(right))
+					.map(([key, entry]) => [key, this.toStableRuntimeApprovalJson(entry)]),
+			);
+		}
+		return value;
+	}
+
+	private describeRuntimeToolParamValue(value: unknown): string {
+		if (typeof value === "string") {
+			return value;
+		}
+		if (value === undefined || value === null) {
+			return "";
+		}
+		return String(value);
 	}
 
 	private toRuntimeToolCardStatus(
@@ -4852,4 +4899,3 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.focusInput();
 	}
 }
-

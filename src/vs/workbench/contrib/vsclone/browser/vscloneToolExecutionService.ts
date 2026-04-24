@@ -18,7 +18,7 @@ import { QueryBuilder } from '../../../services/search/common/queryBuilder.js';
 import { isFileMatch, ISearchService, resultIsMatch } from '../../../services/search/common/search.js';
 import { IVSClonePlanModeService } from '../common/vsclonePlanModeService.js';
 import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
-import { type IVSCloneToolDefinition, type VSCloneToolApprovalType, VSCLONE_TOOL_DEFINITIONS } from '../common/vscloneToolDefinitions.js';
+import { type IVSCloneToolDefinition, type IVSCloneToolParameterDefinition, type VSCloneToolApprovalType, type VSCloneToolParams, VSCLONE_TOOL_DEFINITIONS } from '../common/vscloneToolDefinitions.js';
 import { formatToolResultWithDiff } from '../common/vscloneToolResultDiff.js';
 import { isVSCloneAmbiguousWorkspaceRelativePath, resolveVSCloneWorkspacePath } from '../common/vscloneWorkspacePaths.js';
 import { resolveContentEdits } from './vscloneEditCodeService.js';
@@ -28,6 +28,8 @@ import {
 	type VSCloneResolvedContentEdit as IVSCloneResolvedContentEdit,
 } from './vscloneEditCodeServiceInterface.js';
 import { IVSCloneTerminalToolService } from './vscloneTerminalToolService.js';
+import { IMcpService, type IMcpServer, type IMcpTool, McpToolVisibility } from '../../mcp/common/mcpTypes.js';
+import type { MCP } from '../../mcp/common/modelContextProtocol.js';
 
 const maxReadChars = 100000;
 const maxDirectoryEntries = 200;
@@ -53,13 +55,14 @@ export const IVSCloneToolExecutionService = createDecorator<IVSCloneToolExecutio
 
 export interface IVSCloneToolExecutionService {
 	readonly _serviceBrand: undefined;
-	executeTool(toolName: string, params: Record<string, string>, mode?: VSCloneChatMode, token?: CancellationToken): Promise<IVSCloneToolExecutionResult>;
+	executeTool(toolName: string, params: VSCloneToolParams, mode?: VSCloneChatMode, token?: CancellationToken): Promise<IVSCloneToolExecutionResult>;
 }
 
 export const IVSCloneToolRuntimeService = createDecorator<IVSCloneToolRuntimeService>('vscloneToolRuntimeService');
 
 export interface IVSCloneToolRuntimeService {
 	readonly _serviceBrand: undefined;
+	prepareToolDefinitions(mode?: VSCloneChatMode, token?: CancellationToken): Promise<readonly IVSCloneToolDefinition[]>;
 	listToolDefinitions(mode?: VSCloneChatMode): readonly IVSCloneToolDefinition[];
 	getToolDefinition(toolName: string): IVSCloneToolDefinition | undefined;
 	getApprovalType(toolName: string): VSCloneToolApprovalType | undefined;
@@ -91,18 +94,66 @@ interface IWorkspacePathResolution {
 export class VSCloneToolRuntimeService implements IVSCloneToolRuntimeService {
 	declare readonly _serviceBrand: undefined;
 
+	constructor(
+		@IMcpService private readonly mcpService?: IMcpService,
+	) {
+	}
+
+	async prepareToolDefinitions(mode: VSCloneChatMode = 'act', token: CancellationToken = CancellationToken.None): Promise<readonly IVSCloneToolDefinition[]> {
+		if (mode === 'act' && this.mcpService) {
+			// VSClone owns its own chat loop, so it must explicitly activate/autostart MCP collections
+			// before snapshotting tools for the model. Otherwise only stale cached tools would appear.
+			await this.mcpService.activateCollections();
+			await waitForMcpAutostart(this.mcpService, token);
+		}
+		return this.listToolDefinitions(mode);
+	}
+
 	listToolDefinitions(mode: VSCloneChatMode = 'act'): readonly IVSCloneToolDefinition[] {
-		return mode === 'plan'
+		const builtinTools = mode === 'plan'
 			? VSCLONE_TOOL_DEFINITIONS.filter(tool => tool.planModeAllowed)
 			: VSCLONE_TOOL_DEFINITIONS;
+		// MCP servers can expose mutating or networked tools, so they are intentionally excluded
+		// from plan mode until VSClone has per-server read-only metadata to enforce a stricter policy.
+		return mode === 'plan' ? builtinTools : [...builtinTools, ...this.getMcpToolDefinitions()];
 	}
 
 	getToolDefinition(toolName: string): IVSCloneToolDefinition | undefined {
-		return VSCLONE_TOOL_DEFINITIONS.find(tool => tool.name === normalizeToolName(toolName));
+		const normalizedToolName = normalizeToolName(toolName);
+		return VSCLONE_TOOL_DEFINITIONS.find(tool => tool.name === normalizedToolName)
+			?? this.getMcpToolDefinitions().find(tool => tool.name === normalizedToolName);
 	}
 
 	getApprovalType(toolName: string): VSCloneToolApprovalType | undefined {
 		return this.getToolDefinition(toolName)?.approvalType;
+	}
+
+	private getMcpToolDefinitions(): readonly IVSCloneToolDefinition[] {
+		if (!this.mcpService) {
+			return [];
+		}
+
+		const definitions: IVSCloneToolDefinition[] = [];
+		for (const server of this.mcpService.servers.get()) {
+			for (const tool of server.tools.get()) {
+				if (!(tool.visibility & McpToolVisibility.Model)) {
+					continue;
+				}
+
+				definitions.push({
+					name: toProviderMcpToolName(server, tool),
+					description: [
+						tool.definition.description || 'MCP tool.',
+						`Provided by MCP server "${server.definition.label}".`,
+					].join(' '),
+					approvalType: 'MCP tools',
+					planModeAllowed: false,
+					parameters: mcpSchemaToParameters(tool.definition.inputSchema),
+					inputSchema: preserveMcpInputSchema(tool.definition.inputSchema),
+				});
+			}
+		}
+		return definitions;
 	}
 }
 
@@ -120,10 +171,11 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 		@ILogService private readonly logService: ILogService,
 		@IVSCloneEditCodeService private readonly editCodeService: IVSCloneEditCodeService,
 		@IVSCloneTerminalToolService private readonly terminalToolService?: IVSCloneTerminalToolService,
+		@IMcpService private readonly mcpService?: IMcpService,
 	) {
 	}
 
-	async executeTool(toolName: string, params: Record<string, string>, mode: VSCloneChatMode = 'act', token: CancellationToken = CancellationToken.None): Promise<IVSCloneToolExecutionResult> {
+	async executeTool(toolName: string, params: VSCloneToolParams, mode: VSCloneChatMode = 'act', token: CancellationToken = CancellationToken.None): Promise<IVSCloneToolExecutionResult> {
 		const normalizedToolName = normalizeToolName(toolName);
 		const invocationLog = `[VSCloneToolExecution] Executing ${normalizedToolName} (${summarizeToolParams(params)})`;
 		this.logService.info(invocationLog);
@@ -147,31 +199,37 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 				};
 			}
 
+			// Built-in VSClone tools predate native JSON tool-calling and still consume string
+			// parameters. Keep that compatibility local so MCP tools can receive structured JSON.
+			const builtinParams = stringifyBuiltinToolParams(params);
 			switch (normalizedToolName) {
 				case 'read_file':
-					return this.executeReadFile(params);
+					return this.executeReadFile(builtinParams);
 				case 'ls_dir':
-					return this.executeListDirectory(params);
+					return this.executeListDirectory(builtinParams);
 				case 'search_for_files':
-					return this.executeSearchFiles(params, token);
+					return this.executeSearchFiles(builtinParams, token);
 				case 'edit_file':
-					return this.executeEditFile(params);
+					return this.executeEditFile(builtinParams);
 				case 'create_file':
-					return this.executeCreateFile(params);
+					return this.executeCreateFile(builtinParams);
 				case 'run_command':
-					return this.executeRunCommand(params, token);
+					return this.executeRunCommand(builtinParams, token);
 				case 'open_persistent_terminal':
-					return this.executeOpenPersistentTerminal(params, token);
+					return this.executeOpenPersistentTerminal(builtinParams, token);
 				case 'run_persistent_command':
-					return this.executeRunPersistentCommand(params, token);
+					return this.executeRunPersistentCommand(builtinParams, token);
 				case 'kill_persistent_terminal':
-					return this.executeKillPersistentTerminal(params, token);
+					return this.executeKillPersistentTerminal(builtinParams, token);
 				case 'attempt_completion':
 					return {
 						success: true,
-						output: params.result?.trim() || 'Task complete.',
+						output: builtinParams.result?.trim() || 'Task complete.',
 					};
 				default:
+					if (this.isMcpTool(normalizedToolName)) {
+						return this.executeMcpTool(normalizedToolName, params, token);
+					}
 					return {
 						success: false,
 						output: `Unknown tool: ${normalizedToolName}`,
@@ -191,6 +249,40 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 				output: message,
 			};
 		}
+	}
+
+	private isMcpTool(toolName: string): boolean {
+		return this.findMcpTool(toolName) !== undefined;
+	}
+
+	private async executeMcpTool(toolName: string, params: VSCloneToolParams, token: CancellationToken): Promise<IVSCloneToolExecutionResult> {
+		const tool = this.findMcpTool(toolName);
+		if (!tool) {
+			return { success: false, output: `MCP tool is no longer available: ${toolName}` };
+		}
+
+		// MCP tools may have arbitrary JSON-schema parameters. Forward the provider's structured
+		// arguments directly so nested object and array inputs are not flattened before execution.
+		const result = await tool.call({ ...params }, undefined, token);
+		return {
+			success: !result.isError,
+			output: stringifyMcpToolResult(result),
+		};
+	}
+
+	private findMcpTool(toolName: string): IMcpTool | undefined {
+		if (!this.mcpService) {
+			return undefined;
+		}
+
+		for (const server of this.mcpService.servers.get()) {
+			for (const tool of server.tools.get()) {
+				if (tool.visibility & McpToolVisibility.Model && toProviderMcpToolName(server, tool) === toolName) {
+					return tool;
+				}
+			}
+		}
+		return undefined;
 	}
 
 	private async executeReadFile(params: Record<string, string>): Promise<IVSCloneToolExecutionResult> {
@@ -845,19 +937,30 @@ function toBoolean(value: string | undefined): boolean {
 	return normalized === 'true' || normalized === '1' || normalized === 'yes';
 }
 
-function summarizeToolParams(params: Record<string, string>): string {
+function summarizeToolParams(params: VSCloneToolParams): string {
 	const maxSummaryLength = 160;
 	const entries = Object.entries(params);
 	if (entries.length === 0) {
 		return 'no params';
 	}
 
-	const summary = entries.map(([key, value]) => `${key}=${truncateText(value, 48).text.replace(/\s+/g, ' ')}`).join(', ');
+	const summary = entries.map(([key, value]) => `${key}=${truncateText(stringifyToolParamForDisplay(value), 48).text.replace(/\s+/g, ' ')}`).join(', ');
 	if (summary.length <= maxSummaryLength) {
 		return summary;
 	}
 
 	return `${summary.slice(0, maxSummaryLength)}...`;
+}
+
+function stringifyToolParamForDisplay(value: unknown): string {
+	if (typeof value === 'string') {
+		return value;
+	}
+	try {
+		return JSON.stringify(value);
+	} catch {
+		return String(value);
+	}
 }
 
 function truncateText(value: string, maxChars: number): { text: string; truncatedChars: number } {
@@ -953,4 +1056,124 @@ function describeTerminalResolveReason(resolveReason: { type: 'timeout' } | { ty
 	return resolveReason.type === 'timeout'
 		? 'timeout'
 		: `done (exit code ${resolveReason.exitCode})`;
+}
+
+function preserveMcpInputSchema(schema: MCP.Tool['inputSchema'] | undefined) {
+	const objectSchema = schema && typeof schema === 'object' && !Array.isArray(schema) ? schema as Record<string, unknown> : undefined;
+	// MCP servers already publish JSON Schema. Keep the original keywords for providers that accept
+	// JSON Schema directly; provider-specific reductions belong in the individual provider adapter.
+	return {
+		...objectSchema,
+		type: 'object' as const,
+		properties: getMcpInputSchemaProperties(schema),
+	};
+}
+
+async function waitForMcpAutostart(mcpService: IMcpService, token: CancellationToken): Promise<void> {
+	const autostartResult = mcpService.autostart(token);
+	const startedAt = Date.now();
+	while (autostartResult.get().working && !token.isCancellationRequested && Date.now() - startedAt < 5_000) {
+		await new Promise(resolve => setTimeout(resolve, 100));
+	}
+}
+
+function mcpSchemaToParameters(schema: MCP.Tool['inputSchema'] | undefined): readonly IVSCloneToolParameterDefinition[] {
+	const objectSchema = schema && typeof schema === 'object' && !Array.isArray(schema) ? schema as Record<string, unknown> : undefined;
+	const required = new Set(Array.isArray(objectSchema?.required)
+		? objectSchema.required.filter((value): value is string => typeof value === 'string')
+		: []);
+	return Object.entries(getMcpInputSchemaProperties(schema)).map(([name, property]) => ({
+		name,
+		required: required.has(name),
+		description: typeof property.description === 'string' ? property.description : '',
+	}));
+}
+
+function getMcpInputSchemaProperties(schema: MCP.Tool['inputSchema'] | undefined): Readonly<Record<string, Record<string, unknown>>> {
+	const objectSchema = schema && typeof schema === 'object' && !Array.isArray(schema) ? schema as Record<string, unknown> : undefined;
+	return objectSchema?.properties && typeof objectSchema.properties === 'object' && !Array.isArray(objectSchema.properties)
+		? objectSchema.properties as Record<string, Record<string, unknown>>
+		: {};
+}
+
+function stringifyBuiltinToolParams(params: VSCloneToolParams): Record<string, string> {
+	return Object.fromEntries(Object.entries(params).map(([key, value]) => [key, stringifyBuiltinToolParam(value)]));
+}
+
+function stringifyBuiltinToolParam(value: unknown): string {
+	if (typeof value === 'string') {
+		return value;
+	}
+	if (value === undefined) {
+		return '';
+	}
+	if (value && typeof value === 'object') {
+		try {
+			return JSON.stringify(value);
+		} catch {
+			return String(value);
+		}
+	}
+	return String(value);
+}
+
+function toProviderMcpToolName(server: IMcpServer, tool: IMcpTool): string {
+	// Even provider-safe MCP ids are not safe to advertise directly because different servers can
+	// produce the same id after VS Code's MCP normalization/truncation. Hash the original server
+	// tool name as well as the id so same-server truncation collisions still produce distinct names,
+	// then keep a readable suffix so transcripts remain diagnosable.
+	const readableName = sanitizeProviderToolName(tool.referenceName || tool.definition.name || 'tool');
+	return `mcp_${hashToolIdentifier(`${server.definition.id}\0${tool.id}\0${tool.definition.name}`)}_${readableName}`.slice(0, 64);
+}
+
+function sanitizeProviderToolName(name: string): string {
+	const sanitized = name.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^[^A-Za-z_]+/, '');
+	return sanitized || 'tool';
+}
+
+function hashToolIdentifier(value: string): string {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < value.length; index++) {
+		hash ^= value.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function stringifyMcpToolResult(result: MCP.CallToolResult): string {
+	const parts = result.content.filter(isMcpContentVisibleToAssistant).map(part => {
+		switch (part.type) {
+			case 'text':
+				return part.text;
+			case 'image':
+				return `[image: ${part.mimeType}, ${part.data.length} base64 chars]`;
+			case 'audio':
+				return `[audio: ${part.mimeType}, ${part.data.length} base64 chars]`;
+			case 'resource':
+				return `[resource: ${part.resource.uri}${part.resource.mimeType ? ` (${part.resource.mimeType})` : ''}]`;
+			default:
+				return JSON.stringify(part);
+		}
+	});
+
+	if (result.structuredContent) {
+		// MCP content is often human-oriented prose, while structuredContent carries the machine-readable
+		// payload that models need for follow-up reasoning. Mirror VS Code's MCP language-model adapter by
+		// exposing that JSON to the assistant instead of dropping it from VSClone's transcript.
+		parts.push(JSON.stringify(result.structuredContent, null, 2));
+	}
+
+	const output = parts.join('\n\n').trim();
+	if (output) {
+		return output;
+	}
+	return result.isError ? 'MCP tool returned an error without content.' : 'MCP tool completed without content.';
+}
+
+function isMcpContentVisibleToAssistant(part: MCP.ContentBlock): boolean {
+	// MCP annotations can mark content as intended only for the user-facing UI. Keep VSClone's
+	// assistant transcript aligned with VS Code's MCP adapter by forwarding unannotated content
+	// and explicitly assistant-targeted content, but not user-only content.
+	const audience = part.annotations?.audience;
+	return !audience || audience.includes('assistant');
 }

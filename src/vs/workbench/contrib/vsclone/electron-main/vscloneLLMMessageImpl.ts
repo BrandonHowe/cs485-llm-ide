@@ -73,6 +73,10 @@ const googleModelMap: Record<string, string> = {
 // Mirror the SDK enum payloads locally so the request builders stay serializable without forcing
 // renderer-imported tests to eagerly parse the Google SDK just to read constant values.
 const googleFunctionCallingConfigModeAuto = 'AUTO' as VSCloneGoogleFunctionCallingConfigMode;
+const googleSchemaTypeArray = 'ARRAY' as VSCloneGoogleSchemaType;
+const googleSchemaTypeBoolean = 'BOOLEAN' as VSCloneGoogleSchemaType;
+const googleSchemaTypeInteger = 'INTEGER' as VSCloneGoogleSchemaType;
+const googleSchemaTypeNumber = 'NUMBER' as VSCloneGoogleSchemaType;
 const googleSchemaTypeObject = 'OBJECT' as VSCloneGoogleSchemaType;
 const googleSchemaTypeString = 'STRING' as VSCloneGoogleSchemaType;
 
@@ -450,8 +454,8 @@ async function sendGoogleChatMessage(
 		// Load it lazily so renderer-hosted bridge tests can import this Electron module graph without
 		// having to resolve the Node-only `google-auth-library` package before any Google request runs.
 		googleAuthOptions: {
-			authClient: await createGooglePassThroughAuthClient(),
-		} as never,
+			authClient: (await createGooglePassThroughAuthClient()) as never,
+		},
 		httpOptions: buildGoogleHttpOptions(auth.headers),
 	});
 	// Google's SDK request types are also nominally separate from the local prepared-message union,
@@ -548,7 +552,7 @@ function buildOpenAIChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 		instructions: prepared.separateSystemMessage?.trim() || defaultSystemMessage,
 		store: false,
 		input: buildOpenAIInput(prepared.messages as readonly IVSCloneOpenAILLMChatMessage[]),
-		tools: buildOpenAITools(prepared.mode),
+		tools: buildOpenAITools(prepared),
 		parallel_tool_calls: false,
 		stream: true as const,
 	};
@@ -576,7 +580,7 @@ function buildAnthropicChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 		// The prepared-message seam now owns tool/result conversion, but Anthropic reasoning blocks
 		// are still omitted until the live runtime can round-trip them end-to-end.
 		system: prepared.separateSystemMessage?.trim() || defaultSystemMessage,
-		tools: buildAnthropicTools(prepared.mode),
+		tools: buildAnthropicTools(prepared),
 		tool_choice: {
 			type: 'auto',
 			disable_parallel_tool_use: true,
@@ -586,7 +590,7 @@ function buildAnthropicChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 
 function buildGoogleChatRequest(prepared: IVSCloneLLMPreparedChatPayload, signal: AbortSignal) {
 	const apiModelId = resolveVSCloneApiModelId('google', prepared.modelId);
-	const googleTools = buildGoogleTools(prepared.mode);
+	const googleTools = buildGoogleTools(prepared);
 	return {
 		model: apiModelId,
 		contents: prepared.messages as readonly IVSCloneGeminiLLMChatMessage[],
@@ -1005,8 +1009,8 @@ function buildOpenAIInput(messages: readonly IVSCloneOpenAILLMChatMessage[]) {
 	return input;
 }
 
-function buildOpenAITools(mode: IVSCloneLLMPreparedChatPayload['mode']): VSCloneOpenAIFunctionTool[] {
-	return getVSCloneVisibleToolDefinitions(mode).map(tool => ({
+function buildOpenAITools(prepared: IVSCloneLLMPreparedChatPayload): VSCloneOpenAIFunctionTool[] {
+	return getPreparedToolDefinitions(prepared).map(tool => ({
 		type: 'function',
 		name: tool.name,
 		description: tool.description,
@@ -1015,43 +1019,91 @@ function buildOpenAITools(mode: IVSCloneLLMPreparedChatPayload['mode']): VSClone
 	}));
 }
 
-function buildAnthropicTools(mode: IVSCloneLLMPreparedChatPayload['mode']): VSCloneAnthropicTool[] {
-	return getVSCloneVisibleToolDefinitions(mode).map(tool => ({
+function buildAnthropicTools(prepared: IVSCloneLLMPreparedChatPayload): VSCloneAnthropicTool[] {
+	return getPreparedToolDefinitions(prepared).map(tool => ({
 		name: tool.name,
 		description: tool.description,
 		input_schema: cloneToolJsonSchema(toVSCloneToolJsonSchema(tool)) as VSCloneAnthropicToolInputSchema,
 	}));
 }
 
-function buildGoogleTools(mode: IVSCloneLLMPreparedChatPayload['mode']): Array<{ functionDeclarations: VSCloneGoogleFunctionDeclaration[] }> {
-	const functionDeclarations: VSCloneGoogleFunctionDeclaration[] = getVSCloneVisibleToolDefinitions(mode).map(tool => {
-		// Build the schema imperatively so TypeScript keeps the Google SDK's schema shape instead of
-		// widening `Object.fromEntries(...)` to a loose `{ type: "STRING" }` record.
-		const properties: Record<string, VSCloneGoogleSchema> = {};
-		for (const parameter of tool.parameters) {
-			properties[parameter.name] = {
-				type: googleSchemaTypeString,
-				description: parameter.description,
-			};
-		}
-
-		const required = tool.parameters
-			.filter(parameter => parameter.required)
-			.map(parameter => parameter.name);
-		const parameters: VSCloneGoogleSchema = {
-			type: googleSchemaTypeObject,
-			properties,
-			...(required.length > 0 ? { required } : {}),
-		};
-
+function buildGoogleTools(prepared: IVSCloneLLMPreparedChatPayload): Array<{ functionDeclarations: VSCloneGoogleFunctionDeclaration[] }> {
+	const functionDeclarations: VSCloneGoogleFunctionDeclaration[] = getPreparedToolDefinitions(prepared).map(tool => {
 		return {
 			name: tool.name,
 			description: tool.description,
-			parameters,
+			parameters: toGoogleSchema(toVSCloneToolJsonSchema(tool)),
 		};
 	});
 
 	return functionDeclarations.length > 0 ? [{ functionDeclarations }] : [];
+}
+
+function toGoogleSchema(schema: IVSCloneToolJsonSchema | Readonly<Record<string, unknown>>): VSCloneGoogleSchema {
+	const schemaRecord = schema as Readonly<Record<string, unknown>>;
+	const googleSchema: VSCloneGoogleSchema = {};
+	const schemaType = toGoogleSchemaType(schemaRecord.type);
+	if (schemaType) {
+		googleSchema.type = schemaType;
+	}
+	if (typeof schemaRecord.description === 'string') {
+		googleSchema.description = schemaRecord.description;
+	}
+	if (Array.isArray(schemaRecord.enum) && schemaRecord.enum.every(value => typeof value === 'string')) {
+		googleSchema.enum = schemaRecord.enum;
+	}
+	if (typeof schemaRecord.format === 'string') {
+		googleSchema.format = schemaRecord.format;
+	}
+	if (Array.isArray(schemaRecord.required) && schemaRecord.required.every(value => typeof value === 'string')) {
+		googleSchema.required = schemaRecord.required;
+	}
+	if (isJsonSchemaRecord(schemaRecord.items)) {
+		googleSchema.items = toGoogleSchema(schemaRecord.items);
+	}
+	if (isJsonSchemaRecordMap(schemaRecord.properties)) {
+		googleSchema.properties = Object.fromEntries(
+			Object.entries(schemaRecord.properties).map(([name, property]) => [name, toGoogleSchema(property)]),
+		);
+	}
+	if (Array.isArray(schemaRecord.anyOf)) {
+		const anyOf = schemaRecord.anyOf.filter(isJsonSchemaRecord).map(toGoogleSchema);
+		if (anyOf.length > 0) {
+			googleSchema.anyOf = anyOf;
+		}
+	}
+	return googleSchema;
+}
+
+function toGoogleSchemaType(value: unknown): VSCloneGoogleSchemaType | undefined {
+	switch (Array.isArray(value) ? value[0] : value) {
+		case 'array':
+			return googleSchemaTypeArray;
+		case 'boolean':
+			return googleSchemaTypeBoolean;
+		case 'integer':
+			return googleSchemaTypeInteger;
+		case 'number':
+			return googleSchemaTypeNumber;
+		case 'object':
+			return googleSchemaTypeObject;
+		case 'string':
+			return googleSchemaTypeString;
+		default:
+			return undefined;
+	}
+}
+
+function isJsonSchemaRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isJsonSchemaRecordMap(value: unknown): value is Record<string, Record<string, unknown>> {
+	return isJsonSchemaRecord(value) && Object.values(value).every(isJsonSchemaRecord);
+}
+
+function getPreparedToolDefinitions(prepared: IVSCloneLLMPreparedChatPayload) {
+	return prepared.toolDefinitions ?? getVSCloneVisibleToolDefinitions(prepared.mode);
 }
 
 function toOpenAIInputContent(content: Extract<IVSCloneOpenAILLMChatMessage, { readonly role: 'user' | 'system' | 'developer' }>['content']) {
@@ -1115,15 +1167,13 @@ function updateToolCallFromJsonString(
 	};
 }
 
-function parseToolArgsJson(value: string): Record<string, string> {
+function parseToolArgsJson(value: string): Record<string, unknown> {
 	try {
 		const parsed = JSON.parse(value);
 		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
 			return {};
 		}
-		return Object.fromEntries(
-			Object.entries(parsed).map(([key, entryValue]) => [key, String(entryValue)]),
-		);
+		return parsed as Record<string, unknown>;
 	} catch {
 		return {};
 	}
@@ -1175,11 +1225,11 @@ function toVSCloneToolCallFromAnthropicMessage(
 	}
 
 	const rawInput = toolUseBlock.input && typeof toolUseBlock.input === 'object'
-		? toolUseBlock.input
+		? toolUseBlock.input as Record<string, unknown>
 		: {};
 	return {
 		name: toolUseBlock.name,
-		rawParams: Object.fromEntries(Object.entries(rawInput).map(([key, value]) => [key, String(value)])),
+		rawParams: rawInput,
 		doneParams: Object.keys(rawInput).sort(),
 		id: toolUseBlock.id,
 		isDone: true,
@@ -1187,13 +1237,23 @@ function toVSCloneToolCallFromAnthropicMessage(
 }
 
 function cloneToolJsonSchema(schema: IVSCloneToolJsonSchema): Record<string, unknown> {
-	return {
-		type: schema.type,
-		properties: Object.fromEntries(
-			Object.entries(schema.properties).map(([name, property]) => [name, { ...property }]),
-		),
-		...(schema.required ? { required: [...schema.required] } : {}),
-	};
+	// OpenAI and Anthropic accept JSON Schema-like input definitions, so preserve MCP keywords such
+	// as additionalProperties, $defs, enum, and nested composition instead of rebuilding a subset.
+	return cloneJsonSchemaRecord(schema);
+}
+
+function cloneJsonSchemaRecord(value: Readonly<Record<string, unknown>>): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, cloneJsonSchemaValue(entry)]));
+}
+
+function cloneJsonSchemaValue(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(cloneJsonSchemaValue);
+	}
+	if (value && typeof value === 'object') {
+		return cloneJsonSchemaRecord(value as Readonly<Record<string, unknown>>);
+	}
+	return value;
 }
 
 function resolveVSCloneApiModelId(vendor: VSCloneModelVendor, catalogModelId: string): string {

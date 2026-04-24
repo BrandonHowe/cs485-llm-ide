@@ -23,12 +23,15 @@ export interface IVSCloneToolParameterDefinition {
 	readonly description: string;
 }
 
+export type VSCloneToolParams = Readonly<Record<string, unknown>>;
+
 export interface IVSCloneToolDefinition {
 	readonly name: string;
 	readonly description: string;
 	readonly approvalType?: VSCloneToolApprovalType;
 	readonly planModeAllowed: boolean;
 	readonly parameters: readonly IVSCloneToolParameterDefinition[];
+	readonly inputSchema?: IVSCloneToolJsonSchema;
 }
 
 export interface IVSCloneToolResultPayload {
@@ -37,11 +40,9 @@ export interface IVSCloneToolResultPayload {
 }
 
 export interface IVSCloneToolJsonSchema {
+	readonly [keyword: string]: unknown;
 	readonly type: 'object';
-	readonly properties: Readonly<Record<string, {
-		readonly type: 'string';
-		readonly description: string;
-	}>>;
+	readonly properties: Readonly<Record<string, Record<string, unknown>>>;
 	readonly required?: readonly string[];
 }
 
@@ -160,7 +161,11 @@ export function getVSCloneVisibleToolDefinitions(mode: VSCloneChatMode = 'act'):
  * transport only has to adapt field names at the final SDK boundary.
  */
 export function toVSCloneToolJsonSchema(tool: IVSCloneToolDefinition): IVSCloneToolJsonSchema {
-	const properties: Record<string, { type: 'string'; description: string }> = {};
+	if (tool.inputSchema) {
+		return tool.inputSchema;
+	}
+
+	const properties: Record<string, Record<string, unknown>> = {};
 	const required: string[] = [];
 
 	for (const parameter of tool.parameters) {

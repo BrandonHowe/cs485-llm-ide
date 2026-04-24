@@ -15,6 +15,7 @@ import {
 	type IVSCloneOpenAILLMChatMessage,
 } from './vscloneLLMMessageTypes.js';
 import type { IVSCloneModelSelection } from './vscloneModelSelectionTypes.js';
+import type { VSCloneToolParams } from './vscloneToolDefinitions.js';
 
 export const IVSCloneConvertToLLMMessageService = createDecorator<IVSCloneConvertToLLMMessageService>('vscloneConvertToLLMMessageService');
 
@@ -38,7 +39,7 @@ type IVSCloneSimplePreparedMessage =
 		readonly role: 'tool';
 		readonly id: string;
 		readonly name: string;
-		readonly rawParams: Readonly<Record<string, string>>;
+		readonly rawParams: VSCloneToolParams;
 		readonly content: string;
 	};
 
@@ -64,6 +65,7 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					reasoningEffort: options.reasoningEffort,
 					messages: prepareOpenAIMessages(simpleMessages),
 					separateSystemMessage,
+					toolDefinitions: options.toolDefinitions,
 				};
 			case 'anthropic':
 				return {
@@ -74,6 +76,7 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					reasoningEffort: options.reasoningEffort,
 					messages: prepareAnthropicMessages(simpleMessages),
 					separateSystemMessage,
+					toolDefinitions: options.toolDefinitions,
 				};
 			case 'google':
 				return {
@@ -84,6 +87,7 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 					reasoningEffort: options.reasoningEffort,
 					messages: prepareGeminiMessages(simpleMessages),
 					separateSystemMessage,
+					toolDefinitions: options.toolDefinitions,
 				};
 		}
 	}
