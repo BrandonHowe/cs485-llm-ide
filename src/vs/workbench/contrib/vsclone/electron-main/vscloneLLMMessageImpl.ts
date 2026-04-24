@@ -87,7 +87,6 @@ const googleSchemaTypeNumber = 'NUMBER' as VSCloneGoogleSchemaType;
 const googleSchemaTypeInteger = 'INTEGER' as VSCloneGoogleSchemaType;
 const googleSchemaTypeBoolean = 'BOOLEAN' as VSCloneGoogleSchemaType;
 const googleSchemaTypeArray = 'ARRAY' as VSCloneGoogleSchemaType;
-const googleNullOnlyEnumSentinel = '__vsclone_mcp_null_only__';
 
 const supportedAnthropicOAuthMessagesModelIds = new Set<string>([
 	'claude-haiku-4-5-20251001',
@@ -1298,15 +1297,16 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 function toGoogleNullOnlySchema(value: Record<string, unknown>): VSCloneGoogleSchema {
 	const schema: VSCloneGoogleSchema = {
 		type: googleSchemaTypeString,
-		enum: [googleNullOnlyEnumSentinel],
+		enum: [],
 		nullable: true,
 	};
 	if (typeof value.description === 'string') {
 		schema.description = value.description;
 	}
 
-	// Gemini has nullable schemas but no null-only type. A private enum sentinel keeps the
-	// non-null side tightly constrained instead of degrading `{ const: null }` to `{}`.
+	// Gemini has nullable schemas but no null-only type. An empty non-null enum is the least
+	// permissive approximation: it avoids inventing sentinel strings that could reach MCP tools
+	// while still documenting that null is the only intended value.
 	return schema;
 }
 
@@ -1346,7 +1346,7 @@ function toGoogleSchemaList(value: unknown): { readonly schemas?: VSCloneGoogleS
 			// Gemini models nullability as a flag, so null-only draft-07 union branches must not
 			// become `{}` anyOf entries that would accidentally allow every value.
 			nullable = true;
-			return [];
+			return [toGoogleNullOnlySchema(item)];
 		}
 		const schema = toGoogleSchema(item);
 		return schema ? [schema] : [];
