@@ -1242,10 +1242,16 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 		return undefined;
 	}
 
-	const type = googleTypeFromJsonSchemaType(value.type);
+	const typeInfo = googleTypeInfoFromJsonSchemaType(value.type);
 	const schema: VSCloneGoogleSchema = {};
-	if (type) {
-		schema.type = type;
+	if (typeInfo.type) {
+		schema.type = typeInfo.type;
+	}
+	if (typeInfo.nullable) {
+		schema.nullable = true;
+	}
+	if (typeInfo.anyOf) {
+		schema.anyOf = typeInfo.anyOf;
 	}
 	if (typeof value.description === 'string') {
 		schema.description = value.description;
@@ -1267,7 +1273,33 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 		schema.items = items;
 	}
 
+	const anyOf = toGoogleSchemaList(value.anyOf);
+	if (anyOf) {
+		schema.anyOf = mergeGoogleAnyOf(schema.anyOf, anyOf);
+	}
+
 	return schema;
+}
+
+function toGoogleSchemaList(value: unknown): VSCloneGoogleSchema[] | undefined {
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+
+	const schemas = value.flatMap(item => {
+		const schema = toGoogleSchema(item);
+		return schema ? [schema] : [];
+	});
+
+	return schemas.length > 0 ? schemas : undefined;
+}
+
+function mergeGoogleAnyOf(existing: VSCloneGoogleSchema[] | undefined, incoming: VSCloneGoogleSchema[]): VSCloneGoogleSchema[] {
+	if (!existing) {
+		return incoming;
+	}
+
+	return [...existing, ...incoming];
 }
 
 function toGoogleSchemaProperties(value: unknown): Record<string, VSCloneGoogleSchema> | undefined {
@@ -1305,6 +1337,30 @@ function googleTypeFromJsonSchemaType(type: unknown): VSCloneGoogleSchemaType | 
 		default:
 			return undefined;
 	}
+}
+
+function googleTypeInfoFromJsonSchemaType(type: unknown): { readonly type?: VSCloneGoogleSchemaType; readonly nullable?: boolean; readonly anyOf?: VSCloneGoogleSchema[] } {
+	if (!Array.isArray(type)) {
+		return { type: googleTypeFromJsonSchemaType(type) };
+	}
+
+	const googleTypes = type
+		.filter(item => item !== 'null')
+		.map(googleTypeFromJsonSchemaType)
+		.filter((item): item is VSCloneGoogleSchemaType => item !== undefined);
+	const nullable = type.includes('null');
+	if (googleTypes.length <= 1) {
+		return {
+			type: googleTypes[0],
+			nullable,
+		};
+	}
+
+	// Gemini models nullable directly, but multiple non-null draft-07 types need anyOf.
+	return {
+		nullable,
+		anyOf: googleTypes.map(item => ({ type: item })),
+	};
 }
 
 function toOpenAIInputContent(content: Extract<IVSCloneOpenAILLMChatMessage, { readonly role: 'user' | 'system' | 'developer' }>['content']) {
