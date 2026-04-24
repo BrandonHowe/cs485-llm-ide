@@ -1297,16 +1297,15 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 function toGoogleNullOnlySchema(value: Record<string, unknown>): VSCloneGoogleSchema {
 	const schema: VSCloneGoogleSchema = {
 		type: googleSchemaTypeString,
-		enum: [],
 		nullable: true,
 	};
-	if (typeof value.description === 'string') {
-		schema.description = value.description;
-	}
 
-	// Gemini has nullable schemas but no null-only type. An empty non-null enum is the least
-	// permissive approximation: it avoids inventing sentinel strings that could reach MCP tools
-	// while still documenting that null is the only intended value.
+	// Gemini has nullable schemas but no null-only type. A nullable string is the least unsafe
+	// approximation: it avoids invalid empty enums and avoids inventing sentinel values that could
+	// leak into MCP tool arguments. The description keeps the provider-facing intent explicit.
+	schema.description = typeof value.description === 'string'
+		? `${value.description}\n\nOnly null is valid for this value.`
+		: 'Only null is valid for this value.';
 	return schema;
 }
 
