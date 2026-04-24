@@ -1256,9 +1256,14 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 	if (typeof value.description === 'string') {
 		schema.description = value.description;
 	}
-	const enumValues = toGoogleStringEnum(value.enum);
-	if (enumValues) {
-		schema.enum = enumValues;
+	const enumInfo = toGoogleStringEnum(value.enum);
+	if (enumInfo?.values) {
+		schema.enum = enumInfo.values;
+	}
+	if (enumInfo?.nullable) {
+		// Draft-07 allows nullability to be encoded only as an enum member. Gemini models
+		// nullability separately, so keep the string enum constraint and lift null into the flag.
+		schema.nullable = true;
 	}
 	if (Array.isArray(value.required) && value.required.every(item => typeof item === 'string')) {
 		schema.required = [...value.required];
@@ -1285,24 +1290,29 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 	return schema;
 }
 
-function toGoogleStringEnum(value: unknown): string[] | undefined {
+function toGoogleStringEnum(value: unknown): { readonly values?: string[]; readonly nullable: boolean } | undefined {
 	if (!Array.isArray(value)) {
 		return undefined;
 	}
 
 	const enumValues: string[] = [];
+	let nullable = false;
 	for (const item of value) {
 		if (typeof item === 'string') {
 			enumValues.push(item);
 			continue;
 		}
 		if (item === null) {
+			nullable = true;
 			continue;
 		}
 		return undefined;
 	}
 
-	return enumValues.length > 0 ? enumValues : undefined;
+	return enumValues.length > 0 || nullable ? {
+		values: enumValues.length > 0 ? enumValues : undefined,
+		nullable,
+	} : undefined;
 }
 
 function toGoogleSchemaList(value: unknown): { readonly schemas?: VSCloneGoogleSchema[]; readonly nullable: boolean } | undefined {
@@ -1334,7 +1344,17 @@ function isNullOnlyJsonSchema(value: unknown): boolean {
 	}
 
 	const type = value.type;
-	return type === 'null' || (Array.isArray(type) && type.length > 0 && type.every(item => item === 'null'));
+	if (type === 'null' || (Array.isArray(type) && type.length > 0 && type.every(item => item === 'null'))) {
+		return true;
+	}
+
+	if (value.const === null) {
+		return true;
+	}
+
+	// Some MCP servers use enum-only draft-07 branches for nullable unions. Treat an enum that
+	// contains only null as a null branch instead of converting it to an unconstrained Gemini schema.
+	return Array.isArray(value.enum) && value.enum.length > 0 && value.enum.every(item => item === null);
 }
 
 function mergeGoogleAnyOf(existing: VSCloneGoogleSchema[] | undefined, incoming: VSCloneGoogleSchema[]): VSCloneGoogleSchema[] {
