@@ -1284,6 +1284,12 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 	}
 
 	const anyOf = toGoogleSchemaList(value.anyOf);
+	if (anyOf?.nullable && !anyOf.schemas && isGoogleSchemaDescriptionOnly(schema)) {
+		// All-null draft-07 unions need the same null-only approximation as standalone null schemas.
+		// A bare `{ nullable: true }` does not constrain Gemini's argument shape, while mixed unions
+		// still rely on the containing nullable flag so we do not add a permissive union branch.
+		return toGoogleNullOnlySchema(value);
+	}
 	if (anyOf?.nullable) {
 		schema.nullable = true;
 	}
@@ -1292,6 +1298,10 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 	}
 
 	return schema;
+}
+
+function isGoogleSchemaDescriptionOnly(schema: VSCloneGoogleSchema): boolean {
+	return Object.keys(schema).every(key => key === 'description');
 }
 
 function toGoogleNullOnlySchema(value: Record<string, unknown>): VSCloneGoogleSchema {
