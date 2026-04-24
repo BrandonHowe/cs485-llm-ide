@@ -1343,9 +1343,10 @@ function toGoogleSchemaList(value: unknown): { readonly schemas?: VSCloneGoogleS
 	const schemas = value.flatMap(item => {
 		if (isNullOnlyJsonSchema(item)) {
 			// Gemini models nullability as a flag, so null-only draft-07 union branches must not
-			// become `{}` anyOf entries that would accidentally allow every value.
+			// become anyOf entries. Standalone null-only schemas keep their own approximation, but
+			// using that inside a union would broaden constrained branches to arbitrary strings.
 			nullable = true;
-			return [toGoogleNullOnlySchema(item)];
+			return [];
 		}
 		const schema = toGoogleSchema(item);
 		return schema ? [schema] : [];
