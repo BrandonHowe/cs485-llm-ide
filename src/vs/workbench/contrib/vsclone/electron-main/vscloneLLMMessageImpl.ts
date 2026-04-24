@@ -1284,10 +1284,10 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 	}
 
 	const anyOf = toGoogleSchemaList(value.anyOf);
-	if (anyOf?.nullable && !anyOf.schemas && isGoogleSchemaDescriptionOnly(schema)) {
+	if (anyOf?.nullable && !anyOf.schemas) {
 		// All-null draft-07 unions need the same null-only approximation as standalone null schemas.
-		// A bare `{ nullable: true }` does not constrain Gemini's argument shape, while mixed unions
-		// still rely on the containing nullable flag so we do not add a permissive union branch.
+		// Sibling keywords are conjunctive in draft-07, so a nullable type or enum next to an all-null
+		// anyOf is still null-only. A bare `{ nullable: true }` would let Gemini broaden the value.
 		return toGoogleNullOnlySchema(value);
 	}
 	if (anyOf?.nullable) {
@@ -1298,10 +1298,6 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 	}
 
 	return schema;
-}
-
-function isGoogleSchemaDescriptionOnly(schema: VSCloneGoogleSchema): boolean {
-	return Object.keys(schema).every(key => key === 'description');
 }
 
 function toGoogleNullOnlySchema(value: Record<string, unknown>): VSCloneGoogleSchema {
