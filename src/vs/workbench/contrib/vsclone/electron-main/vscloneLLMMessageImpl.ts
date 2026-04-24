@@ -1256,8 +1256,9 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 	if (typeof value.description === 'string') {
 		schema.description = value.description;
 	}
-	if (Array.isArray(value.enum) && value.enum.every(item => typeof item === 'string')) {
-		schema.enum = [...value.enum];
+	const enumValues = toGoogleStringEnum(value.enum);
+	if (enumValues) {
+		schema.enum = enumValues;
 	}
 	if (Array.isArray(value.required) && value.required.every(item => typeof item === 'string')) {
 		schema.required = [...value.required];
@@ -1274,24 +1275,66 @@ function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
 	}
 
 	const anyOf = toGoogleSchemaList(value.anyOf);
-	if (anyOf) {
-		schema.anyOf = mergeGoogleAnyOf(schema.anyOf, anyOf);
+	if (anyOf?.nullable) {
+		schema.nullable = true;
+	}
+	if (anyOf?.schemas) {
+		schema.anyOf = mergeGoogleAnyOf(schema.anyOf, anyOf.schemas);
 	}
 
 	return schema;
 }
 
-function toGoogleSchemaList(value: unknown): VSCloneGoogleSchema[] | undefined {
+function toGoogleStringEnum(value: unknown): string[] | undefined {
 	if (!Array.isArray(value)) {
 		return undefined;
 	}
 
+	const enumValues: string[] = [];
+	for (const item of value) {
+		if (typeof item === 'string') {
+			enumValues.push(item);
+			continue;
+		}
+		if (item === null) {
+			continue;
+		}
+		return undefined;
+	}
+
+	return enumValues.length > 0 ? enumValues : undefined;
+}
+
+function toGoogleSchemaList(value: unknown): { readonly schemas?: VSCloneGoogleSchema[]; readonly nullable: boolean } | undefined {
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+
+	let nullable = false;
 	const schemas = value.flatMap(item => {
+		if (isNullOnlyJsonSchema(item)) {
+			// Gemini models nullability as a flag, so null-only draft-07 union branches must not
+			// become `{}` anyOf entries that would accidentally allow every value.
+			nullable = true;
+			return [];
+		}
 		const schema = toGoogleSchema(item);
 		return schema ? [schema] : [];
 	});
 
-	return schemas.length > 0 ? schemas : undefined;
+	return schemas.length > 0 || nullable ? {
+		schemas: schemas.length > 0 ? schemas : undefined,
+		nullable,
+	} : undefined;
+}
+
+function isNullOnlyJsonSchema(value: unknown): boolean {
+	if (!isRecord(value)) {
+		return false;
+	}
+
+	const type = value.type;
+	return type === 'null' || (Array.isArray(type) && type.length > 0 && type.every(item => item === 'null'));
 }
 
 function mergeGoogleAnyOf(existing: VSCloneGoogleSchema[] | undefined, incoming: VSCloneGoogleSchema[]): VSCloneGoogleSchema[] {
