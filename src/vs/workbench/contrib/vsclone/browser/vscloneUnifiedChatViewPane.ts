@@ -53,11 +53,12 @@ import {
 	type IVSCloneModelSelection,
 } from "../common/vscloneModelSelectionTypes.js";
 import { IVSCloneSettingsService } from "../common/vscloneSettingsService.js";
-import type { IVSCloneSettingsProviderState } from "../common/vscloneSettingsTypes.js";
 import { VSCloneThreadRail } from "./vscloneThreadRail.js";
 import { IVSCloneChatThreadService } from "./vscloneChatThreadService.js";
 import { VSCloneModelSwitcherWidget } from "./vscloneModelSwitcherWidget.js";
 import { IVSCloneProviderConfigurationBridge } from "./vscloneProviderConfigurationBridge.js";
+import { IVSCloneOAuthService } from "../common/vscloneOAuthService.js";
+import { defaultOAuthProviderConfig, type IVSCloneOAuthProviderState } from "../common/vscloneOAuthTypes.js";
 import { IVSCloneThreadRuntimeService } from "./vscloneThreadRuntimeService.js";
 import {
 	type IVSCloneThreadCatalogEntry,
@@ -428,6 +429,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		private readonly chatThreadService: IVSCloneChatThreadService,
 		@IVSCloneSettingsService
 		private readonly settingsService: IVSCloneSettingsService,
+		@IVSCloneOAuthService
+		private readonly oauthService: IVSCloneOAuthService,
 		@IVSClonePlanModeService
 		private readonly planModeService: IVSClonePlanModeService,
 		@IVSCloneProviderConfigurationBridge
@@ -527,6 +530,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this._register(
 			this.settingsService.onDidChangeState(() => {
 				this.refreshModelControls();
+				if (this.settingsVisible) {
+					this.renderSettingsPage();
+				}
+			}),
+		);
+		this._register(
+			this.oauthService.onDidChangeState(() => {
 				if (this.settingsVisible) {
 					this.renderSettingsPage();
 				}
@@ -1348,8 +1358,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return undefined;
 		}
 
-		const state = this.settingsService.getState();
-		const modelSwitcherEnabled = this.isModelSwitcherEnabled();
 		const activeFocusKey = this.getActiveSettingsFocusKey(settings);
 		settings.replaceChildren();
 
@@ -1358,10 +1366,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const headerCopy = document.createElement("div");
 		const title = document.createElement("h2");
 		title.textContent = localize("vsclone.settings.title", "VSClone Settings");
-		const subtitle = document.createElement("p");
-		subtitle.textContent = localize("vsclone.settings.subtitle", "Tune models, providers, context, edits, and privacy for the built-in assistant.");
 		headerCopy.appendChild(title);
-		headerCopy.appendChild(subtitle);
 		header.appendChild(headerCopy);
 
 		const closeButton = document.createElement("button");
@@ -1387,53 +1392,13 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		grid.className = "vsclone-settings-grid";
 		grid.appendChild(this.createSettingsSection(
 			localize("vsclone.settings.providers.title", "Providers"),
-			localize("vsclone.settings.providers.description", "Enable the accounts and model families available to chat and autocomplete."),
-			state.providers.map(provider => this.createProviderRow(provider)),
-		));
-		grid.appendChild(this.createSettingsSection(
-			localize("vsclone.settings.models.title", "Models"),
-			localize("vsclone.settings.models.description", "Defaults are picked by capability so each workflow starts on a useful model."),
-			[
-				this.createSettingsMetric(localize("vsclone.settings.models.available", "Available models"), String(state.models.filter(model => model.isSelectable).length)),
-				this.createSettingsMetric(localize("vsclone.settings.models.recent", "Recent"), state.recentModelIdentifiers.slice(0, 3).join(", ") || localize("vsclone.settings.models.none", "None")),
-				// This action opens the composer-hosted picker, so omit it when that picker is
-				// disabled instead of navigating users toward hidden composer UI.
-				...(modelSwitcherEnabled ? [this.createSettingsButtonRow("models.pick", localize("vsclone.settings.models.pick", "Choose model"), "codicon-symbol-misc", () => {
-					this.settingsVisible = false;
-					this.updateConversationModeVisibility();
-					this.openModelPicker();
-				})] : []),
-				this.createSettingsButtonRow("models.refresh", localize("vsclone.settings.models.refresh", "Refresh catalog"), "codicon-refresh", () => { void this.refreshModelCatalog(); }),
-			],
+			Object.values(defaultOAuthProviderConfig).map(provider => this.createProviderAuthRow(this.oauthService.state.providers[provider.vendor])),
 		));
 		grid.appendChild(this.createSettingsSection(
 			localize("vsclone.settings.experience.title", "Experience"),
-			localize("vsclone.settings.experience.description", "Controls for the chat rail, model picker, and inline completion behavior."),
 			[
-				this.createBooleanSettingRow(modelSwitcherEnabledSetting, localize("vsclone.settings.modelSwitcher", "Model picker in composer")),
 				this.createBooleanSettingRow(autocompleteEnabledSetting, localize("vsclone.settings.autocomplete", "Inline autocomplete")),
 				this.createNumberSettingRow(autocompleteDebounceMsSetting, localize("vsclone.settings.autocompleteDelay", "Autocomplete delay"), 0, VSCloneAutocompleteDebounceMsMaximum, "ms"),
-				this.createNumberSettingRow(railWidthSetting, localize("vsclone.settings.railWidth", "Thread rail width"), railMinWidth, railMaxWidth, "px"),
-			],
-		));
-		grid.appendChild(this.createSettingsSection(
-			localize("vsclone.settings.agent.title", "Agent Behavior"),
-			localize("vsclone.settings.agent.description", "Current guardrails that are enforced by the runtime."),
-			[
-				this.createSettingsMetric(localize("vsclone.settings.agent.terminalApproval", "Terminal tools"), localize("vsclone.settings.agent.explicitApproval", "Require approval")),
-				this.createSettingsMetric(localize("vsclone.settings.agent.editApproval", "Edit tools"), this.threadRuntimeService.isAutoApproveEdits()
-					? localize("vsclone.settings.agent.editApproval.auto", "Auto-approve enabled")
-					: localize("vsclone.settings.agent.editApproval.manual", "Require approval")),
-				this.createSettingsMetric(localize("vsclone.settings.agent.deleteThreads", "Thread deletion"), localize("vsclone.settings.agent.deleteThreads.railConfirmed", "Rail row deletion confirms")),
-			],
-		));
-		grid.appendChild(this.createSettingsSection(
-			localize("vsclone.settings.privacy.title", "Privacy"),
-			localize("vsclone.settings.privacy.description", "Current data handling status for VSClone settings and chat content."),
-			[
-				this.createSettingsMetric(localize("vsclone.settings.privacy.telemetry", "Usage telemetry"), localize("vsclone.settings.privacy.telemetryUnavailable", "No VSClone telemetry sender")),
-				this.createSettingsMetric(localize("vsclone.settings.privacy.storage", "Provider preferences"), localize("vsclone.settings.privacy.profileScoped", "Profile scoped")),
-				this.createSettingsMetric(localize("vsclone.settings.privacy.prompts", "Prompt content"), localize("vsclone.settings.privacy.localHistory", "Stored in local chat history")),
 			],
 		));
 		settings.appendChild(grid);
@@ -1469,28 +1434,70 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return undefined;
 	}
 
-	private createSettingsSection(title: string, description: string, rows: readonly HTMLElement[]): HTMLElement {
+	private createSettingsSection(title: string, rows: readonly HTMLElement[]): HTMLElement {
 		const section = document.createElement("section");
 		section.className = "vsclone-settings-section";
 		const heading = document.createElement("h3");
 		heading.textContent = title;
-		const copy = document.createElement("p");
-		copy.textContent = description;
 		section.appendChild(heading);
-		section.appendChild(copy);
 		for (const row of rows) {
 			section.appendChild(row);
 		}
 		return section;
 	}
 
-	private createProviderRow(provider: IVSCloneSettingsProviderState): HTMLElement {
-		const providerStatus = provider.status === "available"
-			? localize("vsclone.settings.provider.ready", "{0} selectable models", provider.selectableModelCount)
-			: localize("vsclone.settings.provider.signIn", "Sign in required");
-		// Provider availability is derived from OAuth and static model definitions on this branch;
-		// there is no persisted provider-enabled bit, so render the row as read-only status.
-		return this.createSettingsMetric(provider.displayName, providerStatus);
+	private createProviderAuthRow(provider: IVSCloneOAuthProviderState): HTMLElement {
+		const row = document.createElement("div");
+		row.className = "vsclone-settings-row";
+		const copy = document.createElement("div");
+		copy.className = "vsclone-settings-row-copy";
+		const title = document.createElement("div");
+		title.className = "vsclone-settings-row-title";
+		title.textContent = provider.displayName;
+		const detail = document.createElement("div");
+		detail.className = "vsclone-settings-row-description";
+		detail.textContent = this.getProviderStatusLabel(provider);
+		copy.appendChild(title);
+		copy.appendChild(detail);
+
+		const button = document.createElement("button");
+		button.type = "button";
+		button.className = "vsclone-settings-action-button";
+		this.setSettingsFocusKey(button, `provider.${provider.vendor}`);
+		const signedIn = provider.status === "signed_in" || provider.isReady;
+		button.textContent = signedIn
+			? localize("vsclone.settings.provider.signOut", "Sign out")
+			: localize("vsclone.settings.provider.signIn", "Sign in");
+		button.disabled = provider.status === "signing_in" || provider.status === "refreshing";
+		button.addEventListener(EventType.CLICK, () => {
+			// Refresh the model catalog after auth changes because selectable models are derived
+			// from provider readiness rather than a separate enabled-provider setting.
+			void (signedIn ? this.oauthService.signOut(provider.vendor) : this.oauthService.signIn(provider.vendor))
+				.then(() => this.settingsService.refreshState())
+				.then(() => this.refreshModelControls())
+				.catch(error => this.notificationService.error(error));
+		});
+
+		row.appendChild(copy);
+		row.appendChild(button);
+		return row;
+	}
+
+	private getProviderStatusLabel(provider: IVSCloneOAuthProviderState): string {
+		switch (provider.status) {
+			case "signed_in":
+				return provider.userDisplayName
+					? localize("vsclone.settings.provider.signedInAs", "Signed in as {0}", provider.userDisplayName)
+					: localize("vsclone.settings.provider.signedIn", "Signed in");
+			case "signing_in":
+				return localize("vsclone.settings.provider.signingIn", "Signing in...");
+			case "refreshing":
+				return localize("vsclone.settings.provider.refreshing", "Refreshing...");
+			case "error":
+				return provider.errorMessage ?? localize("vsclone.settings.provider.error", "Sign-in error");
+			case "signed_out":
+				return localize("vsclone.settings.provider.signedOut", "Signed out");
+		}
 	}
 
 	private createBooleanSettingRow(key: string, label: string): HTMLElement {
@@ -1574,34 +1581,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		row.appendChild(copy);
 		row.appendChild(toggle);
 		return row;
-	}
-
-	private createSettingsMetric(label: string, value: string): HTMLElement {
-		const row = document.createElement("div");
-		row.className = "vsclone-settings-row metric";
-		const title = document.createElement("div");
-		title.className = "vsclone-settings-row-title";
-		title.textContent = label;
-		const metric = document.createElement("div");
-		metric.className = "vsclone-settings-metric";
-		metric.textContent = value;
-		row.appendChild(title);
-		row.appendChild(metric);
-		return row;
-	}
-
-	private createSettingsButtonRow(focusKey: string, label: string, iconClass: string, onClick: () => void): HTMLElement {
-		const button = document.createElement("button");
-		button.type = "button";
-		button.className = "vsclone-settings-action-button";
-		this.setSettingsFocusKey(button, focusKey);
-		const icon = document.createElement("span");
-		icon.className = `codicon ${iconClass}`;
-		icon.setAttribute("aria-hidden", "true");
-		button.appendChild(icon);
-		button.appendChild(document.createTextNode(label));
-		button.addEventListener(EventType.CLICK, onClick);
-		return button;
 	}
 
 	private renderConversationFallback(parent: HTMLElement): void {
