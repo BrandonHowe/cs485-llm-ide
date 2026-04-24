@@ -276,9 +276,10 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 	private findMcpTool(toolName: string): IMcpTool | undefined {
 		for (const server of this.mcpService?.servers.get() ?? []) {
 			const tool = server.tools.get().find(candidate =>
-				candidate.id === toolName
-				|| candidate.referenceName === toolName
-				|| candidate.definition.name === toolName,
+				// MCP tools are advertised to models with the platform-assigned id. Raw server names
+				// can collide with built-ins like `read_file`, so dispatch must use the same namespaced
+				// identifier that went through VSClone approval and provider declaration.
+				candidate.id === toolName,
 			);
 			if (tool && (tool.visibility & McpToolVisibility.Model)) {
 				return tool;

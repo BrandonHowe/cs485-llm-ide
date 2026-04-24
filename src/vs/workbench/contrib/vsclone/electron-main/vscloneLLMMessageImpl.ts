@@ -83,6 +83,10 @@ const googleModelMap: Record<string, string> = {
 const googleFunctionCallingConfigModeAuto = 'AUTO' as VSCloneGoogleFunctionCallingConfigMode;
 const googleSchemaTypeObject = 'OBJECT' as VSCloneGoogleSchemaType;
 const googleSchemaTypeString = 'STRING' as VSCloneGoogleSchemaType;
+const googleSchemaTypeNumber = 'NUMBER' as VSCloneGoogleSchemaType;
+const googleSchemaTypeInteger = 'INTEGER' as VSCloneGoogleSchemaType;
+const googleSchemaTypeBoolean = 'BOOLEAN' as VSCloneGoogleSchemaType;
+const googleSchemaTypeArray = 'ARRAY' as VSCloneGoogleSchemaType;
 
 const supportedAnthropicOAuthMessagesModelIds = new Set<string>([
 	'claude-haiku-4-5-20251001',
@@ -1213,34 +1217,94 @@ function buildAnthropicTools(prepared: IVSCloneLLMPreparedChatPayload): VSCloneA
 }
 
 function buildGoogleTools(prepared: IVSCloneLLMPreparedChatPayload): Array<{ functionDeclarations: VSCloneGoogleFunctionDeclaration[] }> {
-	const functionDeclarations: VSCloneGoogleFunctionDeclaration[] = getVSCloneVisibleToolDefinitions(prepared.mode, prepared.toolDefinitions).map(tool => {
-		// Build the schema imperatively so TypeScript keeps the Google SDK's schema shape instead of
-		// widening `Object.fromEntries(...)` to a loose `{ type: "STRING" }` record.
-		const properties: Record<string, VSCloneGoogleSchema> = {};
-		for (const parameter of tool.parameters) {
-			properties[parameter.name] = {
-				type: googleSchemaTypeString,
-				description: parameter.description,
-			};
-		}
-
-		const required = tool.parameters
-			.filter(parameter => parameter.required)
-			.map(parameter => parameter.name);
-		const parameters: VSCloneGoogleSchema = {
-			type: googleSchemaTypeObject,
-			properties,
-			...(required.length > 0 ? { required } : {}),
-		};
-
-		return {
-			name: tool.name,
-			description: tool.description,
-			parameters,
-		};
-	});
+	const functionDeclarations: VSCloneGoogleFunctionDeclaration[] = getVSCloneVisibleToolDefinitions(prepared.mode, prepared.toolDefinitions).map(tool => ({
+		name: tool.name,
+		description: tool.description,
+		parameters: toGoogleToolSchema(toVSCloneToolJsonSchema(tool)),
+	}));
 
 	return functionDeclarations.length > 0 ? [{ functionDeclarations }] : [];
+}
+
+function toGoogleToolSchema(schema: IVSCloneToolJsonSchema): VSCloneGoogleSchema {
+	return toGoogleSchema(schema) ?? {
+		type: googleSchemaTypeObject,
+		properties: {},
+	};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toGoogleSchema(value: unknown): VSCloneGoogleSchema | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+
+	const type = googleTypeFromJsonSchemaType(value.type);
+	const schema: VSCloneGoogleSchema = {};
+	if (type) {
+		schema.type = type;
+	}
+	if (typeof value.description === 'string') {
+		schema.description = value.description;
+	}
+	if (Array.isArray(value.enum) && value.enum.every(item => typeof item === 'string')) {
+		schema.enum = [...value.enum];
+	}
+	if (Array.isArray(value.required) && value.required.every(item => typeof item === 'string')) {
+		schema.required = [...value.required];
+	}
+
+	const properties = toGoogleSchemaProperties(value.properties);
+	if (properties) {
+		schema.properties = properties;
+	}
+
+	const items = toGoogleSchema(value.items);
+	if (items) {
+		schema.items = items;
+	}
+
+	return schema;
+}
+
+function toGoogleSchemaProperties(value: unknown): Record<string, VSCloneGoogleSchema> | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+
+	// Gemini can represent nested objects and arrays, so keep MCP input schemas structured instead
+	// of flattening every argument to a string as the built-in XML-era parameter list does.
+	const properties: Record<string, VSCloneGoogleSchema> = {};
+	for (const [key, property] of Object.entries(value)) {
+		const googleProperty = toGoogleSchema(property);
+		if (googleProperty) {
+			properties[key] = googleProperty;
+		}
+	}
+
+	return Object.keys(properties).length > 0 ? properties : undefined;
+}
+
+function googleTypeFromJsonSchemaType(type: unknown): VSCloneGoogleSchemaType | undefined {
+	switch (type) {
+		case 'object':
+			return googleSchemaTypeObject;
+		case 'string':
+			return googleSchemaTypeString;
+		case 'number':
+			return googleSchemaTypeNumber;
+		case 'integer':
+			return googleSchemaTypeInteger;
+		case 'boolean':
+			return googleSchemaTypeBoolean;
+		case 'array':
+			return googleSchemaTypeArray;
+		default:
+			return undefined;
+	}
 }
 
 function toOpenAIInputContent(content: Extract<IVSCloneOpenAILLMChatMessage, { readonly role: 'user' | 'system' | 'developer' }>['content']) {
