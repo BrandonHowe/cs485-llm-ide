@@ -23,12 +23,15 @@ import {
 	VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE,
 	VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK,
 } from '../common/vscloneOAuthIpc.js';
+import { defaultOAuthProviderConfig } from '../common/vscloneOAuthTypes.js';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { request as httpsRequest } from 'https';
 import { shell } from 'electron';
 
 const LOOPBACK_PORT_PLACEHOLDER = '{port}';
 const DEFAULT_WAIT_TIMEOUT_MS = 180_000;
+const TOKEN_EXCHANGE_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_TOKEN_RESPONSE_BODY_BYTES = 1024 * 1024;
 const LOOPBACK_WAIT_TIMEOUT = Symbol('vscloneOAuthLoopbackWaitTimeout');
 
 // Keep Node/Electron entry points behind a mutable object so the electron-main tests can stub the
@@ -117,6 +120,91 @@ function resolveRedirectTemplate(redirectUriTemplate: string, port: number): str
 	return redirectUriTemplate.replace(LOOPBACK_PORT_PLACEHOLDER, String(port));
 }
 
+function getDefaultPort(protocol: string): string {
+	return protocol === 'https:' ? '443' : protocol === 'http:' ? '80' : '';
+}
+
+function getNormalizedPort(url: URL): string {
+	return url.port || getDefaultPort(url.protocol);
+}
+
+function isLoopbackHost(hostname: string): boolean {
+	const normalizedHostname = hostname.toLowerCase();
+	if (normalizedHostname === 'localhost' || normalizedHostname === '[::1]' || normalizedHostname === '::1') {
+		return true;
+	}
+
+	const ipv4Parts = normalizedHostname.split('.');
+	if (ipv4Parts.length !== 4 || ipv4Parts[0] !== '127') {
+		return false;
+	}
+
+	return ipv4Parts.every(part => {
+		if (!/^\d+$/.test(part)) {
+			return false;
+		}
+		const value = Number(part);
+		return value >= 0 && value <= 255;
+	});
+}
+
+function parseLoopbackRedirectTemplate(redirectUriTemplate: string, port: number): URL {
+	const parsed = new URL(resolveRedirectTemplate(redirectUriTemplate, port));
+	if (parsed.protocol !== 'http:') {
+		throw new Error('Loopback redirect URI must use the http protocol.');
+	}
+	if (parsed.username || parsed.password) {
+		throw new Error('Loopback redirect URI must not include credentials.');
+	}
+	if (!isLoopbackHost(parsed.hostname)) {
+		throw new Error('Loopback redirect URI must use a loopback host.');
+	}
+	return parsed;
+}
+
+function getLoopbackListenHost(hostname: string): string {
+	return hostname === '[::1]' ? '::1' : hostname;
+}
+
+function normalizeContentType(contentType: string): string {
+	return contentType.split(';', 1)[0].trim().toLowerCase();
+}
+
+function getExpectedTokenContentType(vendor: string): string {
+	// The renderer builds provider-specific token bodies, but the main-process bridge still validates
+	// the matching media type so a compromised caller cannot post arbitrary payloads to an allowlisted host.
+	return vendor === 'anthropic'
+		? 'application/json'
+		: 'application/x-www-form-urlencoded';
+}
+
+function validateTokenExchangeRequest(req: IVSCloneOAuthTokenExchangeRequest): URL {
+	const parsed = new URL(req.url);
+	if (parsed.username || parsed.password) {
+		throw new Error('Token exchange URL must not include credentials.');
+	}
+
+	const matchedConfig = Object.values(defaultOAuthProviderConfig).find(config => {
+		const tokenUrl = new URL(config.tokenUrl);
+		return parsed.protocol === tokenUrl.protocol
+			&& parsed.hostname.toLowerCase() === tokenUrl.hostname.toLowerCase()
+			&& getNormalizedPort(parsed) === getNormalizedPort(tokenUrl)
+			&& parsed.pathname === tokenUrl.pathname
+			&& parsed.search === tokenUrl.search;
+	});
+
+	if (!matchedConfig || parsed.protocol !== 'https:') {
+		throw new Error('Token exchange URL is not an allowlisted OAuth token endpoint.');
+	}
+
+	const expectedContentType = getExpectedTokenContentType(matchedConfig.vendor);
+	if (normalizeContentType(req.contentType) !== expectedContentType) {
+		throw new Error(`Token exchange content type must be ${expectedContentType}.`);
+	}
+
+	return parsed;
+}
+
 export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerChannel {
 
 	private readonly sessions = new Map<string, IVSCloneLoopbackSession>();
@@ -158,8 +246,24 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 	}
 
 	private async tokenExchange(req: IVSCloneOAuthTokenExchangeRequest): Promise<IVSCloneOAuthTokenExchangeResponse> {
-		const parsed = new URL(req.url);
+		const parsed = validateTokenExchangeRequest(req);
 		return new Promise<IVSCloneOAuthTokenExchangeResponse>((resolve, reject) => {
+			let settled = false;
+			const rejectOnce = (err: Error) => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				reject(err);
+			};
+			const resolveOnce = (response: IVSCloneOAuthTokenExchangeResponse) => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				resolve(response);
+			};
+
 			const outgoing = vscloneOAuthLoopbackRuntime.httpsRequest(
 				{
 					hostname: parsed.hostname,
@@ -174,33 +278,49 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 				},
 				(res) => {
 					const chunks: Buffer[] = [];
-					res.on('data', (chunk: Buffer) => chunks.push(chunk));
+					let responseBodyBytes = 0;
+					res.on('data', (chunk: Buffer | string) => {
+						const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+						responseBodyBytes += buffer.byteLength;
+						if (responseBodyBytes > MAX_TOKEN_RESPONSE_BODY_BYTES) {
+							rejectOnce(new Error('OAuth token response exceeded the maximum allowed size.'));
+							res.destroy();
+							outgoing.destroy();
+							return;
+						}
+						chunks.push(buffer);
+					});
+					res.on('aborted', () => rejectOnce(new Error('OAuth token response was aborted.')));
+					res.on('error', (err) => rejectOnce(err));
 					res.on('end', () => {
-						resolve({
+						resolveOnce({
 							statusCode: res.statusCode ?? 0,
 							body: Buffer.concat(chunks).toString('utf8'),
 						});
 					});
 				}
 			);
-			outgoing.on('error', (err) => reject(err));
+			outgoing.on('error', (err) => rejectOnce(err));
+			outgoing.setTimeout(TOKEN_EXCHANGE_REQUEST_TIMEOUT_MS, () => {
+				rejectOnce(new Error('OAuth token exchange timed out.'));
+				outgoing.destroy();
+			});
 			outgoing.write(req.body);
 			outgoing.end();
 		});
 	}
 
 	private async startLoopback(request: IVSCloneOAuthLoopbackStartRequest): Promise<IVSCloneOAuthLoopbackStartResponse> {
-		await this.stopLoopback(request.sessionId, true);
-
 		// Parse host/path from a deterministic URI so the loopback listener and redirect URI stay aligned.
-		const templateForParsing = resolveRedirectTemplate(
+		const parsedTemplateUri = parseLoopbackRedirectTemplate(
 			request.redirectUriTemplate,
 			request.preferredPort > 0 ? request.preferredPort : 1
 		);
-		const parsedTemplateUri = new URL(templateForParsing);
-		const host = parsedTemplateUri.hostname;
+		const host = getLoopbackListenHost(parsedTemplateUri.hostname);
 		const callbackPath = parsedTemplateUri.pathname || '/';
 		const listenPort = request.preferredPort > 0 ? request.preferredPort : 0;
+
+		await this.stopLoopback(request.sessionId, true);
 
 		const result = new DeferredPromise<IVSCloneOAuthLoopbackWaitResponse>();
 		const server = vscloneOAuthLoopbackRuntime.createServer((incomingRequest, response) => {
@@ -260,7 +380,7 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 		this.sessions.delete(sessionId);
 
 		if (!session.result.isSettled) {
-			await session.result.error(new Error('OAuth callback listener was closed before sign-in completed.'));
+			await this.rejectLoopbackResult(session, new Error('OAuth callback listener was closed before sign-in completed.'));
 		}
 
 		await this.closeServer(session.server);
@@ -310,6 +430,13 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 		});
 	}
 
+	private async rejectLoopbackResult(session: IVSCloneLoopbackSession, error: Error): Promise<void> {
+		// Some cleanup paths close a listener before a renderer is waiting; observing the promise
+		// here preserves the rejection for future awaiters without surfacing it as unhandled.
+		void session.result.p.catch(() => undefined);
+		await session.result.error(error);
+	}
+
 	private handleLoopbackRequest(sessionId: string, request: IncomingMessage, response: ServerResponse): void {
 		const session = this.sessions.get(sessionId);
 		if (!session) {
@@ -340,7 +467,7 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 				: oauthError;
 			response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
 			response.end(renderCompletionPage(errorMessage));
-			void session.result.error(new Error(errorMessage));
+			void this.rejectLoopbackResult(session, new Error(errorMessage));
 			void this.stopLoopback(sessionId, true);
 			return;
 		}
@@ -350,7 +477,7 @@ export class VSCloneOAuthLoopbackChannel extends Disposable implements IServerCh
 		if (!code || !state) {
 			response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
 			response.end(renderCompletionPage('Missing OAuth code or state in callback URL.'));
-			void session.result.error(new Error('Missing OAuth code or state in callback URL.'));
+			void this.rejectLoopbackResult(session, new Error('Missing OAuth code or state in callback URL.'));
 			void this.stopLoopback(sessionId, true);
 			return;
 		}

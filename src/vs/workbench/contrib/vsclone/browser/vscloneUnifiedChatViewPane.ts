@@ -14,6 +14,7 @@ import {
 	EventType,
 	getActiveWindow,
 	getWindow,
+	isHTMLElement,
 } from "../../../../base/browser/dom.js";
 import { RunOnceScheduler } from "../../../../base/common/async.js";
 import { onUnexpectedError } from "../../../../base/common/errors.js";
@@ -824,10 +825,16 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const threadButton = document.createElement("button");
 		threadButton.type = "button";
 		threadButton.className = "vsclone-thread-action-button";
-		threadButton.textContent = localize(
+		const threadButtonIcon = document.createElement("span");
+		threadButtonIcon.className = "codicon codicon-menu";
+		threadButtonIcon.setAttribute("aria-hidden", "true");
+		const threadButtonText = document.createElement("span");
+		threadButtonText.textContent = localize(
 			"vsclone.thread.actions.history",
 			"Threads",
 		);
+		threadButton.appendChild(threadButtonIcon);
+		threadButton.appendChild(threadButtonText);
 		// Mirror tooltip text into an accessible name so screen readers announce this icon-like action clearly.
 		const threadButtonLabel = localize(
 			"vsclone.thread.actions.history.tooltip",
@@ -836,6 +843,25 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		threadButton.title = threadButtonLabel;
 		threadButton.setAttribute("aria-label", threadButtonLabel);
 		actions.appendChild(threadButton);
+
+		const spacer = document.createElement("div");
+		spacer.className = "vsclone-thread-actions-spacer";
+		actions.appendChild(spacer);
+
+		const newChatButton = document.createElement("button");
+		newChatButton.type = "button";
+		newChatButton.className = "vsclone-thread-action-overflow";
+		const newChatButtonLabel = localize(
+			"vsclone.thread.actions.newChat",
+			"Start new chat",
+		);
+		newChatButton.title = newChatButtonLabel;
+		newChatButton.setAttribute("aria-label", newChatButtonLabel);
+		const newChatButtonIcon = document.createElement("span");
+		newChatButtonIcon.className = "codicon codicon-add";
+		newChatButtonIcon.setAttribute("aria-hidden", "true");
+		newChatButton.appendChild(newChatButtonIcon);
+		actions.appendChild(newChatButton);
 
 		const settingsButton = document.createElement("button");
 		settingsButton.type = "button";
@@ -866,10 +892,63 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const emptyState = document.createElement("div");
 		emptyState.className = "vsclone-thread-empty-state";
-		emptyState.textContent = localize(
-			"vsclone.thread.empty",
-			"Start a new chat from the composer below.",
+		const emptyIcon = document.createElement("div");
+		emptyIcon.className = "vsclone-thread-empty-state-icon";
+		const emptyIconGlyph = document.createElement("span");
+		emptyIconGlyph.className = "codicon codicon-sparkle-filled";
+		emptyIconGlyph.setAttribute("aria-hidden", "true");
+		emptyIcon.appendChild(emptyIconGlyph);
+		const emptyTitle = document.createElement("div");
+		emptyTitle.className = "vsclone-thread-empty-state-title";
+		emptyTitle.textContent = localize(
+			"vsclone.thread.empty.title",
+			"Start a new chat",
 		);
+		const emptyDescription = document.createElement("div");
+		emptyDescription.className = "vsclone-thread-empty-state-description";
+		emptyDescription.textContent = localize(
+			"vsclone.thread.empty.description",
+			"Describe a change, ask a question, or pick a suggestion below to get going.",
+		);
+		emptyState.appendChild(emptyIcon);
+		emptyState.appendChild(emptyTitle);
+		emptyState.appendChild(emptyDescription);
+		const suggestions = document.createElement("div");
+		suggestions.className = "vsclone-thread-empty-state-suggestions";
+		for (const suggestion of [
+			{
+				icon: "codicon-search",
+				text: localize("vsclone.thread.empty.suggestion.explain", "Explain this codebase"),
+			},
+			{
+				icon: "codicon-symbol-misc",
+				text: localize("vsclone.thread.empty.suggestion.refactor", "Refactor the selected file"),
+			},
+			{
+				icon: "codicon-terminal",
+				text: localize("vsclone.thread.empty.suggestion.tests", "Run tests and fix what's broken"),
+			},
+		]) {
+			const suggestionButton = document.createElement("button");
+			suggestionButton.type = "button";
+			suggestionButton.className = "vsclone-thread-empty-state-suggestion";
+			const suggestionIcon = document.createElement("span");
+			suggestionIcon.className = `codicon ${suggestion.icon}`;
+			suggestionIcon.setAttribute("aria-hidden", "true");
+			suggestionButton.appendChild(suggestionIcon);
+			suggestionButton.appendChild(document.createTextNode(suggestion.text));
+			suggestionButton.addEventListener(EventType.CLICK, () => {
+				if (!this.composerInput) {
+					return;
+				}
+				this.composerInput.value = suggestion.text;
+				this.updateComposerMetrics();
+				this.updateComposerState();
+				this.focusInput();
+			});
+			suggestions.appendChild(suggestionButton);
+		}
+		emptyState.appendChild(suggestions);
 		this.conversationEmptyState = emptyState;
 
 		const settings = document.createElement("div");
@@ -1026,9 +1105,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.reasoningEnabledContainer = reasoningEnabledHost;
 		this.reasoningEnabledInput = reasoningEnabledInput;
 
-		// Budget slider: only visible for budget-slider models (Anthropic extended thinking,
-		// Gemini `thinkingConfig.thinkingBudget`). Mirrors Void's `VoidSlider` inside the
-		// `ReasoningOptionSlider` branch where `reasoningBudgetSlider.type === 'budget_slider'`.
+		// Budget slider: retained for any future provider that exposes a raw token-budget control.
+		// Built-in Haiku and Gemini use preset selectors, so this stays hidden for them.
 		const reasoningBudgetHost = document.createElement("div");
 		reasoningBudgetHost.className = "vsclone-thread-reasoning-budget hidden";
 		const reasoningBudgetLabel = document.createElement("span");
@@ -1183,6 +1261,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			addDisposableListener(threadButton, EventType.CLICK, () => {
 				this.railVisible = true;
 				this.applyRailLayout();
+			}),
+		);
+
+		this._register(
+			addDisposableListener(newChatButton, EventType.CLICK, () => {
+				this.showComposerForNewChat();
 			}),
 		);
 
@@ -1513,10 +1597,16 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private getActiveSettingsFocusKey(settings: HTMLElement): string | undefined {
 		const activeElement = settings.ownerDocument.activeElement;
-		if (!(activeElement instanceof HTMLElement) || !settings.contains(activeElement)) {
+		if (!isHTMLElement(activeElement) || !settings.contains(activeElement)) {
 			return undefined;
 		}
-		return activeElement.closest<HTMLElement>("[data-vsclone-settings-focus-key]")?.dataset.vscloneSettingsFocusKey;
+		for (let element: HTMLElement | null = activeElement; element && settings.contains(element); element = element.parentElement) {
+			const focusKey = element.dataset.vscloneSettingsFocusKey;
+			if (focusKey) {
+				return focusKey;
+			}
+		}
+		return undefined;
 	}
 
 	private setSettingsFocusKey(element: HTMLElement, key: string): void {
@@ -1524,12 +1614,22 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private findSettingsFocusTarget(settings: HTMLElement, key: string): HTMLElement | undefined {
-		for (const element of settings.querySelectorAll<HTMLElement>("[data-vsclone-settings-focus-key]")) {
+		const visit = (element: HTMLElement): HTMLElement | undefined => {
 			if (element.dataset.vscloneSettingsFocusKey === key) {
 				return element;
 			}
-		}
-		return undefined;
+			for (const child of element.children) {
+				if (!isHTMLElement(child)) {
+					continue;
+				}
+				const match = visit(child);
+				if (match) {
+					return match;
+				}
+			}
+			return undefined;
+		};
+		return visit(settings);
 	}
 
 	private createSettingsSection(title: string, rows: readonly HTMLElement[]): HTMLElement {
@@ -5450,7 +5550,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const reasoningSlider = reasoningCapabilities?.reasoningSlider;
 		const canTurnOff = reasoningCapabilities?.canTurnOffReasoning === true;
 
-		// Live-read every visible reasoning control (effort select, enabled checkbox, budget range)
+		// Live-read every visible reasoning control (preset select, enabled checkbox, budget range)
 		// so a Send click immediately after flipping a knob picks up the new value before storage
 		// settle events propagate. Mirrors `ReasoningOptionSlider`'s onChange handlers in Void.
 		let resolvedReasoningEffort = selectedModel.reasoningEffort;
@@ -5725,9 +5825,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	/**
 	 * Mirrors Void's `ReasoningOptionSlider` branch for `reasoningBudgetSlider?.type === 'budget_slider'`:
-	 * Anthropic extended thinking and Gemini `thinkingConfig.thinkingBudget` get a range slider whose
-	 * current value is shown as token count next to the control. When the model also supports turning
-	 * reasoning off, the slider's leftmost "off" notch doubles as the disable switch.
+	 * providers with raw token budgets get a range slider whose current value is shown as token count
+	 * next to the control. Built-in Haiku and Gemini now use preset selectors instead.
 	 */
 	private refreshReasoningBudgetControl(): void {
 		if (!this.reasoningBudgetContainer || !this.reasoningBudgetInput) {

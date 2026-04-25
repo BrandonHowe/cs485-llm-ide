@@ -302,8 +302,8 @@ export interface IVSCloneThreadRuntimeRunOptions {
 	 */
 	readonly reasoningEnabled?: boolean;
 	/**
-	 * Mirrors Void's `ModelSelectionOptions.reasoningBudget`. Only consumed by budget-slider providers
-	 * (Anthropic extended thinking and Gemini `thinkingConfig`); ignored by effort-slider providers.
+	 * Mirrors Void's `ModelSelectionOptions.reasoningBudget` for raw budget-slider providers. Built-in
+	 * Anthropic and Gemini models use preset selections, so normal chat runs should not need it.
 	 */
 	readonly reasoningBudget?: number;
 	readonly previousTurns?: readonly IVSCloneChatTransportConversationMessage[];

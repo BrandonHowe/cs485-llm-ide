@@ -18,6 +18,7 @@ import { ILanguageFeaturesService } from '../../../../editor/common/services/lan
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { IWorkspaceTrustManagementService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { localize } from '../../../../nls.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor.js';
@@ -35,6 +36,7 @@ import { IVSCloneSettingsService } from '../common/vscloneSettingsService.js';
 import type { IVSCloneSettingsModelState } from '../common/vscloneSettingsTypes.js';
 import { IVSCloneConvertToLLMMessageService } from './vscloneConvertToLLMMessageService.js';
 import { IVSCloneLLMMessageService } from './vscloneLLMMessageService.js';
+import { isVSCloneSensitiveFilePath } from '../common/vsclonePrompts.js';
 
 export const VSCloneAutocompleteEnabledSetting = 'vsclone.autocomplete.enabled';
 export const VSCloneAutocompleteDebounceMsSetting = 'vsclone.autocomplete.debounceMs';
@@ -46,7 +48,7 @@ const triggerCharacterDebounceMs = 250;
 const emptyLineDebounceMs = 300;
 const identifierDebounceMs = 325;
 const fillMiddleDebounceMs = 400;
-const defaultEnabled = true;
+const defaultEnabled = false;
 const cacheEntryLimitPerDocument = 20;
 const cacheEntryMaxAgeMs = 30_000;
 const maxConcurrentRequestsPerDocument = 2;
@@ -140,7 +142,10 @@ interface IVSCloneInlineCompletionFallbackCandidate {
 const editorInlineCompletionFallbackCandidates: readonly IVSCloneInlineCompletionFallbackCandidate[] = [
 	{ modelIdentifier: 'openai/gpt-5.3-codex-spark', reasoningEffort: 'lite' },
 	{ modelIdentifier: 'openai/gpt-5-nano', reasoningEffort: 'none' },
-	{ modelIdentifier: 'google/gemini-3.1-flash-lite-preview', reasoningEffort: 'minimal' },
+	// Google thinking is model-preset-driven in VSClone, so the inline fallback deliberately omits
+	// an effort override that the Gemini transport would ignore for FIM anyway.
+	{ modelIdentifier: 'google/gemini-2.5-flash-lite' },
+	{ modelIdentifier: 'google/gemini-3.1-flash-lite-preview' },
 	{ modelIdentifier: 'anthropic/claude-haiku-4-5-20251001' },
 ];
 
@@ -405,6 +410,7 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 		@IModelService private readonly modelService: IModelService,
 		@ILanguageFeaturesService languageFeaturesService: ILanguageFeaturesService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IWorkspaceTrustManagementService private readonly workspaceTrustManagementService: IWorkspaceTrustManagementService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@ILogService private readonly logService: ILogService,
 	) {
@@ -448,6 +454,9 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 		token: CancellationToken,
 	): Promise<InlineCompletions | undefined> {
 		if (!this.isEnabled()) {
+			return undefined;
+		}
+		if (this.isSensitiveModelResource(model.uri)) {
 			return undefined;
 		}
 
@@ -526,6 +535,8 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 			selection.modelId,
 			selection.modelIdentifier,
 			selection.reasoningEffort ?? '',
+			selection.reasoningEnabled === undefined ? '' : String(selection.reasoningEnabled),
+			selection.reasoningBudget === undefined ? '' : String(selection.reasoningBudget),
 		].join(':');
 	}
 
@@ -880,6 +891,9 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 			if (!model) {
 				continue;
 			}
+			if (this.isSensitiveModelResource(resource)) {
+				continue;
+			}
 
 			const fileSize = model.getValueLength();
 			if (fileSize === 0) {
@@ -959,7 +973,15 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 	}
 
 	private isEnabled(): boolean {
-		return this.configurationService.getValue<boolean>(VSCloneAutocompleteEnabledSetting) ?? defaultEnabled;
+		// Inline completions are background network requests that include current-buffer context.
+		// Require both explicit user opt-in and workspace trust before any provider call can run.
+		return (this.configurationService.getValue<boolean>(VSCloneAutocompleteEnabledSetting) ?? defaultEnabled)
+			&& this.workspaceTrustManagementService.isWorkspaceTrusted();
+	}
+
+	private isSensitiveModelResource(resource: URI): boolean {
+		const path = resource.fsPath || resource.path;
+		return path.length > 0 && isVSCloneSensitiveFilePath(path);
 	}
 
 	private getDebounceMs(): number {

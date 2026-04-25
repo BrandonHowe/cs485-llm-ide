@@ -28,6 +28,7 @@ import {
 	VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE,
 	VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK,
 } from '../../common/vscloneOAuthIpc.js';
+import { defaultOAuthProviderConfig } from '../../common/vscloneOAuthTypes.js';
 
 function createLogService(sandbox: sinon.SinonSandbox): ILogService {
 	return {
@@ -89,6 +90,15 @@ function createDeferredSession(sandbox: sinon.SinonSandbox) {
 	};
 }
 
+function createOutgoingRequest(sandbox: sinon.SinonSandbox) {
+	const outgoing = new EventEmitter() as any;
+	outgoing.write = sandbox.spy();
+	outgoing.end = sandbox.spy();
+	outgoing.destroy = sandbox.spy();
+	outgoing.setTimeout = sandbox.spy((_timeoutMs: number, _callback: () => void) => outgoing);
+	return outgoing;
+}
+
 suite('VSCloneOAuthLoopbackChannel', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -118,7 +128,7 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 				sessionId: 'session-stop',
 			};
 			const tokenResult: IVSCloneOAuthTokenExchangeRequest = {
-				url: 'https://example.com/oauth/token',
+				url: defaultOAuthProviderConfig.openai.tokenUrl,
 				body: 'grant_type=authorization_code',
 				contentType: 'application/x-www-form-urlencoded',
 			};
@@ -148,21 +158,19 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 		await withSandbox(async sandbox => {
 			const { channelAny } = createChannel(sandbox, store);
 			const request: IVSCloneOAuthTokenExchangeRequest = {
-				url: 'https://example.com:8443/oauth/token?tenant=alpha',
+				url: defaultOAuthProviderConfig.openai.tokenUrl,
 				body: 'grant_type=authorization_code&code=123',
 				contentType: 'application/x-www-form-urlencoded',
 			};
 
 			const responseEmitter = new EventEmitter();
-			const outgoing = new EventEmitter() as any;
-			outgoing.write = sandbox.spy();
-			outgoing.end = sandbox.spy();
+			const outgoing = createOutgoingRequest(sandbox);
 
 			const requestStub = sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest').callsFake(((options: any, callback: (response: any) => void) => {
 				assert.deepStrictEqual(options, {
-					hostname: 'example.com',
-					port: '8443',
-					path: '/oauth/token?tenant=alpha',
+					hostname: 'auth.openai.com',
+					port: 443,
+					path: '/oauth/token',
 					method: 'POST',
 					headers: {
 						'Content-Type': 'application/x-www-form-urlencoded',
@@ -191,18 +199,109 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 			assert.ok(requestStub.calledOnce);
 			assert.ok((outgoing.write as sinon.SinonSpy).calledOnceWithExactly(request.body));
 			assert.ok((outgoing.end as sinon.SinonSpy).calledOnce);
+			assert.ok((outgoing.setTimeout as sinon.SinonSpy).calledOnce);
 
 			requestStub.restore();
 
 			const transportError = new Error('socket closed');
-			const errorOutgoing = new EventEmitter() as any;
-			errorOutgoing.write = sandbox.spy();
+			const errorOutgoing = createOutgoingRequest(sandbox);
 			errorOutgoing.end = sandbox.spy(() => {
 				queueMicrotask(() => errorOutgoing.emit('error', transportError));
 			});
 
 			sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest').callsFake(() => errorOutgoing);
 			await assert.rejects(channelAny.tokenExchange(request), /socket closed/);
+		});
+	});
+
+	test('rejects token exchanges for unconfigured endpoints or mismatched content types', async () => {
+		await withSandbox(async sandbox => {
+			const { channelAny } = createChannel(sandbox, store);
+			const requestStub = sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest');
+			const validBody = 'grant_type=authorization_code&code=123';
+
+			await assert.rejects(channelAny.tokenExchange({
+				url: 'http://auth.openai.com/oauth/token',
+				body: validBody,
+				contentType: 'application/x-www-form-urlencoded',
+			}), /allowlisted OAuth token endpoint/);
+			await assert.rejects(channelAny.tokenExchange({
+				url: 'https://example.com/oauth/token',
+				body: validBody,
+				contentType: 'application/x-www-form-urlencoded',
+			}), /allowlisted OAuth token endpoint/);
+			await assert.rejects(channelAny.tokenExchange({
+				url: 'https://auth.openai.com/not-token',
+				body: validBody,
+				contentType: 'application/x-www-form-urlencoded',
+			}), /allowlisted OAuth token endpoint/);
+			await assert.rejects(channelAny.tokenExchange({
+				url: 'https://auth.openai.com/oauth/token?tenant=alpha',
+				body: validBody,
+				contentType: 'application/x-www-form-urlencoded',
+			}), /allowlisted OAuth token endpoint/);
+			await assert.rejects(channelAny.tokenExchange({
+				url: defaultOAuthProviderConfig.openai.tokenUrl,
+				body: validBody,
+				contentType: 'application/json',
+			}), /content type must be application\/x-www-form-urlencoded/);
+			await assert.rejects(channelAny.tokenExchange({
+				url: defaultOAuthProviderConfig.anthropic.tokenUrl,
+				body: '{}',
+				contentType: 'application/x-www-form-urlencoded',
+			}), /content type must be application\/json/);
+
+			assert.strictEqual(requestStub.called, false);
+		});
+	});
+
+	test('handles token response stream errors, timeouts, and oversized bodies', async () => {
+		await withSandbox(async sandbox => {
+			const { channelAny } = createChannel(sandbox, store);
+			const request: IVSCloneOAuthTokenExchangeRequest = {
+				url: defaultOAuthProviderConfig.openai.tokenUrl,
+				body: 'grant_type=authorization_code&code=123',
+				contentType: 'application/x-www-form-urlencoded',
+			};
+
+			const responseError = new Error('response failed');
+			const errorResponse = new EventEmitter() as any;
+			const errorOutgoing = createOutgoingRequest(sandbox);
+			sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest').callsFake(((_options: any, callback: (response: any) => void) => {
+				queueMicrotask(() => {
+					callback(errorResponse);
+					errorResponse.emit('error', responseError);
+				});
+				return errorOutgoing;
+			}) as typeof vscloneOAuthLoopbackRuntime.httpsRequest);
+			await assert.rejects(channelAny.tokenExchange(request), /response failed/);
+
+			(vscloneOAuthLoopbackRuntime.httpsRequest as sinon.SinonStub).restore();
+
+			const timeoutOutgoing = createOutgoingRequest(sandbox);
+			timeoutOutgoing.setTimeout = sandbox.spy((_timeoutMs: number, callback: () => void) => {
+				queueMicrotask(callback);
+				return timeoutOutgoing;
+			});
+			sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest').returns(timeoutOutgoing);
+			await assert.rejects(channelAny.tokenExchange(request), /timed out/);
+			assert.ok((timeoutOutgoing.destroy as sinon.SinonSpy).calledOnce);
+
+			(vscloneOAuthLoopbackRuntime.httpsRequest as sinon.SinonStub).restore();
+
+			const oversizedResponse = new EventEmitter() as any;
+			oversizedResponse.destroy = sandbox.spy();
+			const oversizedOutgoing = createOutgoingRequest(sandbox);
+			sandbox.stub(vscloneOAuthLoopbackRuntime, 'httpsRequest').callsFake(((_options: any, callback: (response: any) => void) => {
+				queueMicrotask(() => {
+					callback(oversizedResponse);
+					oversizedResponse.emit('data', Buffer.alloc(1024 * 1024 + 1));
+				});
+				return oversizedOutgoing;
+			}) as typeof vscloneOAuthLoopbackRuntime.httpsRequest);
+			await assert.rejects(channelAny.tokenExchange(request), /exceeded the maximum allowed size/);
+			assert.ok((oversizedResponse.destroy as sinon.SinonSpy).calledOnce);
+			assert.ok((oversizedOutgoing.destroy as sinon.SinonSpy).calledOnce);
 		});
 	});
 
@@ -239,6 +338,38 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 			assert.ok((channelAny.listenServer as sinon.SinonSpy).calledWithExactly(createServerStub.secondCall.returnValue, 4567, '127.0.0.1'));
 			assert.ok((channelAny.getBoundPort as sinon.SinonSpy).calledTwice);
 			assert.ok((logService.info as sinon.SinonSpy).calledTwice);
+		});
+	});
+
+	test('rejects loopback redirect templates that would bind non-loopback or non-http hosts', async () => {
+		await withSandbox(async sandbox => {
+			const { channelAny } = createChannel(sandbox, store);
+			const createServerStub = sandbox.stub(vscloneOAuthLoopbackRuntime, 'createServer').returns({} as any);
+			channelAny.stopLoopback = sandbox.stub().resolves();
+
+			await assert.rejects(channelAny.startLoopback({
+				sessionId: 'session-https',
+				redirectUriTemplate: 'https://127.0.0.1:{port}/auth/callback',
+				preferredPort: 0,
+			}), /must use the http protocol/);
+			await assert.rejects(channelAny.startLoopback({
+				sessionId: 'session-remote',
+				redirectUriTemplate: 'http://example.com:{port}/auth/callback',
+				preferredPort: 0,
+			}), /must use a loopback host/);
+			await assert.rejects(channelAny.startLoopback({
+				sessionId: 'session-any',
+				redirectUriTemplate: 'http://0.0.0.0:{port}/auth/callback',
+				preferredPort: 0,
+			}), /must use a loopback host/);
+			await assert.rejects(channelAny.startLoopback({
+				sessionId: 'session-credential',
+				redirectUriTemplate: 'http://user@localhost:{port}/auth/callback',
+				preferredPort: 0,
+			}), /must not include credentials/);
+
+			assert.strictEqual(createServerStub.called, false);
+			assert.strictEqual((channelAny.stopLoopback as sinon.SinonSpy).called, false);
 		});
 	});
 
@@ -315,6 +446,28 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 			assert.strictEqual(channelAny.sessions.has('session-quiet'), false);
 			assert.ok((quietSession.server.close as sinon.SinonSpy).calledOnce);
 			assert.strictEqual((logService.info as sinon.SinonSpy).calledOnce, true);
+		});
+	});
+
+	test('stops unwaited loopback sessions without surfacing unhandled rejections', async () => {
+		await withSandbox(async sandbox => {
+			const { channelAny } = createChannel(sandbox, store);
+			const unhandledReasons: unknown[] = [];
+			const onUnhandledRejection = (reason: unknown) => unhandledReasons.push(reason);
+			process.on('unhandledRejection', onUnhandledRejection);
+
+			try {
+				const session = createDeferredSession(sandbox);
+				channelAny.sessions.set('session-unwaited', session as any);
+				await channelAny.stopLoopback('session-unwaited', true);
+				await new Promise(resolve => setImmediate(resolve));
+
+				assert.deepStrictEqual(unhandledReasons, []);
+				assert.strictEqual(channelAny.sessions.has('session-unwaited'), false);
+				assert.ok((session.server.close as sinon.SinonSpy).calledOnce);
+			} finally {
+				process.off('unhandledRejection', onUnhandledRejection);
+			}
 		});
 	});
 
@@ -407,6 +560,7 @@ suite('VSCloneOAuthLoopbackChannel', () => {
 
 			const errorSession = {
 				isSettled: false,
+				p: Promise.resolve({} as IVSCloneOAuthLoopbackWaitResponse),
 				complete: sandbox.spy(),
 				error: sandbox.spy(),
 			};

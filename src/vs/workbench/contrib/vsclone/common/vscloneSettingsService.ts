@@ -110,7 +110,10 @@ const featureFallbackCandidates: Partial<Record<VSCloneSettingsFeatureName, read
 	Autocomplete: [
 		{ modelIdentifier: 'openai/gpt-5.3-codex-spark', reasoningEffort: 'lite' },
 		{ modelIdentifier: 'openai/gpt-5-nano', reasoningEffort: 'none' },
-		{ modelIdentifier: 'google/gemini-3.1-flash-lite-preview', reasoningEffort: 'minimal' },
+		// Gemini has no VSClone-side thinking slider; keep the fallback preset-only so selection
+		// normalization does not carry a stale effort into chat/tool requests.
+		{ modelIdentifier: 'google/gemini-2.5-flash-lite' },
+		{ modelIdentifier: 'google/gemini-3.1-flash-lite-preview' },
 		{ modelIdentifier: 'anthropic/claude-haiku-4-5-20251001' },
 	],
 };
@@ -566,8 +569,8 @@ export class VSCloneSettingsService extends Disposable implements IVSCloneSettin
 			reasoningEffort: sameModelAsBefore
 				? this.resolveReasoningEffort(currentSelection?.reasoningEffort, nextModel, location)
 				: this.resolveReasoningEffort(undefined, nextModel, location),
-			// Toggle and budget are model-specific: clear them on a model switch so a budget from a
-			// different family (e.g. Anthropic 4k tokens) does not leak into an OpenAI-effort model.
+			// Toggle and budget are model-specific: clear them on a model switch so stale raw budget
+			// values from an older or future provider cannot leak into a preset-effort model.
 			reasoningEnabled: sameModelAsBefore ? currentSelection?.reasoningEnabled : undefined,
 			reasoningBudget: sameModelAsBefore ? currentSelection?.reasoningBudget : undefined,
 			selectedAt: Date.now(),

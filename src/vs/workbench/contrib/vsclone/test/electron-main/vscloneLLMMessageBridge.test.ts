@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
+import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { IChannel, IServerChannel } from '../../../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
@@ -12,10 +13,12 @@ import { IMainProcessService } from '../../../../../platform/ipc/common/mainProc
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { VSCloneLLMMessageService } from '../../common/vscloneLLMMessageService.js';
 import { VSCloneLLMMessageChannel } from '../../electron-main/vscloneLLMMessageChannel.js';
-import type {
-	IVSCloneLLMMessageFinalPayload,
-	IVSCloneLLMMessageRequest,
-	IVSCloneLLMMessageTextPayload,
+import {
+	type IVSCloneLLMMessageFinalPayload,
+	type IVSCloneLLMMessageRequest,
+	type IVSCloneLLMMessageTextPayload,
+	VSCLONE_LLM_MESSAGE_COMMAND_ABORT,
+	VSCLONE_LLM_MESSAGE_COMMAND_SUBMIT,
 } from '../../common/vscloneLLMMessageTypes.js';
 import { defaultOAuthProviderConfig } from '../../common/vscloneOAuthTypes.js';
 
@@ -144,6 +147,7 @@ suite('VSCloneLLMMessage renderer/main-process integration', () => {
 			fullReasoning: '',
 			toolCall: undefined,
 			anthropicReasoning: null,
+			tokenUsage: undefined,
 		});
 	});
 
@@ -206,5 +210,102 @@ suite('VSCloneLLMMessage renderer/main-process integration', () => {
 		assert.strictEqual(backendAbortCount, 1);
 		assert.strictEqual(capturedSignal?.aborted, true);
 		assert.strictEqual(finalMessageCount, 0);
+	});
+
+	test('settles pending renderer requests when the service is disposed', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const calls: { readonly command: string; readonly arg: unknown }[] = [];
+		const channel: IChannel = {
+			call: <T>(command: string, arg?: unknown) => {
+				calls.push({ command, arg });
+				if (command === VSCLONE_LLM_MESSAGE_COMMAND_ABORT) {
+					return Promise.resolve(undefined as T);
+				}
+
+				// Keep the submit unresolved so the only way `done` can settle is through the
+				// service disposal path under test.
+				return new Promise<T>(() => undefined);
+			},
+			listen: <T>() => Event.None as Event<T>,
+		};
+		const service = testDisposables.add(new VSCloneLLMMessageService(
+			createMainProcessService(channel),
+			new NullLogService(),
+		));
+		let observerAbortCount = 0;
+
+		const handle = service.sendRequest(createFIMRequest(), {
+			onAbort: () => {
+				observerAbortCount += 1;
+			},
+		});
+		service.dispose();
+		await handle.done;
+
+		assert.deepStrictEqual({
+			observerAbortCount,
+			calls: calls.map(call => call.command),
+			abortRequestId: (calls[1]?.arg as { readonly requestId?: string } | undefined)?.requestId,
+			doneSettled: true,
+		}, {
+			observerAbortCount: 1,
+			calls: [
+				VSCLONE_LLM_MESSAGE_COMMAND_SUBMIT,
+				VSCLONE_LLM_MESSAGE_COMMAND_ABORT,
+			],
+			abortRequestId: handle.requestId,
+			doneSettled: true,
+		});
+	});
+
+	test('aborts running main-process requests when the channel is disposed', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const serverChannel = testDisposables.add(new VSCloneLLMMessageChannel(new NullLogService()));
+		const originalFetch = globalThis.fetch;
+		let capturedSignal: AbortSignal | undefined;
+		let backendAbortCount = 0;
+
+		globalThis.fetch = async (_input, init) => {
+			capturedSignal = init?.signal as AbortSignal | undefined;
+
+			return {
+				ok: true,
+				status: 200,
+				statusText: 'OK',
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						// Channel disposal should abort the main-process controller even when no renderer
+						// cancellation command is sent.
+						capturedSignal?.addEventListener('abort', () => {
+							backendAbortCount += 1;
+							controller.error(new Error('disposed'));
+						}, { once: true });
+					},
+				}),
+				text: async () => '',
+			} as Response;
+		};
+
+		try {
+			await serverChannel.call('', VSCLONE_LLM_MESSAGE_COMMAND_SUBMIT, {
+				requestId: 'dispose-test-request',
+				request: createFIMRequest(),
+			});
+
+			// Let the async request runner enter `fetch` before disposing the channel.
+			await timeout(0);
+			serverChannel.dispose();
+			await timeout(0);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+
+		assert.deepStrictEqual({
+			backendAbortCount,
+			signalAborted: capturedSignal?.aborted,
+		}, {
+			backendAbortCount: 1,
+			signalAborted: true,
+		});
 	});
 });

@@ -91,6 +91,16 @@ export class VSCloneLLMMessageService extends Disposable implements IVSCloneLLMM
 		return this.sendRequest(request, observer);
 	}
 
+	override dispose(): void {
+		// Renderer teardown must not leave callers awaiting `done` forever. Reuse the normal abort
+		// path so observers see the same cancellation signal and the main-process fetch is asked to
+		// stop before IPC listeners are disposed.
+		for (const requestId of [...this.pendingRequests.keys()]) {
+			this.abort(requestId);
+		}
+		super.dispose();
+	}
+
 	abort(requestId: string): void {
 		const pending = this.pendingRequests.get(requestId);
 		if (!pending) {

@@ -129,9 +129,9 @@ export interface IVSCloneLLMPreparedChatPayload {
 	 */
 	readonly reasoningEnabled?: boolean;
 	/**
-	 * Anthropic-style reasoning budget in tokens. Mirrors Void's `ModelSelectionOptions.reasoningBudget`;
-	 * routed into Anthropic's `{ thinking: { type: 'enabled', budget_tokens } }` and Gemini's
-	 * `thinkingConfig.thinkingBudget`.
+	 * Raw reasoning budget in tokens for budget-slider providers. Haiku now uses preset efforts that
+	 * map to Anthropic `budget_tokens`, and Gemini intentionally stays preset-only until VSClone can
+	 * replay provider-issued thought signatures.
 	 */
 	readonly reasoningBudget?: number;
 	readonly messages: readonly IVSCloneLLMChatMessage[];

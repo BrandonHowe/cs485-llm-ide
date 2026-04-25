@@ -4,9 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { timeout } from '../../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
+import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import type { IFileService } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
@@ -156,6 +158,8 @@ function createRuntimeService(
 		readonly llmMessageService: IVSCloneLLMMessageService;
 		readonly toolExecutionService: IVSCloneToolExecutionService;
 		readonly settingsService?: IVSCloneSettingsService;
+		readonly fileService?: IFileService;
+		readonly workspaceFolders?: readonly { readonly uri: URI; readonly name?: string }[];
 		readonly prepareChatRequest?: (requestOptions: IVSCloneChatTransportRequestOptions) => IVSCloneLLMPreparedChatPayload;
 	},
 	persistedStorage: Map<string, string> = new Map<string, string>(),
@@ -193,10 +197,22 @@ function createRuntimeService(
 		getToolDefinition: () => undefined,
 		// The approval gate is the behavior under test, so the scripted tool must be marked as
 		// approval-requiring even though the concrete tool implementation is replaced in the harness.
-		getApprovalType: toolName => toolName === 'run_command' ? 'terminal' : undefined,
+		getApprovalType: toolName => {
+			if (toolName === 'run_command') {
+				return 'terminal';
+			}
+			if (toolName === 'edit_file' || toolName === 'create_file') {
+				return 'edits';
+			}
+			return undefined;
+		},
 	};
 	const storageService = {
 		get: (key: string) => persistedStorage.get(key),
+		getBoolean: (key: string, _scope: unknown, fallbackValue: boolean) => {
+			const storedValue = persistedStorage.get(key);
+			return storedValue === undefined ? fallbackValue : storedValue === 'true';
+		},
 		store: (key: string, value: string | boolean | number | null | undefined) => {
 			if (value === undefined || value === null) {
 				persistedStorage.delete(key);
@@ -210,9 +226,9 @@ function createRuntimeService(
 		},
 	} as unknown as IStorageService;
 	const workspaceContextService = {
-		getWorkspace: () => ({ id: 'workspace-test', folders: [] }),
+		getWorkspace: () => ({ id: 'workspace-test', folders: options.workspaceFolders ?? [] }),
 		isInsideWorkspace: () => true,
-	} as Partial<IWorkspaceContextService> as IWorkspaceContextService;
+	} as unknown as IWorkspaceContextService;
 
 	return testDisposables.add(new VSCloneThreadRuntimeService(
 		oauthService,
@@ -222,7 +238,7 @@ function createRuntimeService(
 		toolRuntimeService,
 		options.toolExecutionService,
 		new TestVSCloneUnifiedChatBackendService(),
-		{} as IFileService,
+		options.fileService ?? {} as IFileService,
 		storageService,
 		new NullLogService(),
 		workspaceContextService,
@@ -322,6 +338,88 @@ suite('VSCloneThreadRuntimeApprovalRegression', () => {
 		assert.strictEqual(rejectedMessage.output, 'Command rejected by reviewer.');
 		assert.strictEqual(toolExecutionCount, 0);
 		assert.strictEqual(state!.streamState.kind, 'idle');
+	});
+
+	test('auto-approved edit waits for checkpoint snapshots before executing the tool', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const workspaceRoot = URI.file('/workspace');
+		const targetUri = URI.file('/workspace/src/example.txt');
+		const readStarted = new DeferredPromise<void>();
+		const releaseRead = new DeferredPromise<void>();
+		let toolExecutionCount = 0;
+		// Keep the checkpoint read unresolved so the assertion can prove auto-approved edit
+		// execution is still gated by snapshot capture, not merely ordered by a fast microtask.
+		const fileService = {
+			exists: async (uri: URI) => uri.toString() === targetUri.toString(),
+			resolve: async () => ({ isDirectory: false }),
+			readFile: async () => {
+				readStarted.complete();
+				await releaseRead.p;
+				return { value: VSBuffer.fromString('before edit') };
+			},
+		} as unknown as IFileService;
+		const runtimeService = createRuntimeService(testDisposables, {
+			llmMessageService: new ScriptedLLMMessageService([
+				(_request, observer) => {
+					observer.onFinalMessage?.({
+						fullText: 'I will update the file.',
+						fullReasoning: '',
+						anthropicReasoning: null,
+						toolCall: {
+							id: 'call-edit-1',
+							name: 'edit_file',
+							rawParams: { path: 'src/example.txt', changes: '<<<<<<< SEARCH\nbefore edit\n=======\nafter edit\n>>>>>>> REPLACE' },
+							doneParams: ['path', 'changes'],
+							isDone: true,
+						},
+					});
+				},
+				(_request, observer) => {
+					observer.onFinalMessage?.({
+						fullText: 'The file is updated.',
+						fullReasoning: '',
+						anthropicReasoning: null,
+					});
+				},
+			]),
+			toolExecutionService: {
+				_serviceBrand: undefined,
+				executeTool: async () => {
+					toolExecutionCount++;
+					return { success: true, output: 'edited' };
+				},
+			},
+			fileService,
+			workspaceFolders: [{ uri: workspaceRoot, name: 'workspace' }],
+		});
+		runtimeService.setAutoApproveEdits(true);
+
+		const handle = runtimeService.runThread({
+			threadId: 'thread-auto-edit',
+			turnId: 'thread-auto-edit:turn-1',
+			sequence: 1,
+			sessionResource: 'vsclone://api/thread-auto-edit',
+			promptText: 'Update src/example.txt.',
+			mode: 'act',
+			vendor: 'openai',
+			modelId: 'gpt-5.3-codex',
+			modelIdentifier: 'openai/gpt-5.3-codex',
+		});
+
+		await readStarted.p;
+		assert.strictEqual(toolExecutionCount, 0, 'auto-approved edit execution must remain gated while checkpoint capture is still reading');
+
+		releaseRead.complete();
+		await handle.done;
+
+		const state = runtimeService.getState('thread-auto-edit');
+		assert.ok(state);
+		const toolRequest = state!.messages.find((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'tool'; readonly type: 'tool_request' }> => message.role === 'tool' && message.type === 'tool_request');
+		assert.strictEqual(toolExecutionCount, 1);
+		assert.strictEqual(state!.checkpoints.length, 1);
+		assert.strictEqual(state!.checkpoints[0].snapshots.length, 1);
+		assert.strictEqual(state!.checkpoints[0].snapshots[0].content, 'before edit');
+		assert.strictEqual(toolRequest?.snapshots.length, 1);
 	});
 
 	test('rejecting a restored approval resumes the assistant follow-up after reload', async () => {

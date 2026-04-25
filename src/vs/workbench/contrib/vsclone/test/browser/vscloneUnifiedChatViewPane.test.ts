@@ -4,7 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { URI } from '../../../../../base/common/uri.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import type { IFileService } from '../../../../../platform/files/common/files.js';
 import { VSCloneUnifiedChatViewPane } from '../../browser/vscloneUnifiedChatViewPane.js';
+import type { IVSCloneContextSelection } from '../../common/vscloneContextSelectionTypes.js';
+import type { IVSCloneModelSelection } from '../../common/vscloneModelSelectionTypes.js';
 import type {
 	IVSCloneThreadRuntimeMessage,
 	IVSCloneThreadRuntimeRunContext,
@@ -34,6 +39,37 @@ interface ISettingsHarness {
 	settingsContainer: HTMLElement;
 	configurationWrites: Array<{ key: string; value: unknown }>;
 	oauthCalls: string[];
+}
+
+interface IContextUsageHarness {
+	pane: VSCloneUnifiedChatViewPane;
+	button: HTMLButtonElement;
+	popover: HTMLElement;
+	progress: SVGCircleElement;
+	input: HTMLTextAreaElement;
+}
+
+interface IContextUsagePaneInternals {
+	activeThreadId?: string;
+	composerInput?: HTMLTextAreaElement;
+	composerContextUsageButton?: HTMLButtonElement;
+	composerContextUsageProgressPath?: SVGCircleElement;
+	composerContextUsagePopover?: HTMLElement;
+	composerContextUsagePopoverPinned: boolean;
+	pendingContextSelections: IVSCloneContextSelection[];
+	pendingContextSelectionsCharacterKey: string;
+	pendingContextSelectionsCharacters: number;
+	pendingContextSelectionsCharacterVersion: number;
+	pendingImages: unknown[];
+	fileService: IFileService;
+	threadRuntimeService: {
+		getState(threadId: string): IVSCloneThreadRuntimeState | undefined;
+	};
+	getCurrentComposerModelSelection(threadId: string | undefined): IVSCloneModelSelection | undefined;
+	updateContextUsageIndicator(): void;
+	setContextUsagePopoverVisible(visible: boolean): void;
+	countCurrentContextLocally(): { readonly characters: number };
+	refreshPendingContextSelectionCharacterCount(): void;
 }
 
 function createRunContext(): IVSCloneThreadRuntimeRunContext {
@@ -209,7 +245,86 @@ function createSettingsHarness(configurationValues: Record<string, unknown> = {}
 	};
 }
 
+function createContextUsageHarness(options: {
+	selection?: IVSCloneModelSelection;
+	runtimeState?: IVSCloneThreadRuntimeState;
+	fileContents?: string;
+} = {}): IContextUsageHarness {
+	const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as VSCloneUnifiedChatViewPane & IContextUsagePaneInternals;
+	const input = document.createElement('textarea');
+	const button = document.createElement('button');
+	const popover = document.createElement('div');
+	const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+	const progress = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+	svg.appendChild(progress);
+	svg.setAttribute('role', 'meter');
+	svg.setAttribute('aria-valuemin', '0');
+	svg.setAttribute('aria-valuemax', '100');
+	button.className = 'vsclone-thread-context-usage';
+	button.setAttribute('aria-expanded', 'false');
+	popover.className = 'vsclone-thread-context-usage-popover hidden';
+	popover.setAttribute('role', 'status');
+
+	const selectedModel = options.selection ?? {
+		location: 'chat',
+		vendor: 'openai',
+		modelIdentifier: 'openai/gpt-5.3-codex',
+		modelId: 'gpt-5.3-codex',
+		modelName: 'GPT-5.3 Codex',
+		selectedAt: 1,
+	};
+
+	Object.assign(pane, {
+		activeThreadId: 'thread-1',
+		composerInput: input,
+		composerContextUsageButton: button,
+		composerContextUsageProgressPath: progress,
+		composerContextUsagePopover: popover,
+		composerContextUsagePopoverPinned: false,
+		pendingContextSelections: [],
+		pendingContextSelectionsCharacterKey: '',
+		pendingContextSelectionsCharacters: 0,
+		pendingContextSelectionsCharacterVersion: 0,
+		pendingImages: [],
+		fileService: {
+			readFile: async () => ({
+				value: {
+					toString: () => options.fileContents ?? 'serialized file body',
+				},
+			}),
+		} as unknown as IFileService,
+		threadRuntimeService: {
+			getState: () => options.runtimeState,
+		},
+		getCurrentComposerModelSelection: () => options.selection === undefined ? selectedModel : options.selection,
+	});
+
+	return { pane, button, popover, progress, input };
+}
+
+function createRuntimeState(messages: readonly IVSCloneThreadRuntimeMessage[]): IVSCloneThreadRuntimeState {
+	return {
+		threadId: 'thread-1',
+		catalog: {
+			threadId: 'thread-1',
+			title: 'Context test',
+			createdAt: 1,
+			updatedAt: 1,
+			status: 'completed',
+			archived: false,
+			turnCount: 1,
+			lastTurnPreview: 'Context test',
+		},
+		streamState: { kind: 'idle' },
+		messages,
+		checkpoints: [],
+		lastUpdatedAt: 1,
+	};
+}
+
 suite('VSCloneUnifiedChatViewPane', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
 	test('renders approval controls only for the latest awaiting tool request', () => {
 		const harness = createHarness();
 		const firstRequest = createToolRequestMessage('tool-request-1', 1);
@@ -284,6 +399,90 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		} finally {
 			harness.host.remove();
 		}
+	});
+
+	test('renders context usage as an enabled disclosure with meter state', () => {
+		const harness = createContextUsageHarness({
+			runtimeState: createRuntimeState([{
+				id: 'user-1',
+				role: 'user',
+				mode: 'act',
+				createdAt: 1,
+				content: 'hello',
+			}]),
+		});
+		const pane = harness.pane as unknown as IContextUsagePaneInternals;
+
+		pane.updateContextUsageIndicator();
+		pane.setContextUsagePopoverVisible(true);
+
+		assert.strictEqual(harness.button.classList.contains('hidden'), false);
+		assert.strictEqual(harness.button.hasAttribute('aria-disabled'), false);
+		assert.strictEqual(harness.button.getAttribute('aria-expanded'), 'true');
+		assert.ok(harness.button.getAttribute('aria-label')?.includes('Press to show details'));
+		assert.strictEqual(harness.progress.ownerSVGElement?.getAttribute('role'), 'meter');
+		assert.strictEqual(harness.progress.ownerSVGElement?.getAttribute('aria-valuemin'), '0');
+		assert.strictEqual(harness.progress.ownerSVGElement?.getAttribute('aria-valuemax'), '100');
+		assert.ok(harness.progress.ownerSVGElement?.hasAttribute('aria-valuenow'));
+		assert.strictEqual(harness.popover.getAttribute('role'), 'status');
+		assert.strictEqual(harness.popover.classList.contains('hidden'), false);
+	});
+
+	test('hides and clears context usage details when the selected model disappears', () => {
+		const harness = createContextUsageHarness({ selection: undefined });
+		const pane = harness.pane as unknown as IContextUsagePaneInternals;
+		harness.button.classList.add('warning');
+		harness.button.setAttribute('aria-expanded', 'true');
+		harness.popover.classList.remove('hidden');
+		harness.popover.textContent = 'stale usage';
+
+		Object.assign(pane, {
+			getCurrentComposerModelSelection: () => undefined,
+		});
+		pane.updateContextUsageIndicator();
+
+		assert.strictEqual(harness.button.classList.contains('hidden'), true);
+		assert.strictEqual(harness.button.classList.contains('warning'), false);
+		assert.strictEqual(harness.button.getAttribute('aria-expanded'), 'false');
+		assert.strictEqual(harness.popover.classList.contains('hidden'), true);
+		assert.strictEqual(harness.popover.textContent, '');
+	});
+
+	test('counts serialized pending context and does not double count stored context selections', async () => {
+		const storedSelection: IVSCloneContextSelection = {
+			kind: 'file',
+			uri: URI.file('/workspace/stored-context.ts'),
+			languageId: 'typescript',
+		};
+		const storedContent = 'please review\n---\nSELECTIONS\nalready serialized file body';
+		const harness = createContextUsageHarness({
+			fileContents: 'const pendingContext = true;',
+			runtimeState: createRuntimeState([{
+				id: 'user-1',
+				role: 'user',
+				mode: 'act',
+				createdAt: 1,
+				content: storedContent,
+				contextSelections: [storedSelection],
+			}]),
+		});
+		const pane = harness.pane as unknown as IContextUsagePaneInternals;
+		const pendingSelection: IVSCloneContextSelection = {
+			kind: 'file',
+			uri: URI.file('/workspace/pending-context.ts'),
+			languageId: 'typescript',
+		};
+		pane.pendingContextSelections = [pendingSelection];
+		harness.input.value = 'draft';
+
+		pane.refreshPendingContextSelectionCharacterCount();
+		await new Promise(resolve => setTimeout(resolve, 0));
+
+		const serializedPendingLength = '/workspace/pending-context.ts:\n```typescript\nconst pendingContext = true;\n```'.length;
+		assert.strictEqual(pane.pendingContextSelectionsCharacters, serializedPendingLength);
+		assert.deepStrictEqual(pane.countCurrentContextLocally(), {
+			characters: storedContent.length + harness.input.value.length + serializedPendingLength,
+		});
 	});
 
 	test('renders provider sign-in and sign-out actions', async () => {

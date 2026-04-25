@@ -61,7 +61,10 @@ suite('VSCloneConvertToLLMMessageService', () => {
 			modelIdentifier: 'openai/gpt-5.3-codex',
 			mode: 'act',
 			reasoningEffort: undefined,
+			reasoningEnabled: undefined,
+			reasoningBudget: undefined,
 			separateSystemMessage: 'system prompt',
+			toolDefinitions: undefined,
 			messages: [
 				{ role: 'user', content: 'Inspect src/app.ts' },
 				{
@@ -178,7 +181,6 @@ suite('VSCloneConvertToLLMMessageService', () => {
 			{
 				role: 'model',
 				parts: [
-					{ text: 'Thinking: I need the directory contents first.' },
 					{
 						functionCall: {
 							id: 'tool-call-3',

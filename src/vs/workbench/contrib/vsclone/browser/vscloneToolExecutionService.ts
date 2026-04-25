@@ -23,6 +23,7 @@ import { type VSCloneChatMode } from '../common/vsclonePlanModeTypes.js';
 import { type IVSCloneToolDefinition, type IVSCloneToolJsonSchema, type VSCloneToolApprovalType, VSCLONE_TOOL_DEFINITIONS } from '../common/vscloneToolDefinitions.js';
 import { formatToolResultWithDiff } from '../common/vscloneToolResultDiff.js';
 import { isVSCloneAmbiguousWorkspaceRelativePath, resolveVSCloneWorkspacePath } from '../common/vscloneWorkspacePaths.js';
+import { isVSCloneSensitiveFilePath } from '../common/vsclonePrompts.js';
 import { resolveContentEdits } from './vscloneEditCodeService.js';
 import {
 	IVSCloneEditCodeService,
@@ -245,7 +246,7 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 			return { success: false, output: this.invalidPathMessage(path) };
 		}
 
-		if (isEnvFilePath(target.rawPath)) {
+		if (isVSCloneSensitiveFilePath(target.rawPath)) {
 			return { success: false, output: this.envProtectionMessage(target.rawPath) };
 		}
 
@@ -466,7 +467,7 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 			return { success: false, output: this.invalidPathMessage(path) };
 		}
 
-		if (isEnvFilePath(target.rawPath)) {
+		if (isVSCloneSensitiveFilePath(target.rawPath)) {
 			return { success: false, output: this.envProtectionMessage(target.rawPath) };
 		}
 
@@ -551,7 +552,7 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 			return { success: false, output: this.invalidPathMessage(path) };
 		}
 
-		if (isEnvFilePath(target.rawPath)) {
+		if (isVSCloneSensitiveFilePath(target.rawPath)) {
 			return { success: false, output: this.envProtectionMessage(target.rawPath) };
 		}
 
@@ -883,17 +884,6 @@ function parseSearchReplaceBlocks(changes: string): readonly IParsedSearchReplac
 
 function normalizePath(rawPath: string): string {
 	return rawPath.trim().replace(/^`+|`+$/g, '').replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, '');
-}
-
-/**
- * `.env` files frequently hold secrets (API keys, DB URLs, OAuth credentials) that must never
- * leave the local machine. The tool runtime enforces this as a hard block on read/write, but
- * still allows them to appear in directory listings so the agent can reason about project layout.
- * Matches `.env`, `.env.local`, `.env.production`, etc.
- */
-function isEnvFilePath(rawPath: string): boolean {
-	const basename = rawPath.split(/[\\/]/).pop() ?? rawPath;
-	return basename === '.env' || basename.startsWith('.env.');
 }
 
 function summarizeEditPayload(changes: string): string {

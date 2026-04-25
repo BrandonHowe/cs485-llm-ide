@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { hasKey } from '../../../../base/common/types.js';
 import { type IVSCloneChatTransportConversationMessage, type IVSCloneChatTransportRequestOptions } from './vscloneChatTransportTypes.js';
 import type { IVSCloneCompletionPromptEnvelope } from './vscloneCompletionTypes.js';
 import { type IVSCloneImageAttachment, toVSCloneImageDataUrl } from './vscloneImageAttachmentTypes.js';
@@ -319,7 +320,11 @@ function prepareGeminiMessages(messages: readonly IVSCloneSimplePreparedMessage[
 					preparedMessages[preparedMessages.length - 1] = {
 						role: 'model',
 						parts: [
-							...previousMessage.parts,
+							// Gemini binds provider-issued thought signatures to model text that appears
+							// before function calls. VSClone does not persist those signatures yet, so
+							// replay only the structural calls here and leave assistant text on non-tool
+							// model turns where no signature is required.
+							...previousMessage.parts.filter(part => !hasKey(part, { text: true })),
 							{
 								functionCall: {
 									id: message.id,

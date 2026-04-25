@@ -33,7 +33,8 @@ export interface IVSCloneModelSelection {
 	reasoningEnabled?: boolean;
 	/**
 	 * Mirrors Void's `ModelSelectionOptions.reasoningBudget`. Persisted alongside `reasoningEffort`
-	 * so budget-slider models (Anthropic, Gemini thinking) remember the chosen token budget.
+	 * so any future budget-slider provider can remember the chosen token budget. Current Anthropic
+	 * and Gemini chat selections use presets instead of this raw value.
 	 */
 	reasoningBudget?: number;
 	selectedAt: number;

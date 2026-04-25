@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DeferredPromise } from '../../../../../base/common/async.js';
 import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { IChannel } from '../../../../../base/parts/ipc/common/ipc.js';
@@ -12,6 +13,7 @@ import { IMainProcessService } from '../../../../../platform/ipc/common/mainProc
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
 import { IQuickInputService } from '../../../../../platform/quickinput/common/quickInput.js';
+import { ISecretStorageService } from '../../../../../platform/secrets/common/secrets.js';
 import { TestSecretStorageService } from '../../../../../platform/secrets/test/common/testSecretStorageService.js';
 import { VSCloneOAuthService } from '../../browser/vscloneOAuthService.js';
 import {
@@ -295,6 +297,67 @@ suite('VSCloneOAuthService', () => {
 		assert.strictEqual(service.isSignedIn('openai'), true);
 		assert.strictEqual(service.state.providers.openai.isReady, true);
 		assert.strictEqual(service.state.providers.openai.userDisplayName, 'user@example.com');
+	});
+
+	test('initialize coalesces concurrent restore callers until persisted tokens are loaded', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const backingSecretStorageService = testDisposables.add(new TestSecretStorageService());
+		const releaseOpenAIRestore = new DeferredPromise<void>();
+		let getCalls = 0;
+
+		await backingSecretStorageService.set(oauthSecretKey('openai'), JSON.stringify(createTokenSet({
+			providerMetadata: { email: 'restored@example.com' },
+		})));
+
+		const delayedSecretStorageService: ISecretStorageService = {
+			_serviceBrand: undefined,
+			type: 'in-memory',
+			onDidChangeSecret: backingSecretStorageService.onDidChangeSecret,
+			get: async (key: string) => {
+				getCalls += 1;
+				if (key === oauthSecretKey('openai')) {
+					// Hold the first provider restore open so the second initialize caller must share
+					// the in-flight restore instead of returning against the initial signed-out state.
+					await releaseOpenAIRestore.p;
+				}
+				return backingSecretStorageService.get(key);
+			},
+			set: (key: string, value: string) => backingSecretStorageService.set(key, value),
+			delete: (key: string) => backingSecretStorageService.delete(key),
+			keys: () => backingSecretStorageService.keys(),
+		};
+
+		const service = testDisposables.add(new VSCloneOAuthService(
+			delayedSecretStorageService,
+			new NullLogService(),
+			createNotificationService(),
+			createQuickInputService(),
+			createMainProcessService(),
+		));
+
+		let firstInitializeCompleted = false;
+		let secondInitializeCompleted = false;
+		const firstInitialize = service.initialize().then(() => {
+			firstInitializeCompleted = true;
+			return service.isSignedIn('openai');
+		});
+		const secondInitialize = service.initialize().then(() => {
+			secondInitializeCompleted = true;
+			return service.isSignedIn('openai');
+		});
+
+		await Promise.resolve();
+		await Promise.resolve();
+
+		assert.strictEqual(getCalls, 1);
+		assert.strictEqual(firstInitializeCompleted, false);
+		assert.strictEqual(secondInitializeCompleted, false);
+
+		releaseOpenAIRestore.complete();
+
+		assert.deepStrictEqual(await Promise.all([firstInitialize, secondInitialize]), [true, true]);
+		assert.strictEqual(service.state.providers.openai.userDisplayName, 'restored@example.com');
+		assert.strictEqual(getCalls, 3);
 	});
 
 	test('signOut removes persisted secrets and marks provider unavailable', async () => {
@@ -635,6 +698,97 @@ suite('VSCloneOAuthService', () => {
 		const headers = await harness.service.getApiHeaders('openai');
 		assert.strictEqual(headers?.['ChatGPT-Account-Id'], 'acct-refresh');
 		assert.strictEqual(headers?.Authorization, `Bearer ${firstAccessToken}`);
+	});
+
+	test('signIn prevents an older in-flight refresh from overwriting the new session', async () => {
+		const refreshResponse = new DeferredPromise<unknown>();
+		const refreshStarted = new DeferredPromise<void>();
+		const tokenExchangeGrants: string[] = [];
+		let expectedState: string | undefined;
+		const harness = createOAuthHarness({
+			channelHandlers: {
+				[VSCLONE_OAUTH_COMMAND_START_LOOPBACK]: () => ({
+					redirectUri: 'http://localhost:1455/auth/callback',
+				}),
+				[VSCLONE_OAUTH_COMMAND_OPEN_EXTERNAL]: (payload) => {
+					const url = new URL(String(payload));
+					expectedState = url.searchParams.get('state') ?? undefined;
+					return undefined;
+				},
+				[VSCLONE_OAUTH_COMMAND_WAIT_FOR_LOOPBACK]: () => ({
+					code: 'new-sign-in-code',
+					state: expectedState,
+				}),
+				[VSCLONE_OAUTH_COMMAND_TOKEN_EXCHANGE]: (payload) => {
+					const request = payload as { body: string; contentType: string };
+					const body = new URLSearchParams(request.body);
+					const grantType = body.get('grant_type');
+					tokenExchangeGrants.push(grantType ?? '');
+
+					if (grantType === 'refresh_token') {
+						assert.strictEqual(body.get('refresh_token'), 'refresh-before-sign-in');
+						// Keep the old refresh unresolved until after sign-in has persisted the newer
+						// token set, proving the late refresh completion cannot roll the session back.
+						refreshStarted.complete();
+						return refreshResponse.p;
+					}
+
+					if (grantType === 'authorization_code') {
+						assert.strictEqual(body.get('code'), 'new-sign-in-code');
+						return {
+							statusCode: 200,
+							body: JSON.stringify({
+								access_token: 'new-sign-in-access',
+								token_type: 'Bearer',
+								refresh_token: 'refresh-after-sign-in',
+								id_token: createJwt({ email: 'signed-in@example.com' }),
+								expires_in: 3600,
+								scope: 'openid profile',
+							}),
+						};
+					}
+
+					throw new Error(`Unexpected token grant: ${grantType}`);
+				},
+				[VSCLONE_OAUTH_COMMAND_STOP_LOOPBACK]: () => undefined,
+			},
+		}, store);
+
+		await harness.secretStorageService.set(oauthSecretKey('openai'), JSON.stringify(createTokenSet({
+			accessToken: 'access-before-refresh',
+			refreshToken: 'refresh-before-sign-in',
+			expiresAt: Date.now() + 30_000,
+		})));
+		await harness.service.initialize();
+
+		const staleAccessToken = harness.service.getAccessToken('openai');
+		await refreshStarted.p;
+		assert.strictEqual(harness.service.state.providers.openai.status, 'refreshing');
+
+		await harness.service.signIn('openai');
+		assert.strictEqual(harness.service.state.providers.openai.status, 'signed_in');
+		assert.strictEqual(harness.service.state.providers.openai.userDisplayName, 'signed-in@example.com');
+
+		refreshResponse.complete({
+			statusCode: 200,
+			body: JSON.stringify({
+				access_token: 'late-refresh-access',
+				token_type: 'Bearer',
+				refresh_token: 'late-refresh-token',
+				expires_in: 3600,
+				scope: 'openid profile',
+			}),
+		});
+
+		assert.strictEqual(await staleAccessToken, 'new-sign-in-access');
+		const tokenSet = await harness.service.getTokenSet('openai');
+		assert.strictEqual(tokenSet?.accessToken, 'new-sign-in-access');
+		assert.strictEqual(tokenSet?.refreshToken, 'refresh-after-sign-in');
+		assert.deepStrictEqual(tokenExchangeGrants, ['refresh_token', 'authorization_code']);
+
+		const stored = JSON.parse(await harness.secretStorageService.get(oauthSecretKey('openai')) ?? '{}');
+		assert.strictEqual(stored.accessToken, 'new-sign-in-access');
+		assert.strictEqual(stored.refreshToken, 'refresh-after-sign-in');
 	});
 
 	test('refreshes expired Anthropic tokens with the JSON refresh body and keeps derived state in sync', async () => {

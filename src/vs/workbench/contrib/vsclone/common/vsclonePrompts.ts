@@ -149,6 +149,17 @@ function truncateSelectionPreview(selection: string): string {
 const maxCharsPerContextFile = 100_000;
 const maxFolderEntries = 100;
 const maxFilesPerFolderInline = 20;
+const sensitiveFileContentPlaceholder = '(protected sensitive file; contents not included)';
+
+/**
+ * Prompt-side context serialization can read files without an explicit model tool call, so it must
+ * share the same sensitive-file policy as the tool runtime. Keep this policy path-based and cheap:
+ * callers need to reject protected files before they ask the file service for file contents.
+ */
+export function isVSCloneSensitiveFilePath(rawPath: string): boolean {
+	const basename = rawPath.split(/[\\/]/).pop() ?? rawPath;
+	return basename === '.env' || basename.startsWith('.env.');
+}
 
 function truncateFileContent(content: string): string {
 	if (content.length <= maxCharsPerContextFile) {
@@ -167,6 +178,10 @@ async function readFileContentSafe(fileService: IFileService, uri: URI): Promise
 }
 
 async function formatFileSelection(fileService: IFileService, uri: URI, languageId: string): Promise<string> {
+	if (isVSCloneSensitiveFilePath(uri.fsPath)) {
+		return `${uri.fsPath}:\n${sensitiveFileContentPlaceholder}`;
+	}
+
 	const content = await readFileContentSafe(fileService, uri);
 	if (content === undefined) {
 		return `${uri.fsPath}:\n(unable to read file)`;
@@ -175,6 +190,10 @@ async function formatFileSelection(fileService: IFileService, uri: URI, language
 }
 
 async function formatCodeSelection(fileService: IFileService, uri: URI, languageId: string, startLine: number, endLine: number): Promise<string> {
+	if (isVSCloneSensitiveFilePath(uri.fsPath)) {
+		return `${uri.fsPath} (lines ${startLine}:${endLine}):\n${sensitiveFileContentPlaceholder}`;
+	}
+
 	const content = await readFileContentSafe(fileService, uri);
 	if (content === undefined) {
 		return `${uri.fsPath} (lines ${startLine}:${endLine}):\n(unable to read file)`;
@@ -236,6 +255,11 @@ async function formatFolderSelection(fileService: IFileService, uri: URI): Promi
 	const fileChildren = rootStat.children.filter(c => !c.isDirectory).slice(0, maxFilesPerFolderInline);
 	const inlineFileBlocks: string[] = [];
 	for (const child of fileChildren) {
+		if (isVSCloneSensitiveFilePath(child.resource.fsPath)) {
+			inlineFileBlocks.push(`${child.resource.fsPath}:\n${sensitiveFileContentPlaceholder}`);
+			continue;
+		}
+
 		const content = await readFileContentSafe(fileService, child.resource);
 		if (content !== undefined) {
 			inlineFileBlocks.push(`${child.resource.fsPath}:\n\`\`\`\n${truncateFileContent(content)}\n\`\`\``);

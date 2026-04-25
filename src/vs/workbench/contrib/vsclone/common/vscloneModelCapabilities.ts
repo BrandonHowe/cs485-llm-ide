@@ -44,9 +44,9 @@ const chatScopedFeatureSupport = ['Chat', 'Notebook', 'Terminal'] as const satis
 const autocompleteCapableFeatureSupport = ['Chat', 'Autocomplete', 'Notebook', 'Terminal'] as const satisfies readonly VSCloneSettingsFeatureName[];
 
 /**
- * Mirror Void's `reasoningCapabilities` shape. `reasoningSlider` is a discriminated union so
- * Anthropic-style budget tokens stay separate from OpenAI-style "effort" enum values, matching
- * how Void's per-provider reasoning IO adapters decide what to inject into a request payload.
+ * Mirror Void's `reasoningCapabilities` shape. `reasoningSlider` is a discriminated union so raw
+ * token budgets stay separate from preset effort labels, matching how provider reasoning adapters
+ * decide what to inject into a request payload.
  */
 export type VSCloneReasoningSlider =
 	| undefined
@@ -182,13 +182,18 @@ export const VSCLONE_MODEL_DEFINITIONS_BY_PROVIDER: Record<VSCloneModelVendor, r
 			vendor: 'anthropic',
 			modelId: 'claude-haiku-4-5-20251001',
 			modelName: 'Haiku 4.5',
+			reasoningEffortLevels: ['none', 'low', 'medium', 'high', 'max'],
+			defaultReasoningEffort: 'medium',
 			supportsFIM: true,
 			reasoningCapabilities: {
 				supportsReasoning: true,
 				canTurnOffReasoning: true,
 				canIOReasoning: true,
-				reasoningReservedOutputTokenSpace: 8192,
-				reasoningSlider: { type: 'budget_slider', min: 1024, max: 8192, default: 1024 },
+				// Anthropic caps Haiku 4.5 output at 64k and requires `budget_tokens < max_tokens`.
+				// Expose coarse Claude Code-style presets in the UI and map them to concrete
+				// `budget_tokens` in the Anthropic adapter so users are not tuning raw token counts.
+				reasoningReservedOutputTokenSpace: 64_000,
+				reasoningSlider: { type: 'effort_slider', values: ['none', 'low', 'medium', 'high', 'max'], default: 'medium' },
 			},
 		},
 		{
@@ -200,46 +205,54 @@ export const VSCLONE_MODEL_DEFINITIONS_BY_PROVIDER: Record<VSCloneModelVendor, r
 	google: [
 		{
 			vendor: 'google',
+			modelId: 'gemini-2.5-pro',
+			modelName: 'Gemini 2.5 Pro',
+			// Gemini's native tool path requires thought signatures when explicit thinking is replayed
+			// with function calls. Until the runtime preserves those signatures, rely on Google's
+			// model-side presets instead of exposing a generic VSClone thinking slider.
+			reasoningCapabilities: false,
+		},
+		{
+			vendor: 'google',
+			modelId: 'gemini-2.5-flash',
+			modelName: 'Gemini 2.5 Flash',
+			// Keep Google thinking preset-based for the same reason as Pro: replaying explicit
+			// thinking alongside function calls needs provider-issued thought signatures.
+			reasoningCapabilities: false,
+		},
+		{
+			vendor: 'google',
+			modelId: 'gemini-2.5-flash-lite',
+			modelName: 'Gemini 2.5 Flash Lite',
+			supportsFIM: true,
+			// Flash Lite is the autocomplete fallback too, so do not attach chat thinking controls that
+			// would make the native Gemini tool loop depend on unpersisted thought signatures.
+			reasoningCapabilities: false,
+		},
+		{
+			vendor: 'google',
 			modelId: 'gemini-3.1-pro-preview',
 			modelName: 'Gemini 3.1 Pro',
-			reasoningEffortLevels: ['high', 'medium', 'low', 'minimal'],
-			defaultReasoningEffort: 'medium',
-			reasoningCapabilities: {
-				supportsReasoning: true,
-				canTurnOffReasoning: true,
-				canIOReasoning: false,
-				reasoningReservedOutputTokenSpace: 8192,
-				reasoningSlider: { type: 'budget_slider', min: 1024, max: 8192, default: 1024 },
-			},
+			// Preview entries are retained for existing persisted selections, but they follow the same
+			// preset-only thinking policy as the stable Gemini 2.5 family.
+			reasoningCapabilities: false,
 		},
 		{
 			vendor: 'google',
 			modelId: 'gemini-3-flash-preview',
 			modelName: 'Gemini 3 Flash',
-			reasoningEffortLevels: ['high', 'medium', 'low', 'minimal'],
-			defaultReasoningEffort: 'medium',
-			reasoningCapabilities: {
-				supportsReasoning: true,
-				canTurnOffReasoning: true,
-				canIOReasoning: false,
-				reasoningReservedOutputTokenSpace: 8192,
-				reasoningSlider: { type: 'budget_slider', min: 1024, max: 8192, default: 1024 },
-			},
+			// Keep Google thinking preset-based for the same reason as Pro: replaying explicit
+			// thinking alongside function calls needs provider-issued thought signatures.
+			reasoningCapabilities: false,
 		},
 		{
 			vendor: 'google',
 			modelId: 'gemini-3.1-flash-lite-preview',
 			modelName: 'Gemini 3.1 Flash Lite',
-			reasoningEffortLevels: ['high', 'medium', 'low', 'minimal'],
-			defaultReasoningEffort: 'medium',
 			supportsFIM: true,
-			reasoningCapabilities: {
-				supportsReasoning: true,
-				canTurnOffReasoning: true,
-				canIOReasoning: false,
-				reasoningReservedOutputTokenSpace: 8192,
-				reasoningSlider: { type: 'budget_slider', min: 1024, max: 8192, default: 1024 },
-			},
+			// Flash Lite is the autocomplete fallback too, so do not attach chat thinking controls that
+			// would make the native Gemini tool loop depend on unpersisted thought signatures.
+			reasoningCapabilities: false,
 		},
 	],
 };
@@ -301,8 +314,8 @@ export function supportsVSCloneFeature(
 
 /**
  * Mirror Void's `ModelSelectionOptions`. VSClone already persists `reasoningEffort` on the picker
- * selection; the extra `reasoningEnabled` / `reasoningBudget` fields round out the Anthropic and
- * Gemini budget-slider paths without reshaping the selection contract.
+ * selection; the extra `reasoningEnabled` / `reasoningBudget` fields preserve older budget-slider
+ * selections and any future provider that still needs a raw token budget.
  */
 export interface IVSCloneModelSelectionOptions {
 	readonly reasoningEnabled?: boolean;
@@ -312,8 +325,8 @@ export interface IVSCloneModelSelectionOptions {
 
 /**
  * Runtime-side resolved reasoning info. Mirrors Void's `SendableReasoningInfo`: null when reasoning
- * is turned off, otherwise a variant carrying either the Anthropic-style token budget or an OpenAI-
- * style effort keyword that the provider adapter can inject directly into the request payload.
+ * is turned off, otherwise a variant carrying either a raw token budget or a preset effort keyword
+ * that the provider adapter can inject directly into the request payload.
  */
 export type VSCloneSendableReasoningInfo =
 	| null
@@ -343,8 +356,30 @@ export interface IVSCloneProviderReasoningIOSettings {
 	| { readonly nameOfFieldInDelta?: undefined; readonly needsManualParse?: true };
 }
 
-// Anthropic sends the budget through a dedicated `thinking` payload rather than a reasoning_effort
-// enum. Keep the block near the Void source so the implementation is obvious next to the types.
+function toVSCloneAnthropicThinkingBudget(level: VSCloneReasoningEffortLevel): number | undefined {
+	switch (level) {
+		case 'low':
+		case 'lite':
+		case 'minimal':
+			return 4_096;
+		case 'medium':
+		case 'standard':
+			return 16_384;
+		case 'high':
+		case 'xhigh':
+			return 32_768;
+		case 'max':
+			// Anthropic requires the thinking budget to be strictly below `max_tokens`, and Haiku's
+			// output cap is 64k, so the largest valid thinking budget is one token under that cap.
+			return 63_999;
+		case 'none':
+			return undefined;
+	}
+}
+
+// Anthropic sends the selected preset as a concrete `thinking.budget_tokens` value. Keep the mapping
+// here, beside the provider IO adapter, so the UI can stay preset-based while the wire payload
+// remains Anthropic-native.
 const anthropicReasoningIOSettings: IVSCloneProviderReasoningIOSettings = {
 	input: {
 		includeInPayload: (reasoningInfo) => {
@@ -353,6 +388,10 @@ const anthropicReasoningIOSettings: IVSCloneProviderReasoningIOSettings = {
 			}
 			if (reasoningInfo.type === 'budget_slider_value') {
 				return { thinking: { type: 'enabled', budget_tokens: reasoningInfo.reasoningBudget } };
+			}
+			if (reasoningInfo.type === 'effort_slider_value') {
+				const budget = toVSCloneAnthropicThinkingBudget(reasoningInfo.reasoningEffort);
+				return budget === undefined ? null : { thinking: { type: 'enabled', budget_tokens: budget } };
 			}
 			return null;
 		},
@@ -475,9 +514,11 @@ export function getVSCloneReservedOutputTokenSpaceForReasoning(
 }
 
 /**
- * Mirrors Void's `getSendableReasoningInfo`. Budget-slider models (Anthropic, Gemini) use the
- * numeric `reasoningBudget`; effort-slider models (OpenAI-style) pass a `VSCloneReasoningEffortLevel`
- * string through so the provider adapter forwards it verbatim.
+ * Mirrors Void's `getSendableReasoningInfo`. Budget-slider models use the numeric `reasoningBudget`;
+ * effort-slider models pass a preset `VSCloneReasoningEffortLevel` through so each provider adapter
+ * can map it to the native wire shape. Gemini intentionally has no slider here because its
+ * tool-call replay needs provider-issued thought signatures when explicit thinking is included in
+ * the request history.
  */
 export function getVSCloneSendableReasoningInfo(
 	featureName: VSCloneSettingsFeatureName,

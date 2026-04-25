@@ -72,6 +72,16 @@ export class VSCloneLLMMessageChannel extends Disposable implements IServerChann
 		}
 	}
 
+	override dispose(): void {
+		// The channel owns the provider AbortControllers, so disposal is the last chance to stop
+		// network streams that no renderer can observe anymore.
+		for (const [, abortController] of this.runningRequests) {
+			abortController.abort();
+		}
+		this.runningRequests.clear();
+		super.dispose();
+	}
+
 	private submitRequest(submitRequest: IVSCloneLLMMessageSubmitRequest): void {
 		const previousRequest = this.runningRequests.get(submitRequest.requestId);
 		previousRequest?.abort();

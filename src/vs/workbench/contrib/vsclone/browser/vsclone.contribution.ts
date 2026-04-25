@@ -131,7 +131,7 @@ function registerVSCloneContribution(): void {
 			},
 			[VSCloneAutocompleteEnabledSetting]: {
 				type: 'boolean',
-				default: true,
+				default: false,
 				description: localize('vsclone.configuration.autocomplete.enabled', 'Enable VSClone inline code completions.'),
 				scope: ConfigurationScope.WINDOW,
 			},

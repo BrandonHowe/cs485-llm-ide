@@ -788,11 +788,11 @@ function buildAnthropicChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 		{ isReasoningEnabled: reasoningFragment !== null },
 	);
 
-	const anthropicReasoningFragment = clampAnthropicThinkingBudget(reasoningFragment, reservedOutputTokenSpace ?? 4_096);
+	const maxTokens = getAnthropicMaxTokensForThinking(reasoningFragment, reservedOutputTokenSpace ?? 4_096);
 	const baseRequest = {
 		model: apiModelId,
 		messages: prepared.messages as readonly IVSCloneAnthropicLLMChatMessage[],
-		max_tokens: reservedOutputTokenSpace ?? 4_096,
+		max_tokens: maxTokens,
 		system: prepared.separateSystemMessage?.trim() || defaultSystemMessage,
 		tools: buildAnthropicTools(prepared),
 		tool_choice: {
@@ -801,7 +801,7 @@ function buildAnthropicChatRequest(prepared: IVSCloneLLMPreparedChatPayload) {
 		},
 	};
 
-	return anthropicReasoningFragment ? { ...baseRequest, ...anthropicReasoningFragment } : baseRequest;
+	return reasoningFragment ? { ...baseRequest, ...reasoningFragment } : baseRequest;
 }
 
 function buildGoogleChatRequest(prepared: IVSCloneLLMPreparedChatPayload, signal: AbortSignal) {
@@ -848,26 +848,19 @@ function buildProviderReasoningFragment(prepared: IVSCloneLLMPreparedChatPayload
 	return settings.input?.includeInPayload?.(info) ?? null;
 }
 
-function clampAnthropicThinkingBudget(fragment: Record<string, unknown> | null, maxTokens: number): Record<string, unknown> | null {
+function getAnthropicMaxTokensForThinking(fragment: Record<string, unknown> | null, fallbackMaxTokens: number): number {
 	const thinking = fragment?.thinking;
 	if (!thinking || typeof thinking !== 'object' || !hasKey(thinking, { budget_tokens: true })) {
-		return fragment;
+		return fallbackMaxTokens;
 	}
 	const thinkingPayload = thinking as { readonly budget_tokens?: unknown };
 	if (typeof thinkingPayload.budget_tokens !== 'number') {
-		return fragment;
+		return fallbackMaxTokens;
 	}
 
-	// Anthropic requires `thinking.budget_tokens` to be strictly lower than `max_tokens`. The UI
-	// slider can intentionally reach the full reserved output budget, so clamp only the transport
-	// payload and leave the persisted user selection unchanged.
-	return {
-		...fragment,
-		thinking: {
-			...thinking,
-			budget_tokens: Math.min(thinkingPayload.budget_tokens, Math.max(1, maxTokens - 1)),
-		},
-	};
+	// Anthropic requires `thinking.budget_tokens` to be strictly lower than `max_tokens`. Preserve the
+	// user's selected thinking budget and grow the request envelope instead of silently reducing it.
+	return Math.max(fallbackMaxTokens, thinkingPayload.budget_tokens + 1);
 }
 
 function getFIMEndpointMode(_prepared: IVSCloneLLMPreparedFIMPayload): VSCloneFIMEndpointMode {

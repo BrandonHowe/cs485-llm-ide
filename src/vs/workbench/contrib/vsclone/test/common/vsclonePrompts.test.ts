@@ -4,9 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { assembleVSCloneSystemMessage, type IVSClonePromptContext } from '../../common/vsclonePrompts.js';
+import type { IFileService, IFileStat } from '../../../../../platform/files/common/files.js';
+import { assembleVSCloneSystemMessage, formatContextSelections, isVSCloneSensitiveFilePath, type IVSClonePromptContext } from '../../common/vsclonePrompts.js';
 
 suite('VSClonePrompts', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -95,4 +97,91 @@ suite('VSClonePrompts', () => {
 		assert.ok(!message.includes('Use SEARCH/REPLACE edit blocks only when calling edit_file.'));
 		assert.ok(!message.includes('### edit_file'));
 	});
+
+	test('omits sensitive file and code selection contents without reading protected files', async () => {
+		const envUri = URI.file('/workspace/.env.local');
+		const { fileService, readOperations } = createContextSelectionFileService(
+			new Map([[envUri.fsPath, 'API_KEY=secret-value']]),
+		);
+
+		const serialized = await formatContextSelections([
+			{ kind: 'file', uri: envUri, languageId: 'properties' },
+			{ kind: 'codeSelection', uri: envUri, languageId: 'properties', startLine: 1, endLine: 1 },
+		], fileService);
+
+		assert.ok(serialized.includes(envUri.fsPath));
+		assert.ok(serialized.includes('(protected sensitive file; contents not included)'));
+		assert.ok(!serialized.includes('secret-value'));
+		assert.deepStrictEqual(readOperations, []);
+	});
+
+	test('omits sensitive file contents when inlining folder selections', async () => {
+		const folderUri = URI.file('/workspace');
+		const sourceUri = URI.file('/workspace/src/app.ts');
+		const envUri = URI.file('/workspace/.env.production');
+		const { fileService, readOperations } = createContextSelectionFileService(
+			new Map([
+				[sourceUri.fsPath, 'export const answer = 42;'],
+				[envUri.fsPath, 'DATABASE_URL=postgres://secret'],
+			]),
+			new Map([[folderUri.fsPath, [
+				createTestFileStat(envUri),
+				createTestFileStat(sourceUri),
+			]]]),
+		);
+
+		const serialized = await formatContextSelections([
+			{ kind: 'folder', uri: folderUri },
+		], fileService);
+
+		assert.ok(serialized.includes(`${folderUri.fsPath} folder structure:`));
+		assert.ok(serialized.includes('.env.production'));
+		assert.ok(serialized.includes('export const answer = 42;'));
+		assert.ok(serialized.includes('(protected sensitive file; contents not included)'));
+		assert.ok(!serialized.includes('postgres://secret'));
+		assert.deepStrictEqual(readOperations, [sourceUri.fsPath]);
+	});
+
+	function createContextSelectionFileService(
+		fileContents: ReadonlyMap<string, string>,
+		folderChildren: ReadonlyMap<string, readonly IFileStat[]> = new Map<string, readonly IFileStat[]>(),
+	): { readonly fileService: IFileService; readonly readOperations: string[] } {
+		const readOperations: string[] = [];
+		const fileService = {
+			async readFile(resource: URI) {
+				// The serializer must make the policy decision before readFile, otherwise selected
+				// secrets can leak into the prompt even though normal tool reads are protected.
+				assert.ok(!isVSCloneSensitiveFilePath(resource.fsPath), `Sensitive file was read: ${resource.fsPath}`);
+				readOperations.push(resource.fsPath);
+				return { value: VSBuffer.fromString(fileContents.get(resource.fsPath) ?? '') };
+			},
+			async resolve(resource: URI) {
+				const children = folderChildren.get(resource.fsPath);
+				if (children) {
+					return createTestFolderStat(resource, children);
+				}
+				return createTestFileStat(resource);
+			},
+		} as unknown as IFileService;
+		return { fileService, readOperations };
+	}
+
+	function createTestFileStat(resource: URI): IFileStat {
+		return createTestStat(resource, false, undefined);
+	}
+
+	function createTestFolderStat(resource: URI, children: readonly IFileStat[]): IFileStat {
+		return createTestStat(resource, true, [...children]);
+	}
+
+	function createTestStat(resource: URI, isDirectory: boolean, children: IFileStat[] | undefined): IFileStat {
+		return {
+			resource,
+			name: resource.path.split('/').filter(Boolean).at(-1) ?? resource.path,
+			isFile: !isDirectory,
+			isDirectory,
+			isSymbolicLink: false,
+			children,
+		} as IFileStat;
+	}
 });

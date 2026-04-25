@@ -17,7 +17,8 @@ import { ITextModel } from '../../../../../editor/common/model.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { MockContextKeyService } from '../../../../../platform/keybinding/test/common/mockKeybindingService.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteService, VSCloneInlineSuggestionVisibleContextKey } from '../../browser/vscloneAutocompleteService.js';
+import { IWorkspaceTrustManagementService } from '../../../../../platform/workspace/common/workspaceTrust.js';
+import { VSCloneAutocompleteDebounceMsSetting, VSCloneAutocompleteEnabledSetting, VSCloneAutocompleteService, VSCloneInlineSuggestionVisibleContextKey } from '../../browser/vscloneAutocompleteService.js';
 import { IVSCloneConvertToLLMMessageService } from '../../browser/vscloneConvertToLLMMessageService.js';
 import { IVSCloneLLMMessageService } from '../../browser/vscloneLLMMessageService.js';
 import type { IVSCloneChatTransportRequestOptions } from '../../common/vscloneChatTransportTypes.js';
@@ -37,6 +38,8 @@ interface IAutocompleteServiceInternals {
 	getCachedCompletion(resource: URI, prefix: string, suffix: string): string | undefined;
 	addToCache(resource: URI, prefix: string, insertText: string): void;
 	evictExpiredEntries(cache: LRUCache<string, { readonly timestamp: number }>, now: number): void;
+	getAutocompleteSelectionCacheKey(): string | undefined;
+	isEnabled(): boolean;
 	beginBackendRequest(resource: URI, parentToken: CancellationToken): { readonly token: CancellationToken; dispose(): void };
 	endBackendRequest(resource: URI, requestId: number): void;
 	debounce(resource: URI, context: { readonly linePrefix: string; readonly lineSuffix: string }, mode: 'single-line-redo-suffix' | 'single-line-fill-middle' | 'multi-line' | 'do-not-predict', token: CancellationToken): Promise<boolean>;
@@ -164,6 +167,7 @@ async function createAutocompleteService(
 		resolveText?: (request: IVSCloneLLMMessageRequest) => string;
 		editorResources?: readonly URI[];
 		modelsByResource?: ReadonlyMap<string, ITextModel>;
+		workspaceTrusted?: boolean;
 	} = {},
 ): Promise<IAutocompleteServiceSetup> {
 	const oauthService = new TestVSCloneOAuthService();
@@ -180,6 +184,13 @@ async function createAutocompleteService(
 
 	const llmMessageService = new RecordingLLMMessageService(options.resolveText);
 	const contextKeyService = new MockContextKeyService();
+	const configuration = {
+		[VSCloneAutocompleteEnabledSetting]: true,
+		...(options.configuration ?? Object.create(null)),
+	};
+	const workspaceTrustManagementService = {
+		isWorkspaceTrusted: () => options.workspaceTrusted ?? true,
+	} as unknown as IWorkspaceTrustManagementService;
 	const service = disposables.add(new VSCloneAutocompleteService(
 		settingsService,
 		new TestConvertToLLMMessageService(),
@@ -188,7 +199,8 @@ async function createAutocompleteService(
 		createEditorService(options.editorResources) as never,
 		createModelService(options.modelsByResource ?? new Map()) as never,
 		createLanguageFeaturesService(options.onRegister),
-		new TestConfigurationService(options.configuration ?? Object.create(null)),
+		new TestConfigurationService(configuration),
+		workspaceTrustManagementService,
 		contextKeyService,
 		new NullLogService(),
 	));
@@ -230,6 +242,24 @@ suite('VSCloneAutocompleteService', () => {
 
 		service.disposeInlineCompletions(completions);
 		assert.strictEqual(contextKeyService.getContextKeyValue(VSCloneInlineSuggestionVisibleContextKey.key), false);
+	});
+
+	test('requires explicit enablement and workspace trust before background requests', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const disabledSetup = await createAutocompleteService({
+			configuration: { [VSCloneAutocompleteEnabledSetting]: false },
+		});
+		testDisposables.add(disabledSetup.disposables);
+		const untrustedSetup = await createAutocompleteService({
+			workspaceTrusted: false,
+		});
+		testDisposables.add(untrustedSetup.disposables);
+		const enabledSetup = await createAutocompleteService();
+		testDisposables.add(enabledSetup.disposables);
+
+		assert.strictEqual((disabledSetup.service as unknown as IAutocompleteServiceInternals).isEnabled(), false);
+		assert.strictEqual((untrustedSetup.service as unknown as IAutocompleteServiceInternals).isEnabled(), false);
+		assert.strictEqual((enabledSetup.service as unknown as IAutocompleteServiceInternals).isEnabled(), true);
 	});
 
 	test('disposes active requests, clears cache state, and resets the visibility key', async () => {
@@ -323,6 +353,40 @@ suite('VSCloneAutocompleteService', () => {
 		assert.strictEqual(cache.has('stale'), false);
 		assert.strictEqual(cache.has('boundary'), true);
 		assert.strictEqual(cache.has('fresh'), true);
+	});
+
+	test('includes reasoning toggle and budget in the autocomplete selection cache key', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const setup = await createAutocompleteService();
+		testDisposables.add(setup.disposables);
+		const { service, settingsService } = setup;
+		const internals = service as unknown as IAutocompleteServiceInternals;
+		const selection: IVSCloneModelSelection = {
+			location: 'editorInline',
+			vendor: 'anthropic',
+			modelIdentifier: 'anthropic/test-budget-model',
+			modelId: 'test-budget-model',
+			modelName: 'Test budget model',
+			reasoningEffort: 'medium',
+			reasoningEnabled: true,
+			reasoningBudget: 2048,
+			selectedAt: 1,
+		};
+
+		// The settings service sanitizes unavailable reasoning fields for the current catalog, so the
+		// cache-key regression is tested at the projected-selection boundary the service consumes.
+		const projectedSelection = { ...selection };
+		(settingsService as unknown as { getFeatureSelection(featureName: 'Autocomplete'): IVSCloneModelSelection }).getFeatureSelection = () => projectedSelection;
+		const initialKey = internals.getAutocompleteSelectionCacheKey();
+		projectedSelection.reasoningEnabled = false;
+		const disabledKey = internals.getAutocompleteSelectionCacheKey();
+		projectedSelection.reasoningBudget = 4096;
+		const budgetKey = internals.getAutocompleteSelectionCacheKey();
+
+		assert.notStrictEqual(initialKey, disabledKey);
+		assert.notStrictEqual(disabledKey, budgetKey);
+		assert.ok(disabledKey?.endsWith(':medium:false:2048'));
+		assert.ok(budgetKey?.endsWith(':medium:false:4096'));
 	});
 
 	test('honors debounce cancellation and request supersession', async () => {
@@ -433,11 +497,16 @@ suite('VSCloneAutocompleteService', () => {
 	test('builds multi-line requests with open-tab context and caches the result', async () => {
 		const testDisposables = store.add(new DisposableStore());
 		const helperResource = URI.file('/workspace/helper.ts');
+		const envResource = URI.file('/workspace/.env');
 		const helperModel = createTextModel('export const helper = true;', helperResource, 'typescript', 2);
-		const modelsByResource = new Map([[helperResource.toString(), helperModel]]);
+		const envModel = createTextModel('SECRET=value', envResource, 'properties', 2);
+		const modelsByResource = new Map([
+			[helperResource.toString(), helperModel],
+			[envResource.toString(), envModel],
+		]);
 		const setup = await createAutocompleteService({
 			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 0 },
-			editorResources: [helperResource],
+			editorResources: [envResource, helperResource],
 			modelsByResource,
 			// Multi-line completions keep growing only while subsequent lines stay at or below the
 			// cursor indentation depth. Use an indented continuation here so the test exercises the
@@ -456,11 +525,27 @@ suite('VSCloneAutocompleteService', () => {
 		assert.ok(request.prepared.prompt.promptText.includes('Related files:'));
 		assert.ok(request.prepared.prompt.promptText.includes('/workspace/helper.ts'));
 		assert.ok(request.prepared.prompt.promptText.includes('export const helper = true;'));
+		assert.ok(!request.prepared.prompt.promptText.includes('SECRET=value'));
 		assert.strictEqual(completions?.items[0].insertText, 'const value = 1;\n    return value;');
 		assert.deepStrictEqual(completions?.items[0].range, new Range(2, 5, 2, 5));
 
 		const second = await service.provideInlineCompletions(model, new Position(2, 5), {} as never, CancellationToken.None);
 		assert.strictEqual(second?.items[0].insertText, 'const value = 1;\n    return value;');
 		assert.strictEqual(llmMessageService.requests.length, 1);
+	});
+
+	test('does not request completions for sensitive files', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const setup = await createAutocompleteService({
+			configuration: { [VSCloneAutocompleteDebounceMsSetting]: 0 },
+		});
+		testDisposables.add(setup.disposables);
+		const { service, llmMessageService } = setup;
+		const model = createTextModel('SECRET=', URI.file('/workspace/.env'));
+
+		const completions = await service.provideInlineCompletions(model, new Position(1, 8), {} as never, CancellationToken.None);
+
+		assert.strictEqual(completions, undefined);
+		assert.strictEqual(llmMessageService.requests.length, 0);
 	});
 });

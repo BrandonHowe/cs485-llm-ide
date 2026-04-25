@@ -86,8 +86,8 @@ export interface IVSCloneChatTransportRequestOptions {
 	 */
 	readonly reasoningEnabled?: boolean;
 	/**
-	 * Mirrors Void's `ModelSelectionOptions.reasoningBudget`. Anthropic and Gemini use this for their
-	 * extended-thinking budgets; effort-slider providers ignore the value.
+	 * Mirrors Void's `ModelSelectionOptions.reasoningBudget` for raw budget-slider providers. Haiku
+	 * and Gemini use preset model selections now, so this is usually undefined for built-in models.
 	 */
 	readonly reasoningBudget?: number;
 	readonly previousTurns?: readonly IVSCloneChatTransportConversationMessage[];

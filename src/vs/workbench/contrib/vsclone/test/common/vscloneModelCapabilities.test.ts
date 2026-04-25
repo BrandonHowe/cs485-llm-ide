@@ -4,9 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { getVSCloneModelCapabilityMetadata, getVSCloneStaticModelDefinitionByIdentifier, supportsVSCloneFeature, VSCLONE_MODEL_IDENTIFIERS } from '../../common/vscloneModelCapabilities.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { getVSCloneModelCapabilityMetadata, getVSCloneSendableReasoningInfo, getVSCloneStaticModelDefinitionByIdentifier, supportsVSCloneFeature, VSCLONE_MODEL_IDENTIFIERS } from '../../common/vscloneModelCapabilities.js';
 
 suite('VSCloneModelCapabilities', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
 	test('publishes a trimmed static model identifier list', () => {
 		assert.deepStrictEqual(
 			VSCLONE_MODEL_IDENTIFIERS,
@@ -18,6 +21,9 @@ suite('VSCloneModelCapabilities', () => {
 				'openai/gpt-5-nano',
 				'anthropic/claude-haiku-4-5-20251001',
 				'anthropic/claude-3-haiku-20240307',
+				'google/gemini-2.5-pro',
+				'google/gemini-2.5-flash',
+				'google/gemini-2.5-flash-lite',
 				'google/gemini-3.1-pro-preview',
 				'google/gemini-3-flash-preview',
 				'google/gemini-3.1-flash-lite-preview',
@@ -37,7 +43,23 @@ suite('VSCloneModelCapabilities', () => {
 		assert.ok(sparkCapabilities.supportedFeatures.includes('Autocomplete'));
 		assert.strictEqual(gpt54Capabilities.supportsFIM, false);
 		assert.strictEqual(gpt54Capabilities.supportedFeatures.includes('Autocomplete'), false);
-		assert.strictEqual(supportsVSCloneFeature('google', 'gemini-3.1-flash-lite-preview', 'Autocomplete'), true);
+		assert.strictEqual(supportsVSCloneFeature('google', 'gemini-2.5-flash-lite', 'Autocomplete'), true);
 		assert.strictEqual(supportsVSCloneFeature('google', 'gemini-3.1-pro-preview', 'Autocomplete'), false);
+	});
+
+	test('keeps Gemini thinking preset-only instead of publishing a VSClone slider', () => {
+		const gemini = getVSCloneStaticModelDefinitionByIdentifier('google/gemini-2.5-flash-lite');
+		assert.ok(gemini);
+
+		const geminiCapabilities = getVSCloneModelCapabilityMetadata(gemini!);
+		// Gemini function-call replay needs provider-issued thought signatures when explicit
+		// thinking is included, so the catalog must not synthesize `thinkingConfig` from stale
+		// `reasoningBudget` or `reasoningEffort` selection fields.
+		assert.strictEqual(geminiCapabilities.reasoningCapabilities, false);
+		assert.strictEqual(getVSCloneSendableReasoningInfo('Chat', 'google', 'gemini-2.5-flash-lite', {
+			reasoningEnabled: true,
+			reasoningBudget: 8192,
+			reasoningEffort: 'high',
+		}), null);
 	});
 });

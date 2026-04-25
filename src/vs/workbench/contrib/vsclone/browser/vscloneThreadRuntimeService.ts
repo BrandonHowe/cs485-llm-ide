@@ -1289,17 +1289,20 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		}) as IVSCloneThreadRuntimeToolRequestMessage | undefined;
 
 		// Workspace-scoped auto-approve: skip the interactive wait for edits so repeat approvals
-		// don't block an agent that the user has already trusted for this project. Snapshot capture
-		// still runs below via the standard approved-path fall-through so checkpoints remain intact.
+		// don't block an agent that the user has already trusted for this project. The approval
+		// decision is also the loop's execution gate, so keep checkpoint capture inside that gate;
+		// otherwise a fast edit tool can finish before `recordToolResult()` sees any snapshots.
 		if (approvalType === 'edits' && this.isAutoApproveEdits() && toolRequestMessage) {
 			this.updateToolRequestSnapshots(threadId, toolRequestMessage.id, []);
-			void this.captureCheckpointSnapshots(toolName, params).then(snapshots => {
+			const snapshotPromise = this.captureCheckpointSnapshots(toolName, params).then(snapshots => {
 				if (snapshots.length > 0) {
 					pendingCheckpointByToolKey.set(this.getToolInvocationKey(toolName, params), snapshots);
 					this.updateToolRequestSnapshots(threadId, toolRequestMessage.id, snapshots);
 				}
+				return snapshots;
 			}, error => {
 				this.logService.warn('[VSCloneThreadRuntime] Failed to capture checkpoints for auto-approved %s: %s', toolName, error instanceof Error ? error.message : String(error));
+				return [];
 			});
 			this.appendMessage(threadId, {
 				role: 'tool',
@@ -1313,6 +1316,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				...state,
 				streamState: { kind: 'tool', toolName },
 			}));
+			await snapshotPromise;
 			return { kind: 'approved' };
 		}
 

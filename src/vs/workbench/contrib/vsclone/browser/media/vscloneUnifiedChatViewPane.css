@@ -97,8 +97,30 @@
 	color: var(--vscode-button-secondaryForeground);
 }
 
-.vsclone-thread-action-button:hover {
+/* The gear is icon-only, so give it the same visual treatment as text actions with a fixed square hit target. */
+.vsclone-thread-action-overflow {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 5px;
+	cursor: pointer;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+.vsclone-thread-action-button:hover,
+.vsclone-thread-action-overflow:hover {
 	background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.vsclone-thread-action-button:focus-visible,
+.vsclone-thread-action-overflow:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 2px;
 }
 
 .vsclone-thread-messages {

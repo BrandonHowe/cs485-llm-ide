@@ -397,6 +397,7 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	private readonly _refreshPromises = new Map<VSCloneModelVendor, DeferredPromise<void>>();
 	private readonly _authEpochByVendor = new Map<VSCloneModelVendor, number>();
 	private _initialized = false;
+	private _initializePromise: Promise<void> | undefined;
 	private oauthChannel: IChannel | undefined;
 	private didResolveOAuthChannel = false;
 
@@ -421,8 +422,19 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		if (this._initialized) {
 			return;
 		}
-		this._initialized = true;
 
+		// Initialization restores persisted tokens and may refresh expired ones. Keep one shared
+		// promise so concurrent callers cannot observe the initial signed-out snapshot as final state.
+		if (!this._initializePromise) {
+			this._initializePromise = this._restorePersistedTokens().then(() => {
+				this._initialized = true;
+			});
+		}
+
+		return this._initializePromise;
+	}
+
+	private async _restorePersistedTokens(): Promise<void> {
 		for (const vendor of allVendors) {
 			try {
 				const raw = await this.secretStorageService.get(oauthSecretKey(vendor));
@@ -479,6 +491,9 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 		}
 
 		const config = defaultOAuthProviderConfig[vendor];
+		// A user-initiated sign-in supersedes any refresh that was started from the previous token
+		// set, so bump the epoch before the OAuth exchange can persist the new session.
+		this._invalidateRefreshWork(vendor);
 		this._setProviderStatus(vendor, 'signing_in');
 
 		try {
@@ -523,7 +538,9 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 				providerMetadata,
 			};
 
-			// Store tokens
+			// Commit the new session under a fresh epoch. This also invalidates refreshes that may
+			// have been requested from the old token set while the interactive sign-in was in flight.
+			this._invalidateRefreshWork(vendor);
 			this._tokenSets.set(vendor, tokenSet);
 			await this.secretStorageService.set(oauthSecretKey(vendor), JSON.stringify(tokenSet));
 
@@ -715,9 +732,8 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 	async signOut(vendor: VSCloneModelVendor): Promise<void> {
 		await this.initialize();
 
-		this._authEpochByVendor.set(vendor, (this._authEpochByVendor.get(vendor) ?? 0) + 1);
+		this._invalidateRefreshWork(vendor);
 		this._tokenSets.delete(vendor);
-		this._refreshPromises.delete(vendor);
 		await this.secretStorageService.delete(oauthSecretKey(vendor));
 		this._setProviderStatus(vendor, 'signed_out');
 		this._recomputeDerivedState();
@@ -865,8 +881,17 @@ export class VSCloneOAuthService extends Disposable implements IVSCloneOAuthServ
 			deferred.error(err instanceof Error ? err : new Error(String(err)));
 			throw err;
 		} finally {
-			this._refreshPromises.delete(vendor);
+			// Sign-in/sign-out can replace or remove the tracked refresh while this request is still
+			// awaiting the network; only clear the slot if it still belongs to this refresh.
+			if (this._refreshPromises.get(vendor) === deferred) {
+				this._refreshPromises.delete(vendor);
+			}
 		}
+	}
+
+	private _invalidateRefreshWork(vendor: VSCloneModelVendor): void {
+		this._authEpochByVendor.set(vendor, (this._authEpochByVendor.get(vendor) ?? 0) + 1);
+		this._refreshPromises.delete(vendor);
 	}
 
 	private async _doRefresh(vendor: VSCloneModelVendor, tokenSet: IVSCloneOAuthTokenSet, authEpoch: number): Promise<void> {
