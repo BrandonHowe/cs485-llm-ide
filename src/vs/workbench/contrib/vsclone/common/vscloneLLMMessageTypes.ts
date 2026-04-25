@@ -216,6 +216,18 @@ export type IVSCloneLLMMessageReasoningBlock =
 		readonly data: unknown;
 	};
 
+export type VSCloneTokenUsageSource = 'provider' | 'local-preflight';
+
+export interface IVSCloneTokenUsage {
+	readonly usedTokens: number;
+	readonly maxTokens?: number;
+	readonly inputTokens?: number;
+	readonly outputTokens?: number;
+	readonly source: VSCloneTokenUsageSource;
+	readonly modelIdentifier?: string;
+	readonly updatedAt?: number;
+}
+
 /**
  * Browser-side observers do not need the request id because the service already routes events back
  * to the matching handle. The IPC event variants below add the request id at the boundary.
@@ -232,6 +244,12 @@ export interface IVSCloneLLMMessageFinalPayload {
 	readonly fullReasoning: string;
 	readonly toolCall?: IVSCloneLLMMessageToolCall;
 	readonly anthropicReasoning: readonly IVSCloneLLMMessageReasoningBlock[] | null;
+	/**
+	 * Provider-reported usage is only available once the provider has completed a request. The
+	 * renderer/runtime keep preflight counts separate so UI estimates never masquerade as billed
+	 * token accounting.
+	 */
+	readonly tokenUsage?: IVSCloneTokenUsage;
 }
 
 export interface IVSCloneLLMMessageErrorPayload {

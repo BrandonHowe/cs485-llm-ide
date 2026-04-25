@@ -18,6 +18,7 @@ import {
 	IVSCloneLLMMessageFinalPayload,
 	type IVSCloneLLMMessageReasoningBlock,
 	type IVSCloneLLMMessageToolCall,
+	type IVSCloneTokenUsage,
 	type IVSCloneLLMPreparedFIMPayload,
 	type IVSCloneLLMPreparedChatPayload,
 	IVSCloneLLMMessageRequest,
@@ -389,6 +390,7 @@ async function sendOpenAIChatMessage(
 		fullReasoning,
 		toolCall: finalToolCall,
 		anthropicReasoning: null,
+		tokenUsage: toOpenAITokenUsage(finalResponse),
 	});
 }
 
@@ -521,6 +523,7 @@ async function sendAnthropicChatMessage(
 		fullReasoning,
 		toolCall: finalToolCall,
 		anthropicReasoning,
+		tokenUsage: toAnthropicTokenUsage(finalMessage),
 	});
 }
 
@@ -551,6 +554,98 @@ function collectAnthropicReasoningBlocks(
 	return blocks.length > 0 ? blocks : null;
 }
 
+function toOpenAITokenUsage(response: VSCloneOpenAIResponse): IVSCloneTokenUsage | undefined {
+	// Responses usage is attached to the final response, not the text stream. Preserve only provider
+	// counters here so the runtime can distinguish exact-ish post-request accounting from UI guesses.
+	return normalizeProviderTokenUsage(response.usage, {
+		inputKeys: ['input_tokens'],
+		outputKeys: ['output_tokens'],
+		totalKeys: ['total_tokens'],
+	});
+}
+
+function toAnthropicTokenUsage(message: VSCloneAnthropicMessage): IVSCloneTokenUsage | undefined {
+	// Anthropic's final message carries usage after message_stop; interim stream events do not give
+	// us the completed request totals that the context meter should prefer.
+	return normalizeProviderTokenUsage(message.usage, {
+		inputKeys: ['input_tokens'],
+		outputKeys: ['output_tokens'],
+		totalKeys: [],
+	});
+}
+
+function toGoogleTokenUsage(response: unknown): IVSCloneTokenUsage | undefined {
+	const usageMetadata = getObjectProperty(response, 'usageMetadata');
+	if (!usageMetadata) {
+		return undefined;
+	}
+	return normalizeProviderTokenUsage(usageMetadata, {
+		inputKeys: ['promptTokenCount'],
+		outputKeys: ['candidatesTokenCount', 'thoughtsTokenCount'],
+		totalKeys: ['totalTokenCount'],
+	});
+}
+
+function normalizeProviderTokenUsage(
+	rawUsage: unknown,
+	keys: {
+		readonly inputKeys: readonly string[];
+		readonly outputKeys: readonly string[];
+		readonly totalKeys: readonly string[];
+	},
+): IVSCloneTokenUsage | undefined {
+	const usage = isRecord(rawUsage) ? rawUsage : undefined;
+	if (!usage) {
+		return undefined;
+	}
+
+	const inputTokens = sumNumericProperties(usage, keys.inputKeys);
+	const outputTokens = sumNumericProperties(usage, keys.outputKeys);
+	const providerTotalTokens = firstNumericProperty(usage, keys.totalKeys);
+	const usedTokens = providerTotalTokens ?? ((inputTokens ?? 0) + (outputTokens ?? 0));
+	if (!Number.isFinite(usedTokens) || usedTokens <= 0) {
+		return undefined;
+	}
+
+	return {
+		usedTokens,
+		...(inputTokens !== undefined ? { inputTokens } : {}),
+		...(outputTokens !== undefined ? { outputTokens } : {}),
+		source: 'provider',
+	};
+}
+
+function getObjectProperty(value: unknown, key: string): Record<string, unknown> | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	const property = value[key];
+	return isRecord(property) ? property : undefined;
+}
+
+function firstNumericProperty(value: Record<string, unknown>, keys: readonly string[]): number | undefined {
+	for (const key of keys) {
+		const numericValue = value[key];
+		if (typeof numericValue === 'number' && Number.isFinite(numericValue)) {
+			return numericValue;
+		}
+	}
+	return undefined;
+}
+
+function sumNumericProperties(value: Record<string, unknown>, keys: readonly string[]): number | undefined {
+	let total = 0;
+	let sawValue = false;
+	for (const key of keys) {
+		const numericValue = value[key];
+		if (typeof numericValue === 'number' && Number.isFinite(numericValue)) {
+			total += numericValue;
+			sawValue = true;
+		}
+	}
+	return sawValue ? total : undefined;
+}
+
 async function sendGoogleChatMessage(
 	auth: IVSCloneLLMMessageAuthMaterial,
 	prepared: IVSCloneLLMPreparedChatPayload,
@@ -576,8 +671,10 @@ async function sendGoogleChatMessage(
 
 	let fullText = '';
 	let toolCall = createEmptyToolCall();
+	let tokenUsage: IVSCloneTokenUsage | undefined;
 
 	for await (const chunk of stream) {
+		tokenUsage = toGoogleTokenUsage(chunk) ?? tokenUsage;
 		const promptFeedbackMessage = getGooglePromptFeedbackErrorMessage(chunk);
 		if (promptFeedbackMessage) {
 			throw new Error(promptFeedbackMessage);
@@ -621,6 +718,7 @@ async function sendGoogleChatMessage(
 		fullReasoning: '',
 		toolCall: toolCall.name ? toolCall : undefined,
 		anthropicReasoning: null,
+		tokenUsage,
 	});
 }
 

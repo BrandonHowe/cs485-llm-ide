@@ -17,7 +17,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IVSCloneUnifiedChatBackendService } from '../common/backend/vscloneUnifiedChatBackendService.js';
 import type { IVSCloneChatTransportConversationMessage } from '../common/vscloneChatTransportTypes.js';
-import { IVSCloneLLMMessageRequestHandle, type IVSCloneLLMMessageReasoningBlock, type IVSCloneLLMMessageToolCall } from '../common/vscloneLLMMessageTypes.js';
+import { IVSCloneLLMMessageRequestHandle, type IVSCloneLLMMessageReasoningBlock, type IVSCloneLLMMessageToolCall, type IVSCloneTokenUsage } from '../common/vscloneLLMMessageTypes.js';
 import { IVSCloneOAuthService } from '../common/vscloneOAuthService.js';
 import { IVSCloneSettingsService } from '../common/vscloneSettingsService.js';
 import { formatToolResult, type VSCloneToolApprovalType } from '../common/vscloneToolDefinitions.js';
@@ -146,6 +146,7 @@ interface ILoopIterationResult {
 	 * content without rerunning the model.
 	 */
 	readonly reasoning?: string;
+	readonly tokenUsage?: IVSCloneTokenUsage;
 	/**
 	 * Anthropic-specific signed thinking blocks. Round-tripped verbatim on subsequent turns so the
 	 * provider can verify the server-issued signature. Null when the provider did not emit any.
@@ -228,6 +229,9 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			mode: options.mode,
 			streamState: { kind: 'llm' },
 			messages: nextMessages,
+			// A new run changes the branch payload immediately. Clear any previous provider counters
+			// until this request reports fresh usage so the UI can fall back to preflight accounting.
+			tokenUsage: undefined,
 			assistantEditApplications: baseState?.assistantEditApplications ?? [],
 			checkpoints: baseState?.checkpoints ?? [],
 			currentCheckpointId: baseState?.currentCheckpointId,
@@ -335,6 +339,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			mode: options.mode,
 			streamState: { kind: 'idle' },
 			messages: [...(baseState?.messages ?? []), userMessage, assistantMessage],
+			tokenUsage: undefined,
 			assistantEditApplications: baseState?.assistantEditApplications ?? [],
 			checkpoints: baseState?.checkpoints ?? [],
 			currentCheckpointId: baseState?.currentCheckpointId,
@@ -703,6 +708,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			checkpoints: state.checkpoints.slice(0, checkpointIndex + 1),
 			currentCheckpointId: checkpointId,
 			branchHeadMessageId: truncatedMessages.at(-1)?.id,
+			tokenUsage: undefined,
 			streamState: { kind: 'idle' },
 			lastUpdatedAt: Date.now(),
 		});
@@ -1026,6 +1032,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		let responseTranscriptText = '';
 		let toolCall: IVSCloneLLMMessageToolCall | undefined;
 		let reasoning = '';
+		let tokenUsage: IVSCloneTokenUsage | undefined;
 		let anthropicReasoning: readonly IVSCloneLLMMessageReasoningBlock[] | null = null;
 		let errorMessage: string | undefined;
 		let aborted = false;
@@ -1107,12 +1114,14 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					responseText = payload.fullText;
 					reasoning = payload.fullReasoning ?? reasoning;
 					anthropicReasoning = payload.anthropicReasoning ?? null;
+					tokenUsage = this.withRuntimeTokenUsageMetadata(payload.tokenUsage, options);
 					responseTranscriptText = this.replaceCurrentIterationTranscript(
 						options.threadId,
 						'',
 						payload.fullText,
 					);
 					this.applyAssistantReasoningFinal(options.threadId, reasoning, anthropicReasoning);
+					this.setTokenUsage(options.threadId, tokenUsage);
 					toolCall = payload.toolCall;
 				},
 				onAbort: () => {
@@ -1134,10 +1143,32 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			responseTranscriptText,
 			toolCall,
 			reasoning,
+			tokenUsage,
 			anthropicReasoning,
 			errorMessage,
 			aborted,
 		};
+	}
+
+	private withRuntimeTokenUsageMetadata(
+		tokenUsage: IVSCloneTokenUsage | undefined,
+		options: IVSCloneThreadRuntimeRunOptions,
+	): IVSCloneTokenUsage | undefined {
+		if (!tokenUsage) {
+			return undefined;
+		}
+		return {
+			...tokenUsage,
+			modelIdentifier: options.modelIdentifier,
+			updatedAt: Date.now(),
+		};
+	}
+
+	private setTokenUsage(threadId: string, tokenUsage: IVSCloneTokenUsage | undefined): void {
+		this.updateState(threadId, state => ({
+			...state,
+			tokenUsage,
+		}));
 	}
 
 	private appendAssistantDeltaToRuntime(threadId: string, responseText: string, delta: string): string {
@@ -1779,6 +1810,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			turnId: state.turnId,
 			mode: state.mode,
 			messages,
+			tokenUsage: state.tokenUsage,
 			assistantEditApplications,
 			checkpoints: state.checkpoints,
 			currentCheckpointId,

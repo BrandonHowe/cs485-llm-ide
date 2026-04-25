@@ -136,6 +136,7 @@ export class VSCloneLLMMessageService extends Disposable implements IVSCloneLLMM
 				fullReasoning: event.fullReasoning,
 				toolCall: event.toolCall,
 				anthropicReasoning: event.anthropicReasoning,
+				tokenUsage: event.tokenUsage,
 			});
 			this.finishRequest(event.requestId);
 		}));

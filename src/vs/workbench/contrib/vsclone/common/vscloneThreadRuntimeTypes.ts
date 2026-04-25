@@ -7,7 +7,7 @@ import { URI } from '../../../../base/common/uri.js';
 import type { IVSCloneChatTransportConversationMessage } from './vscloneChatTransportTypes.js';
 import type { IVSCloneContextSelection } from './vscloneContextSelectionTypes.js';
 import type { IVSCloneImageAttachment } from './vscloneImageAttachmentTypes.js';
-import type { IVSCloneLLMMessageReasoningBlock } from './vscloneLLMMessageTypes.js';
+import type { IVSCloneLLMMessageReasoningBlock, IVSCloneTokenUsage } from './vscloneLLMMessageTypes.js';
 import type { VSCloneReasoningEffortLevel } from './vscloneModelCapabilities.js';
 import type { VSCloneModelVendor } from './vscloneOAuthTypes.js';
 import type { VSCloneChatMode } from './vsclonePlanModeTypes.js';
@@ -271,6 +271,12 @@ export interface IVSCloneThreadRuntimeState {
 	readonly mode?: VSCloneChatMode;
 	readonly streamState: VSCloneThreadStreamState;
 	readonly messages: readonly IVSCloneThreadRuntimeMessage[];
+	/**
+	 * Latest runtime-owned context usage for the active branch. Provider usage is recorded only after
+	 * a completed request because those SDK counters describe what was actually accepted/generated;
+	 * composer preflight estimates stay local to the UI and are intentionally not persisted here.
+	 */
+	readonly tokenUsage?: IVSCloneTokenUsage;
 	readonly assistantEditApplications?: readonly IVSCloneThreadRuntimeAssistantEditApplication[];
 	readonly checkpoints: readonly IVSCloneThreadRuntimeCheckpoint[];
 	readonly currentCheckpointId?: string;

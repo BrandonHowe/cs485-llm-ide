@@ -1698,6 +1698,100 @@
 	opacity: 0.55;
 }
 
+.vsclone-thread-context-usage-root {
+	flex: none;
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+}
+
+.vsclone-thread-context-usage {
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 82%, transparent 18%);
+	color: var(--vscode-descriptionForeground);
+	cursor: pointer;
+}
+
+.vsclone-thread-context-usage.hidden {
+	display: none;
+}
+
+.vsclone-thread-context-usage-ring {
+	width: 18px;
+	height: 18px;
+	transform: rotate(-90deg);
+}
+
+.vsclone-thread-context-usage-ring .track,
+.vsclone-thread-context-usage-ring .progress {
+	fill: none;
+	stroke-width: 2.5;
+}
+
+.vsclone-thread-context-usage-ring .track {
+	stroke: color-mix(in srgb, var(--vscode-descriptionForeground) 28%, transparent 72%);
+}
+
+.vsclone-thread-context-usage-ring .progress {
+	stroke: var(--vscode-charts-blue);
+	stroke-linecap: round;
+	transition: stroke-dashoffset 120ms ease, stroke 120ms ease;
+}
+
+.vsclone-thread-context-usage.warning .vsclone-thread-context-usage-ring .progress {
+	stroke: var(--vscode-editorWarning-foreground);
+}
+
+.vsclone-thread-context-usage.error .vsclone-thread-context-usage-ring .progress {
+	stroke: var(--vscode-errorForeground);
+}
+
+.vsclone-thread-context-usage-popover {
+	position: absolute;
+	right: 0;
+	bottom: calc(100% + 8px);
+	z-index: 20;
+	padding: 6px 8px;
+	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	border-radius: 6px;
+	background: var(--vscode-editorWidget-background);
+	box-shadow: 0 4px 14px rgb(0 0 0 / 30%);
+	color: var(--vscode-editorWidget-foreground);
+	font-size: 12px;
+	line-height: 1;
+	pointer-events: none;
+	white-space: nowrap;
+}
+
+.vsclone-thread-context-usage-popover.hidden {
+	display: none;
+}
+
+.vsclone-thread-context-usage-popover::after {
+	content: "";
+	position: absolute;
+	right: 8px;
+	bottom: -5px;
+	width: 8px;
+	height: 8px;
+	border-right: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	background: var(--vscode-editorWidget-background);
+	transform: rotate(45deg);
+}
+
+.vsclone-thread-context-usage-popover-value {
+	color: var(--vscode-foreground);
+	font-variant-numeric: tabular-nums;
+}
+
 .vsclone-thread-composer-hint {
 	position: absolute;
 	width: 1px;

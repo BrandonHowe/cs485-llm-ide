@@ -28,6 +28,7 @@ import { IClipboardService } from "../../../../platform/clipboard/common/clipboa
 import { IConfigurationService } from "../../../../platform/configuration/common/configuration.js";
 import { IContextKeyService } from "../../../../platform/contextkey/common/contextkey.js";
 import { IContextMenuService } from "../../../../platform/contextview/browser/contextView.js";
+import { IFileService } from "../../../../platform/files/common/files.js";
 import { IHoverService } from "../../../../platform/hover/browser/hover.js";
 import { IInstantiationService } from "../../../../platform/instantiation/common/instantiation.js";
 import { IKeybindingService } from "../../../../platform/keybinding/common/keybinding.js";
@@ -74,6 +75,7 @@ import {
 	toVSCloneImageDataUrl,
 	type IVSCloneImageAttachment,
 } from "../common/vscloneImageAttachmentTypes.js";
+import type { IVSCloneTokenUsage } from "../common/vscloneLLMMessageTypes.js";
 import {
 	type IVSCloneThreadRuntimeAssistantEditSuggestion,
 	type IVSCloneThreadRuntimeCatalogEntry,
@@ -87,6 +89,7 @@ import { CancellationTokenSource } from "../../../../base/common/cancellation.js
 import { ILanguageService } from "../../../../editor/common/languages/language.js";
 import { ICodeEditorService } from "../../../../editor/browser/services/codeEditorService.js";
 import { VSCloneAutocompleteDebounceMsMaximum } from "./vscloneAutocompleteService.js";
+import { formatContextSelections } from "../common/vsclonePrompts.js";
 
 const railWidthSetting = VSCloneChatRailWidthSetting;
 const modelSwitcherEnabledSetting = "vsclone.modelSwitcher.enabled";
@@ -101,6 +104,16 @@ const booleanSettingDefaults: Record<string, boolean> = {
 const railMinWidth = 220;
 const railMaxWidth = 520;
 const compactRailBreakpoint = 900;
+const estimatedCharsPerToken = 4;
+let contextUsageIdPool = 0;
+
+const modelContextWindowById: readonly [RegExp, number][] = [
+	[/gpt-5/i, 400_000],
+	[/claude.*4|haiku-4/i, 200_000],
+	[/claude-3/i, 200_000],
+	[/gemini-3/i, 1_000_000],
+	[/gemini-2\.5/i, 1_000_000],
+];
 
 // Read-only tool calls get collapsed to a single italic status line. `list_directory` is kept
 // alongside `ls_dir` so historical transcripts that used the old alias still render compactly.
@@ -229,6 +242,23 @@ function toHumanReadableRuntimeError(raw: string): string {
 	return trimmed;
 }
 
+function formatTokenEstimate(tokens: number): string {
+	if (tokens >= 1_000_000) {
+		return `${(tokens / 1_000_000).toFixed(1)}M`;
+	}
+	if (tokens >= 1_000) {
+		return `${(tokens / 1_000).toFixed(1)}K`;
+	}
+	return String(tokens);
+}
+
+interface IContextUsageDisplay {
+	readonly usage: IVSCloneTokenUsage;
+	readonly characters?: number;
+	readonly percentage: number;
+	readonly label: string;
+}
+
 // The compact tool row and diff card header share the same truncation rule: show just the
 // filename (the only segment a user actually reads in chat) and keep the full path on hover.
 // Works for raw paths, file:// URIs, and falls back to the input for glob patterns or text.
@@ -352,6 +382,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private settingsFocusTarget: HTMLElement | undefined;
 	private composerInput: HTMLTextAreaElement | undefined;
 	private composerSendButton: HTMLButtonElement | undefined;
+	private composerContextUsageButton: HTMLButtonElement | undefined;
+	private composerContextUsageProgressPath: SVGCircleElement | undefined;
+	private composerContextUsagePopover: HTMLElement | undefined;
+	private composerContextUsagePopoverPinned = false;
 	private modelSwitcher: VSCloneModelSwitcherWidget | undefined;
 	private modelSwitcherHost: HTMLElement | undefined;
 	private planModeContainer: HTMLElement | undefined;
@@ -368,6 +402,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private pendingImages: IPendingImageAttachment[] = [];
 	private composerContextStrip: HTMLElement | undefined;
 	private pendingContextSelections: IVSCloneContextSelection[] = [];
+	private pendingContextSelectionsCharacterKey = '';
+	private pendingContextSelectionsCharacters = 0;
+	private pendingContextSelectionsCharacterVersion = 0;
 	private mentionMenuRoot: HTMLElement | undefined;
 	private mentionMenuList: HTMLElement | undefined;
 	private mentionMenuHeaderQuery: HTMLElement | undefined;
@@ -445,6 +482,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		@IEditorService private readonly editorService: IEditorService,
 		@IMarkdownRendererService
 		private readonly markdownRendererService: IMarkdownRendererService,
+		@IFileService private readonly fileService: IFileService,
 		@IVSCloneMentionSearchService
 		private readonly mentionSearchService: IVSCloneMentionSearchService,
 		@ILanguageService private readonly languageService: ILanguageService,
@@ -868,6 +906,48 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		send.appendChild(sendIcon);
 		this.composerSendButton = send;
 
+		const contextUsageRoot = document.createElement('div');
+		contextUsageRoot.className = 'vsclone-thread-context-usage-root';
+		const contextUsageButton = document.createElement('button');
+		contextUsageButton.type = 'button';
+		contextUsageButton.className = 'vsclone-thread-context-usage';
+		contextUsageButton.setAttribute('aria-label', localize('vsclone.composer.contextUsage', 'Context window usage'));
+		// The usage ring is both a compact meter and a disclosure. Keeping it as an enabled button
+		// lets keyboard users open the same details popover that pointer users see on hover.
+		const contextUsagePopoverId = `vsclone-context-usage-${++contextUsageIdPool}`;
+		contextUsageButton.setAttribute('aria-expanded', 'false');
+		contextUsageButton.setAttribute('aria-controls', contextUsagePopoverId);
+		contextUsageButton.setAttribute('aria-haspopup', 'dialog');
+		const contextUsageSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		contextUsageSvg.setAttribute('viewBox', '0 0 20 20');
+		contextUsageSvg.setAttribute('role', 'meter');
+		contextUsageSvg.setAttribute('aria-label', localize('vsclone.composer.contextUsageMeter', 'Context usage meter'));
+		contextUsageSvg.setAttribute('aria-valuemin', '0');
+		contextUsageSvg.setAttribute('aria-valuemax', '100');
+		contextUsageSvg.classList.add('vsclone-thread-context-usage-ring');
+		const contextUsageTrack = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+		contextUsageTrack.setAttribute('cx', '10');
+		contextUsageTrack.setAttribute('cy', '10');
+		contextUsageTrack.setAttribute('r', '8');
+		contextUsageTrack.classList.add('track');
+		const contextUsageProgress = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+		contextUsageProgress.setAttribute('cx', '10');
+		contextUsageProgress.setAttribute('cy', '10');
+		contextUsageProgress.setAttribute('r', '8');
+		contextUsageProgress.classList.add('progress');
+		contextUsageSvg.appendChild(contextUsageTrack);
+		contextUsageSvg.appendChild(contextUsageProgress);
+		contextUsageButton.appendChild(contextUsageSvg);
+		contextUsageRoot.appendChild(contextUsageButton);
+		const contextUsagePopover = document.createElement('div');
+		contextUsagePopover.id = contextUsagePopoverId;
+		contextUsagePopover.className = 'vsclone-thread-context-usage-popover hidden';
+		contextUsagePopover.setAttribute('role', 'status');
+		contextUsageRoot.appendChild(contextUsagePopover);
+		this.composerContextUsageButton = contextUsageButton;
+		this.composerContextUsageProgressPath = contextUsageProgress;
+		this.composerContextUsagePopover = contextUsagePopover;
+
 		const controls = document.createElement('div');
 		controls.className = 'vsclone-thread-composer-controls';
 		this.planModeContainer = undefined;
@@ -1045,6 +1125,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		toolbar.className = 'vsclone-thread-composer-toolbar';
 		toolbar.appendChild(addContextRoot);
 		toolbar.appendChild(controls);
+		toolbar.appendChild(contextUsageRoot);
 		toolbar.appendChild(send);
 
 		const imageStrip = document.createElement('div');
@@ -1115,9 +1196,26 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			addDisposableListener(input, EventType.INPUT, () => {
 				this.updateComposerMetrics();
 				this.updateComposerState();
+				this.updateContextUsageIndicator();
 				this.handleMentionInput();
 			}),
 		);
+
+		this._register(addDisposableListener(contextUsageRoot, EventType.MOUSE_ENTER, () => this.setContextUsagePopoverVisible(true)));
+		this._register(addDisposableListener(contextUsageRoot, EventType.MOUSE_LEAVE, () => {
+			if (!this.composerContextUsagePopoverPinned) {
+				this.setContextUsagePopoverVisible(false);
+			}
+		}));
+		this._register(addDisposableListener(contextUsageButton, EventType.FOCUS, () => this.setContextUsagePopoverVisible(true)));
+		this._register(addDisposableListener(contextUsageButton, EventType.BLUR, () => {
+			this.composerContextUsagePopoverPinned = false;
+			this.setContextUsagePopoverVisible(false);
+		}));
+		this._register(addDisposableListener(contextUsageButton, EventType.CLICK, () => {
+			this.composerContextUsagePopoverPinned = !this.composerContextUsagePopoverPinned;
+			this.setContextUsagePopoverVisible(this.composerContextUsagePopoverPinned);
+		}));
 
 		this._register(
 			addDisposableListener(
@@ -1718,6 +1816,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}
 		}
 		this.renderImageStrip();
+		this.updateContextUsageIndicator();
 	}
 
 	private readFileAsBase64(file: File): Promise<string> {
@@ -1785,6 +1884,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				e.stopPropagation();
 				this.pendingImages.splice(index, 1);
 				this.renderImageStrip();
+				this.updateContextUsageIndicator();
 			});
 
 			thumb.appendChild(preview);
@@ -1955,9 +2055,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private addContextSelection(selection: IVSCloneContextSelection): void {
 		this.pendingContextSelections.push(selection);
 		this.renderContextChipStrip();
+		this.updateContextUsageIndicator();
 	}
 
 	private renderContextChipStrip(): void {
+		this.refreshPendingContextSelectionCharacterCount();
 		if (!this.composerContextStrip) {
 			return;
 		}
@@ -1999,12 +2101,57 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				event.stopPropagation();
 				this.pendingContextSelections.splice(index, 1);
 				this.renderContextChipStrip();
+				this.updateContextUsageIndicator();
 			});
 			chip.appendChild(icon);
 			chip.appendChild(label);
 			chip.appendChild(removeBtn);
 			this.composerContextStrip.appendChild(chip);
 		}
+	}
+
+	private refreshPendingContextSelectionCharacterCount(): void {
+		const key = this.getPendingContextSelectionsCharacterKey();
+		if (key === this.pendingContextSelectionsCharacterKey) {
+			return;
+		}
+
+		this.pendingContextSelectionsCharacterKey = key;
+		const version = ++this.pendingContextSelectionsCharacterVersion;
+		if (this.pendingContextSelections.length === 0) {
+			this.pendingContextSelectionsCharacters = 0;
+			this.updateContextUsageIndicator();
+			return;
+		}
+
+		// The request path expands @file/@folder/code selections into markdown before sending. Count
+		// that same serialized block asynchronously so large attached files do not look like tiny
+		// path-only additions in the preflight meter.
+		void formatContextSelections(this.pendingContextSelections, this.fileService).then(serializedContext => {
+			if (version !== this.pendingContextSelectionsCharacterVersion) {
+				return;
+			}
+			this.pendingContextSelectionsCharacters = serializedContext.length;
+			this.updateContextUsageIndicator();
+		}, () => {
+			if (version !== this.pendingContextSelectionsCharacterVersion) {
+				return;
+			}
+			this.pendingContextSelectionsCharacters = this.pendingContextSelections.reduce((sum, selection) => sum + this.estimateContextSelectionCharacters(selection), 0);
+			this.updateContextUsageIndicator();
+		});
+	}
+
+	private getPendingContextSelectionsCharacterKey(): string {
+		return JSON.stringify(this.pendingContextSelections.map(selection => {
+			if (selection.kind === 'codeSelection') {
+				return [selection.kind, selection.uri.toString(), selection.languageId, selection.startLine, selection.endLine];
+			}
+			if (selection.kind === 'file') {
+				return [selection.kind, selection.uri.toString(), selection.languageId];
+			}
+			return [selection.kind, selection.uri.toString()];
+		}));
 	}
 
 	private addActiveEditorCodeSelectionAsContext(): void {
@@ -2298,6 +2445,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		this.updateComposerState();
+		this.updateContextUsageIndicator();
 		this.refreshModelControls();
 		this.scheduleScrollToBottom();
 		this.updateConversationModeVisibility();
@@ -4951,6 +5099,180 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				"Type your prompt here...",
 			);
 		}
+		this.updateContextUsageIndicator();
+	}
+
+	private updateContextUsageIndicator(): void {
+		if (!this.composerContextUsageButton || !this.composerContextUsageProgressPath || !this.composerContextUsagePopover) {
+			return;
+		}
+
+		const selectedModel = this.getCurrentComposerModelSelection(this.activeThreadId);
+		if (!selectedModel) {
+			this.clearContextUsageIndicator();
+			return;
+		}
+		const contextWindow = this.getEstimatedModelContextWindow(selectedModel.modelIdentifier);
+
+		this.composerContextUsageButton.classList.remove('hidden');
+		const displayUsage = this.getContextUsageDisplay(contextWindow, selectedModel.modelIdentifier);
+		const circumference = 2 * Math.PI * 8;
+		this.composerContextUsageProgressPath.style.strokeDasharray = `${circumference}`;
+		this.composerContextUsageProgressPath.style.strokeDashoffset = `${circumference * (1 - displayUsage.percentage / 100)}`;
+		const meter = this.composerContextUsageProgressPath.ownerSVGElement;
+		meter?.setAttribute('aria-valuenow', displayUsage.percentage.toFixed(0));
+		meter?.setAttribute('aria-valuetext', localize(
+			'vsclone.composer.contextUsage.meterValue',
+			'{0} percent of context window used',
+			displayUsage.percentage.toFixed(0),
+		));
+		this.composerContextUsageButton.classList.toggle('warning', displayUsage.percentage >= 75 && displayUsage.percentage < 90);
+		this.composerContextUsageButton.classList.toggle('error', displayUsage.percentage >= 90);
+
+		this.renderContextUsagePopover(displayUsage);
+	}
+
+	private clearContextUsageIndicator(): void {
+		if (!this.composerContextUsageButton || !this.composerContextUsagePopover) {
+			return;
+		}
+
+		this.composerContextUsagePopoverPinned = false;
+		this.composerContextUsageButton.classList.add('hidden');
+		this.composerContextUsageButton.classList.remove('warning', 'error');
+		this.composerContextUsageButton.setAttribute('aria-expanded', 'false');
+		this.composerContextUsageButton.setAttribute('aria-label', localize('vsclone.composer.contextUsageUnavailable', 'Context window usage unavailable'));
+		this.composerContextUsagePopover.classList.add('hidden');
+		this.composerContextUsagePopover.replaceChildren();
+	}
+
+	private setContextUsagePopoverVisible(visible: boolean): void {
+		if (!this.composerContextUsageButton || !this.composerContextUsagePopover || this.composerContextUsageButton.classList.contains('hidden')) {
+			return;
+		}
+
+		this.composerContextUsagePopover.classList.toggle('hidden', !visible);
+		this.composerContextUsageButton.setAttribute('aria-expanded', visible ? 'true' : 'false');
+	}
+
+	private getContextUsageDisplay(contextWindow: number, modelIdentifier: string): IContextUsageDisplay {
+		const runtimeState = this.getThreadRuntimeState(this.activeThreadId);
+		const providerUsage = runtimeState?.tokenUsage;
+		const hasPendingComposerInput = this.hasPendingComposerContext();
+		if (providerUsage?.source === 'provider'
+			&& runtimeState?.streamState.kind === 'idle'
+			&& !hasPendingComposerInput
+			&& (!providerUsage.modelIdentifier || providerUsage.modelIdentifier === modelIdentifier)) {
+			const usage = {
+				...providerUsage,
+				maxTokens: providerUsage.maxTokens ?? contextWindow,
+			};
+			return {
+				usage,
+				percentage: Math.max(0, Math.min(100, (usage.usedTokens / (usage.maxTokens ?? contextWindow)) * 100)),
+				label: localize('vsclone.composer.contextUsage.providerLabel', 'Provider reported'),
+			};
+		}
+
+		const localContext = this.countCurrentContextLocally();
+		const estimatedPromptTokens = Math.max(0, Math.ceil(localContext.characters / estimatedCharsPerToken));
+		const usage: IVSCloneTokenUsage = {
+			usedTokens: estimatedPromptTokens,
+			maxTokens: contextWindow,
+			inputTokens: estimatedPromptTokens,
+			source: 'local-preflight',
+			modelIdentifier,
+		};
+		return {
+			usage,
+			characters: localContext.characters,
+			percentage: Math.max(0, Math.min(100, (estimatedPromptTokens / contextWindow) * 100)),
+			label: localize('vsclone.composer.contextUsage.preflightLabel', 'Local preflight estimate'),
+		};
+	}
+
+	private hasPendingComposerContext(): boolean {
+		return (this.composerInput?.value.trim().length ?? 0) > 0
+			|| this.pendingContextSelections.length > 0
+			|| this.pendingImages.length > 0;
+	}
+
+	private renderContextUsagePopover(displayUsage: IContextUsageDisplay): void {
+		if (!this.composerContextUsageButton || !this.composerContextUsagePopover) {
+			return;
+		}
+
+		const { usage, percentage } = displayUsage;
+		const maxTokens = usage.maxTokens ?? 0;
+		this.composerContextUsagePopover.replaceChildren();
+		const tokenLine = document.createElement('div');
+		tokenLine.className = 'vsclone-thread-context-usage-popover-value';
+		tokenLine.textContent = localize(
+			'vsclone.composer.contextUsage.tokensValueConcise',
+			'{0} / {1} ({2}%)',
+			formatTokenEstimate(usage.usedTokens),
+			formatTokenEstimate(maxTokens),
+			percentage.toFixed(0),
+		);
+		this.composerContextUsagePopover.append(tokenLine);
+
+		const accessibleLabel = localize(
+			'vsclone.composer.contextUsage.accessibleConcise',
+			'Context window usage: {0} of {1} tokens, {2} percent. Press to show details.',
+			formatTokenEstimate(usage.usedTokens),
+			formatTokenEstimate(maxTokens),
+			percentage.toFixed(0),
+		);
+		this.composerContextUsageButton.setAttribute('aria-label', accessibleLabel);
+	}
+
+	private countCurrentContextLocally(): { readonly characters: number } {
+		const runtimeState = this.getThreadRuntimeState(this.activeThreadId);
+		let characters = 0;
+		for (const message of runtimeState?.messages ?? []) {
+			if (message.role === 'user') {
+				// Stored user messages already include the serialized SELECTIONS block in `content`.
+				// The metadata only drives transcript chips, so adding it here would double-count
+				// context that the LLM sees once on replay.
+				characters += message.content.length;
+			} else if (message.role === 'assistant') {
+				characters += message.content.length;
+				characters += message.reasoning?.length ?? 0;
+			} else if (message.role === 'tool') {
+				// Tool payloads are replayed to the model as compact transcript state, so include
+				// names, params, and output while avoiding UI-only checkpoint snapshots.
+				characters += message.toolName.length;
+				characters += JSON.stringify(message.params).length;
+				characters += message.type !== 'tool_request' && message.type !== 'running_now'
+					? message.output?.length ?? 0
+					: 0;
+			}
+		}
+
+		characters += this.composerInput?.value.length ?? 0;
+		characters += this.pendingContextSelectionsCharacters;
+		characters += this.pendingImages.length * 1_000 * estimatedCharsPerToken;
+		return { characters: Math.max(0, characters) };
+	}
+
+	private estimateContextSelectionCharacters(selection: IVSCloneContextSelection): number {
+		const pathLength = selection.uri.toString().length;
+		if (selection.kind !== 'codeSelection') {
+			return pathLength;
+		}
+		return pathLength + String(selection.startLine).length + String(selection.endLine).length;
+	}
+
+	private getEstimatedModelContextWindow(modelIdentifier: string): number {
+		const modelId = modelIdentifier.split('/').slice(1).join('/') || modelIdentifier;
+		for (const [pattern, contextWindow] of modelContextWindowById) {
+			if (pattern.test(modelId)) {
+				return contextWindow;
+			}
+		}
+		// Unknown provider models still need a useful meter; 128k is a conservative modern default
+		// that avoids implying unlimited context when the static catalog lacks Void's metadata.
+		return 128_000;
 	}
 
 	private scheduleScrollToBottom(): void {
