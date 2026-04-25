@@ -9,10 +9,13 @@
 	height: 100%;
 	width: 100%;
 	overflow: hidden;
-	background: var(--vscode-editor-background);
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 8px;
+	/* The chat surface intentionally uses a Codex-like fixed dark ramp so it reads as one
+	 * coherent tool inside VS Code instead of inheriting every editor/sidebar contrast split. */
+	background: #101114;
+	border: 1px solid #303442;
+	border-radius: 10px;
 	position: relative;
+	color: #d8dbe3;
 }
 
 
@@ -37,9 +40,9 @@
 	flex: none;
 	height: 100%;
 	min-width: 0;
-	border-right: 1px solid var(--vscode-panel-border);
+	border-right: 1px solid #30323a;
 	overflow: hidden;
-	background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-sideBar-background) 8%);
+	background: #1f1f1f;
 	transition: width 120ms ease;
 }
 
@@ -61,7 +64,7 @@
 	overflow: hidden;
 	display: flex;
 	flex-direction: column;
-	background: color-mix(in srgb, var(--vscode-editor-background) 96%, black 4%);
+	background: #101114;
 }
 
 .vsclone-unified-chat-view-pane.rail-hidden .vsclone-chat-left-rail {
@@ -80,21 +83,30 @@
 .vsclone-thread-actions {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
+	justify-content: flex-start;
 	gap: 8px;
-	padding: 10px 12px 0;
+	padding: 8px 10px;
+	border-bottom: 1px solid #292c35;
+	background: #101114;
 }
 
 .vsclone-thread-action-button {
-	height: 26px;
-	padding: 0 10px;
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 5px;
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	height: 24px;
+	padding: 0 8px;
+	border: 1px solid #12324a;
+	border-radius: 8px;
 	cursor: pointer;
-	font-size: 12px;
+	font-size: 11px;
 	font-weight: 600;
-	background: var(--vscode-button-secondaryBackground);
-	color: var(--vscode-button-secondaryForeground);
+	background: #151922;
+	color: #d9dce5;
+}
+
+.vsclone-thread-actions-spacer {
+	flex: 1;
 }
 
 /* The gear is icon-only, so give it the same visual treatment as text actions with a fixed square hit target. */
@@ -102,19 +114,20 @@
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 26px;
-	height: 26px;
+	width: 24px;
+	height: 24px;
 	padding: 0;
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 5px;
+	border: 1px solid #12324a;
+	border-radius: 8px;
 	cursor: pointer;
-	background: var(--vscode-button-secondaryBackground);
-	color: var(--vscode-button-secondaryForeground);
+	background: #151922;
+	color: #aeb4c2;
 }
 
 .vsclone-thread-action-button:hover,
 .vsclone-thread-action-overflow:hover {
-	background: var(--vscode-button-secondaryHoverBackground);
+	background: #1f2f46;
+	color: #f1f3f8;
 }
 
 .vsclone-thread-action-button:focus-visible,
@@ -127,7 +140,7 @@
 	flex: 1;
 	min-height: 0;
 	overflow: auto;
-	padding: 12px 14px 14px;
+	padding: 14px 16px 14px;
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
@@ -151,10 +164,10 @@
 	flex-direction: column;
 	align-items: center;
 	justify-content: center;
-	gap: 10px;
-	padding: 28px;
+	gap: 6px;
+	padding: 24px;
 	text-align: center;
-	color: var(--vscode-descriptionForeground);
+	color: #9a9ca3;
 	line-height: 1.45;
 }
 
@@ -166,27 +179,64 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 44px;
-	height: 44px;
-	border-radius: 50%;
-	background: color-mix(in srgb, var(--vscode-editorWidget-background) 70%, transparent 30%);
-	color: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--vscode-foreground) 20%);
-	margin-bottom: 2px;
+	width: 48px;
+	height: 48px;
+	border-radius: 14px;
+	border: 1px solid #3a3d44;
+	background: #222326;
+	color: #007acc;
+	margin-bottom: 10px;
 }
 
 .vsclone-thread-empty-state-icon .codicon {
-	font-size: 22px;
+	font-size: 20px;
 }
 
 .vsclone-thread-empty-state-title {
-	font-size: 14px;
-	font-weight: 600;
-	color: var(--vscode-foreground);
+	font-size: 16px;
+	font-weight: 700;
+	color: #d8d8dc;
 }
 
 .vsclone-thread-empty-state-description {
-	font-size: 12px;
-	max-width: 280px;
+	font-size: 13px;
+	max-width: 300px;
+	color: #a4a4aa;
+}
+
+.vsclone-thread-empty-state-suggestions {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	width: min(340px, 100%);
+	margin-top: 16px;
+}
+
+.vsclone-thread-empty-state-suggestion {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 34px;
+	padding: 0 12px;
+	border: 1px solid #12324a;
+	border-radius: 8px;
+	background: #172536;
+	color: #cfd0d4;
+	font: inherit;
+	font-size: 13px;
+	font-weight: 600;
+	text-align: left;
+	cursor: pointer;
+}
+
+.vsclone-thread-empty-state-suggestion .codicon {
+	color: #007acc;
+}
+
+.vsclone-thread-empty-state-suggestion:hover {
+	background: #1f2f46;
+	border-color: #007acc;
 }
 
 .vsclone-thread-messages.hidden,
@@ -359,14 +409,15 @@
 	max-width: min(780px, 96%);
 	padding: 9px 11px;
 	border-radius: 8px;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 80%, transparent 20%);
-	background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorWidget-background) 10%);
+	border: 1px solid #2b3141;
+	background: #171a24;
 }
 
 .vsclone-thread-message.user {
 	align-self: flex-end;
-	background: color-mix(in srgb, var(--vscode-button-background) 22%, transparent 78%);
-	border-color: color-mix(in srgb, var(--vscode-button-background) 35%, transparent 65%);
+	background: #25283a;
+	border-color: #2d3349;
+	color: #e3e4ea;
 }
 
 .vsclone-thread-message.assistant {
@@ -375,7 +426,7 @@
 
 .vsclone-thread-message.runtime {
 	max-width: min(760px, 94%);
-	background: color-mix(in srgb, var(--vscode-editorWidget-background) 68%, var(--vscode-editor-background) 32%);
+	background: #171a24;
 }
 
 .vsclone-thread-message.assistant.streaming {
@@ -916,10 +967,10 @@
 
 .vsclone-tool-card {
 	margin: 6px 0;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 65%, transparent 35%);
-	border-radius: 6px;
+	border: 1px solid #2b3141;
+	border-radius: 8px;
 	overflow: hidden;
-	background: color-mix(in srgb, var(--vscode-editorWidget-background) 72%, var(--vscode-editor-background) 28%);
+	background: #171a24;
 	box-sizing: border-box;
 	min-width: 0;
 	max-width: 100%;
@@ -1030,9 +1081,9 @@
 	flex-direction: column;
 	gap: 8px;
 	padding: 10px 12px;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 60%, transparent 40%);
-	border-radius: 4px;
-	background: color-mix(in srgb, var(--vscode-editorWidget-background) 55%, var(--vscode-editor-background) 45%);
+	border: 1px solid #683d3d;
+	border-radius: 10px;
+	background: #171a24;
 	box-sizing: border-box;
 	min-width: 0;
 	max-width: 100%;
@@ -1641,65 +1692,94 @@
 }
 
 .vsclone-thread-composer {
-	border-top: 1px solid var(--vscode-panel-border);
-	padding: 8px 12px;
+	border-top: 1px solid #292c35;
+	padding: 8px 10px;
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
-	background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorWidget-background) 10%);
+	gap: 0;
+	background: #101114;
+}
+
+.vsclone-thread-composer-card {
+	display: flex;
+	flex-direction: column;
+	border: 1px solid #12324a;
+	border-radius: 8px;
+	background: #181a23;
+	/* No overflow: hidden -- that would clip the model switcher and mention popups that anchor
+	 * above the toolbar. The textarea/toolbar both use a transparent background so the card's
+	 * own rounded corners read through cleanly. */
+}
+
+.vsclone-thread-composer-card:focus-within {
+	border-color: var(--vscode-focusBorder);
 }
 
 .vsclone-thread-composer-input {
+	/* Render as block so the textarea (a replaced inline element) doesn't leave a baseline
+	 * descender gap below itself inside the wrapping <div>. */
+	display: block;
 	width: 100%;
 	min-width: 0;
 	resize: none;
-	min-height: 40px;
-	max-height: 132px;
-	padding: 10px 11px;
-	border-radius: 6px;
+	min-height: 32px;
+	max-height: 104px;
+	padding: 8px 10px 2px;
 	outline: none;
-	border: 1px solid var(--vscode-panel-border);
-	background: var(--vscode-input-background);
-	color: var(--vscode-input-foreground);
+	border: none;
+	background: transparent;
+	color: #d8dbe3;
 	font: inherit;
-	line-height: 1.4;
+	font-size: 13px;
+	line-height: 20px;
 	overflow: auto;
 	box-sizing: border-box;
 }
 
-.vsclone-thread-composer-input:focus {
-	border-color: var(--vscode-focusBorder);
+/* The composer card already paints a focus ring via :focus-within, so suppress the global
+ * textarea focus-visible outline that would otherwise draw a second ring around just the
+ * textarea (not the toolbar). The selector mirrors the offending rule's specificity by
+ * including the pane class and the textarea element so it actually wins the cascade. */
+.vsclone-unified-chat-view-pane textarea.vsclone-thread-composer-input:focus-visible {
+	outline: none;
 }
 
 .vsclone-thread-composer-input::placeholder {
-	color: var(--vscode-input-placeholderForeground);
+	color: #9b9da5;
 }
 
 .vsclone-thread-composer-toolbar {
 	display: flex;
 	align-items: center;
 	gap: 6px;
+	padding: 0 8px 6px;
+	background: transparent;
 }
 
 .vsclone-thread-composer-send {
 	flex: none;
-	margin-left: auto;
-	width: 26px;
-	height: 26px;
-	padding: 0;
+	width: auto;
+	height: 24px;
+	padding: 0 9px;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	border: none;
-	border-radius: 6px;
+	border-radius: 8px;
 	cursor: pointer;
-	font-size: 14px;
-	background: var(--vscode-button-background);
-	color: var(--vscode-button-foreground);
+	font-size: 13px;
+	font-weight: 700;
+	background: #007acc;
+	color: #ffffff;
+}
+
+.vsclone-thread-composer-send::before {
+	content: "Send";
+	margin-right: 6px;
 }
 
 .vsclone-thread-composer-send:hover {
-	background: var(--vscode-button-hoverBackground);
+	background: #0e8fe3;
 }
 
 .vsclone-thread-composer-send.stop-mode {
@@ -1709,6 +1789,10 @@
 	border: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 42%, transparent 58%);
 	background: color-mix(in srgb, var(--vscode-errorForeground) 16%, var(--vscode-editor-background) 84%);
 	color: var(--vscode-errorForeground);
+}
+
+.vsclone-thread-composer-send.stop-mode::before {
+	content: none;
 }
 
 .vsclone-thread-composer-send.stop-mode:hover {
@@ -1725,6 +1809,9 @@
 	position: relative;
 	display: inline-flex;
 	align-items: center;
+	/* Anchors the usage ring + Send to the right edge of the toolbar so the meter sits next to
+	 * the Send button instead of floating in the middle of whatever leftover space remains. */
+	margin-left: auto;
 }
 
 .vsclone-thread-context-usage {
@@ -2021,15 +2108,15 @@
 
 .vsclone-add-context-button {
 	width: 26px;
-	height: 26px;
+	height: 24px;
 	padding: 0;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 90%, white 10%);
-	border-radius: 5px;
-	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 72%, var(--vscode-editor-background) 28%);
-	color: color-mix(in srgb, var(--vscode-editor-foreground) 88%, white 12%);
+	border: none;
+	border-radius: 7px;
+	background: #1f2f46;
+	color: #d7ecff;
 	font-size: 14px;
 	cursor: pointer;
 	transition: border-color 120ms ease, background 120ms ease;
@@ -2133,15 +2220,16 @@
 .vsclone-unified-chat-view-pane .vsclone-thread-reasoning-level-select {
 	appearance: none;
 	-webkit-appearance: none;
-	height: 28px;
-	width: 100%;
+	height: 24px;
+	/* Size to the longest option ("Medium") instead of stretching to fill the toolbar slot. */
+	width: auto;
 	border-radius: 5px;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 90%, white 10%);
-	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 72%, var(--vscode-editor-background) 28%);
-	color: color-mix(in srgb, var(--vscode-editor-foreground) 94%, white 6%);
-	font-size: 11px;
+	border: none;
+	background: #1f2f46;
+	color: #bfc1ca;
+	font-size: 12px;
 	font-weight: 600;
-	padding: 0 22px 0 8px;
+	padding: 0 22px 0 10px;
 	box-sizing: border-box;
 	outline: none;
 	cursor: pointer;
@@ -2173,18 +2261,18 @@
 }
 
 .vsclone-model-switcher-button {
-	height: 28px;
+	height: 24px;
 	max-width: 100%;
 	min-width: 0;
-	border-radius: 5px;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 90%, white 10%);
-	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 72%, var(--vscode-editor-background) 28%);
-	color: color-mix(in srgb, var(--vscode-editor-foreground) 94%, white 6%);
+	border-radius: 7px;
+	border: 1px solid #007acc;
+	background: #12324a;
+	color: #9cdcfe;
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
 	padding: 0 8px;
-	font-size: 11px;
+	font-size: 12px;
 	font-weight: 600;
 	cursor: pointer;
 	box-sizing: border-box;
@@ -2233,11 +2321,11 @@
 	position: absolute;
 	left: 0;
 	bottom: calc(100% + 6px);
-	width: min(320px, calc(100vw - 56px));
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, white 18%);
-	border-radius: 8px;
-	background: color-mix(in srgb, var(--vscode-editorWidget-background) 88%, var(--vscode-editor-background) 12%);
-	box-shadow: 0 16px 34px color-mix(in srgb, black 54%, transparent 46%);
+	width: min(340px, calc(100vw - 56px));
+	border: 1px solid #3f4248;
+	border-radius: 10px;
+	background: #252527;
+	box-shadow: 0 18px 42px rgb(0 0 0 / 55%);
 	z-index: 30;
 	overflow: hidden;
 }
@@ -2250,12 +2338,12 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 6px 10px;
-	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 85%, transparent 15%);
+	padding: 10px 12px;
+	border-bottom: 1px solid #3a3a3d;
 }
 
 .vsclone-model-switcher-menu-title {
-	font-size: 12px;
+	font-size: 13px;
 	font-weight: 700;
 	line-height: 1.15;
 }
@@ -2284,9 +2372,9 @@
 }
 
 .vsclone-model-switcher-menu-body {
-	max-height: min(360px, 56vh);
+	max-height: min(420px, 60vh);
 	overflow: auto;
-	padding: 4px 6px;
+	padding: 10px 8px;
 	display: flex;
 	flex-direction: column;
 	gap: 1px;
@@ -2296,14 +2384,14 @@
 	display: flex;
 	align-items: baseline;
 	gap: 4px;
-	padding: 6px 8px 2px;
+	padding: 8px 8px 4px;
 	height: auto;
 	background: transparent;
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 52%, transparent 48%);
 }
 
 .vsclone-model-switcher-section-label {
-	font-size: 9px;
+	font-size: 10px;
 	font-weight: 600;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
@@ -2322,11 +2410,11 @@
 
 .vsclone-model-switcher-row {
 	border: none;
-	border-radius: 4px;
+	border-radius: 8px;
 	background: transparent;
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 92%, white 8%);
-	min-height: 26px;
-	padding: 0 8px;
+	min-height: 34px;
+	padding: 0 10px;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
 	align-items: center;
@@ -2343,8 +2431,8 @@
 }
 
 .vsclone-model-switcher-row.selected {
-	background: color-mix(in srgb, var(--vscode-focusBorder) 52%, #0f3e6c 48%);
-	color: var(--vscode-button-foreground);
+	background: #007acc;
+	color: #f4f8ff;
 }
 
 .vsclone-model-switcher-row.selected .vsclone-model-switcher-row-label {
@@ -2361,8 +2449,8 @@
 .vsclone-model-switcher-row-label {
 	grid-column: 1;
 	grid-row: 1;
-	font-size: 12px;
-	font-weight: 580;
+	font-size: 13px;
+	font-weight: 700;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -2379,7 +2467,7 @@
 .vsclone-model-switcher-row-subtext {
 	grid-column: 1 / span 2;
 	grid-row: 2;
-	font-size: 10px;
+	font-size: 11px;
 	opacity: 0.68;
 	line-height: 1.2;
 	padding-top: 1px;
@@ -2389,15 +2477,15 @@
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
 	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 85%, transparent 15%);
-	background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 42%, transparent 58%);
+	background: #2b2b2c;
 }
 
 .vsclone-model-switcher-footer-button {
-	height: 30px;
+	height: 34px;
 	border: none;
 	background: transparent;
 	color: var(--vscode-button-secondaryForeground);
-	font-size: 11px;
+	font-size: 13px;
 	font-weight: 600;
 	cursor: pointer;
 	display: inline-flex;
@@ -2539,28 +2627,70 @@
 	height: 100%;
 	min-height: 0;
 	position: relative;
+	background: #1f1f1f;
+	color: #d0d0d0;
 }
 
 .vsclone-thread-rail-header {
 	flex: none;
-	padding: 10px 12px 6px;
-	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent 30%);
+	padding: 10px 12px;
+	border-bottom: 1px solid #333335;
+}
+
+.vsclone-thread-rail-search-wrap {
+	position: relative;
+	display: flex;
+	align-items: center;
+	height: 34px;
+	padding: 0 12px;
+	border: 1px solid #424245;
+	border-radius: 9px;
+	background: #242426;
+}
+
+.vsclone-thread-rail-search-wrap:focus-within {
+	border-color: var(--vscode-focusBorder);
+}
+
+.vsclone-thread-rail-search-icon {
+	flex: none;
+	color: #8a8b91;
+	font-size: 13px;
+	margin-right: 8px;
 }
 
 .vsclone-thread-rail-search {
-	width: 100%;
-	height: 28px;
-	padding: 0 10px;
-	border: 1px solid var(--vscode-input-border, transparent);
-	border-radius: 5px;
-	background: var(--vscode-input-background);
-	color: var(--vscode-input-foreground);
+	flex: 1;
+	min-width: 0;
+	height: 100%;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: #d0d0d0;
 	font: inherit;
+	font-size: 13px;
+	font-weight: 500;
 	outline: none;
+	/* Strip the UA "search" appearance so it can't draw its own focus ring inside the wrap. */
+	appearance: none;
+	-webkit-appearance: none;
 }
 
 .vsclone-thread-rail-search::placeholder {
 	color: var(--vscode-input-placeholderForeground);
+}
+
+/* The wrap already paints a focus ring via :focus-within, so force-suppress every form of
+ * focus styling the input itself might draw. !important is necessary because the global pane
+ * focus-visible rule earlier in this file uses outline-offset to draw the ring 2px outside
+ * the input edge, which appears as a second nested rectangle inside the wrap. */
+.vsclone-unified-chat-view-pane input.vsclone-thread-rail-search,
+.vsclone-unified-chat-view-pane input.vsclone-thread-rail-search:focus,
+.vsclone-unified-chat-view-pane input.vsclone-thread-rail-search:focus-visible {
+	outline: none !important;
+	outline-offset: 0 !important;
+	box-shadow: none !important;
+	border: none !important;
 }
 
 .vsclone-thread-rail-body {
@@ -2579,8 +2709,8 @@
 
 .vsclone-thread-rail-footer {
 	flex: none;
-	padding: 6px 10px 10px;
-	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent 30%);
+	padding: 10px 12px;
+	border-top: 1px solid #333335;
 }
 
 .vsclone-thread-rail-new-chat {
@@ -2588,20 +2718,21 @@
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	gap: 6px;
+	gap: 8px;
 	height: 30px;
 	padding: 0 12px;
-	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent 30%);
-	border-radius: 5px;
-	background: var(--vscode-button-secondaryBackground, transparent);
-	color: var(--vscode-button-secondaryForeground, inherit);
+	border: none;
+	border-radius: 8px;
+	background: #007acc;
+	color: #ffffff;
 	font: inherit;
-	font-weight: 600;
+	font-size: 13px;
+	font-weight: 700;
 	cursor: pointer;
 }
 
 .vsclone-thread-rail-new-chat:hover {
-	background: var(--vscode-button-secondaryHoverBackground, color-mix(in srgb, var(--vscode-list-hoverBackground) 80%, transparent 20%));
+	background: #0e8fe3;
 }
 
 .vsclone-thread-rail-list.hidden,
@@ -2609,29 +2740,52 @@
 	display: none;
 }
 
+.vsclone-thread-rail-group-header {
+	padding: 14px 14px 6px;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: #6f7079;
+}
+
 .vsclone-thread-rail-row {
+	position: relative;
 	box-sizing: border-box;
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	width: 100%;
-	padding: 6px 12px;
+	width: calc(100% - 8px);
+	margin: 1px 4px;
+	padding: 6px 10px 6px 18px;
+	border-radius: 6px;
 	cursor: pointer;
-	opacity: 0.85;
-	min-height: 28px;
+	opacity: 1;
+	min-height: 30px;
 	min-width: 0;
 }
 
 .vsclone-thread-rail-row:hover,
 .vsclone-thread-rail-row.hovered {
-	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 50%, transparent 50%);
-	opacity: 1;
+	background: #28282a;
 }
 
 .vsclone-thread-rail-row.selected {
-	background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 75%, transparent 25%);
-	color: var(--vscode-list-activeSelectionForeground);
-	opacity: 1;
+	background: #2a2c30;
+	color: #e5e5e7;
+}
+
+/* Dot indicator on the selected row, mirroring the target design's blue marker. */
+.vsclone-thread-rail-row.selected::before {
+	content: "";
+	position: absolute;
+	left: 7px;
+	top: 50%;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--vscode-focusBorder, #007acc);
+	transform: translateY(-50%);
 }
 
 .vsclone-thread-rail-row-leading {
@@ -2645,6 +2799,7 @@
 .vsclone-thread-rail-row-title {
 	flex: 1;
 	font-size: 13px;
+	font-weight: 500;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -2661,11 +2816,17 @@
 	align-items: center;
 	gap: 4px;
 	flex-shrink: 0;
+	/* Pin the trailing slot to the trash button's height so the row doesn't grow when the
+	 * timestamp (smaller text) is swapped out for the larger icon on hover. */
+	height: 20px;
 }
 
 .vsclone-thread-rail-row-timestamp {
+	display: inline-flex;
+	align-items: center;
+	height: 20px;
 	font-size: 11px;
-	opacity: 0.7;
+	opacity: 0.76;
 }
 
 .vsclone-thread-rail-row-icon {
@@ -2737,14 +2898,18 @@
 }
 
 .vsclone-thread-rail-state-icon {
-	height: 68px;
-	width: 68px;
+	height: 120px;
+	width: 120px;
 	border-radius: 50%;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 24px;
+	font-size: 56px;
 	background: color-mix(in srgb, var(--vscode-editorWidget-background) 70%, transparent 30%);
+}
+
+.vsclone-thread-rail-state-icon .codicon {
+	font-size: inherit;
 }
 
 .vsclone-thread-rail-state-icon.error {

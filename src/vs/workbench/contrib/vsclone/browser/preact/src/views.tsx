@@ -67,7 +67,9 @@ function renderRailState(viewState: VSCloneRailState, errorMessage: string | und
 	if (viewState === 'empty') {
 		return (
 			<div className="vsclone-thread-rail-state" role="status">
-				<div className="vsclone-thread-rail-state-icon" aria-hidden="true">[]</div>
+				<div className="vsclone-thread-rail-state-icon" aria-hidden="true">
+					<span className="codicon codicon-comment-discussion" />
+				</div>
 				<div className="vsclone-thread-rail-state-title">{localize('vsclone.rail.empty.title', 'No threads yet')}</div>
 				<div className="vsclone-thread-rail-state-description">
 					{localize('vsclone.rail.empty.description', 'Start a new conversation to create your first thread.')}
@@ -79,23 +81,60 @@ function renderRailState(viewState: VSCloneRailState, errorMessage: string | und
 	return <div className="vsclone-thread-rail-state hidden" />;
 }
 
+type RailRowGroupKey = 'today' | 'thisWeek' | 'lastWeek' | 'older';
+
+function getRailRowGroup(updatedAt: number, now: number): RailRowGroupKey {
+	const ageMs = Math.max(0, now - updatedAt);
+	const oneDay = 24 * 60 * 60 * 1000;
+	if (ageMs < oneDay) {
+		return 'today';
+	}
+	if (ageMs < 7 * oneDay) {
+		return 'thisWeek';
+	}
+	if (ageMs < 14 * oneDay) {
+		return 'lastWeek';
+	}
+	return 'older';
+}
+
+function getRailGroupLabel(group: RailRowGroupKey): string {
+	switch (group) {
+		case 'today':
+			return localize('vsclone.rail.group.today', 'Today');
+		case 'thisWeek':
+			return localize('vsclone.rail.group.thisWeek', 'Earlier this week');
+		case 'lastWeek':
+			return localize('vsclone.rail.group.lastWeek', 'Last week');
+		case 'older':
+			return localize('vsclone.rail.group.older', 'Older');
+	}
+}
+
 export function VSCloneThreadRailView(props: IVSCloneRailViewProps) {
 	const totalRows = props.rows.length;
 	const hasMoreThreads = totalRows > props.initialRowCount;
 	const visibleRows = props.showAll ? props.rows : props.rows.slice(0, props.initialRowCount);
+	// Compute grouping once per render so each row knows whether it should emit a header above it.
+	// Using a single timestamp keeps adjacent rows that straddle the boundary from disagreeing.
+	const renderTime = Date.now();
+	let lastRenderedGroup: RailRowGroupKey | undefined;
 
 	return (
 		<div className="vsclone-thread-rail">
 			<div className="vsclone-thread-rail-header">
-				<input
-					ref={props.searchInputRef}
-					className="vsclone-thread-rail-search"
-					type="search"
-					placeholder={localize('vsclone.rail.search.placeholder', 'Search threads...')}
-					aria-label={localize('vsclone.rail.search.ariaLabel', 'Search threads')}
-					defaultValue={props.searchQuery}
-					onInput={(event) => props.onSearchInput((event.currentTarget as HTMLInputElement).value)}
-				/>
+				<div className="vsclone-thread-rail-search-wrap">
+					<span className="vsclone-thread-rail-search-icon codicon codicon-search" aria-hidden="true" />
+					<input
+						ref={props.searchInputRef}
+						className="vsclone-thread-rail-search"
+						type="search"
+						placeholder={localize('vsclone.rail.search.placeholder', 'Search threads...')}
+						aria-label={localize('vsclone.rail.search.ariaLabel', 'Search threads')}
+						defaultValue={props.searchQuery}
+						onInput={(event) => props.onSearchInput((event.currentTarget as HTMLInputElement).value)}
+					/>
+				</div>
 			</div>
 			<div className="vsclone-thread-rail-body">
 				<div
@@ -119,9 +158,17 @@ export function VSCloneThreadRailView(props: IVSCloneRailViewProps) {
 						if (pendingDelete) {
 							className += ' pending-delete';
 						}
+						const group = getRailRowGroup(row.updatedAt, renderTime);
+						const renderGroupHeader = group !== lastRenderedGroup;
+						lastRenderedGroup = group;
 						return (
+							<Fragment key={row.threadId}>
+								{renderGroupHeader ? (
+									<div className="vsclone-thread-rail-group-header" role="presentation">
+										{getRailGroupLabel(group)}
+									</div>
+								) : null}
 							<div
-								key={row.threadId}
 								className={className}
 								data-thread-id={row.threadId}
 								role="button"
@@ -208,6 +255,7 @@ export function VSCloneThreadRailView(props: IVSCloneRailViewProps) {
 									)}
 								</div>
 							</div>
+							</Fragment>
 						);
 					})}
 					{hasMoreThreads ? (
@@ -231,7 +279,7 @@ export function VSCloneThreadRailView(props: IVSCloneRailViewProps) {
 					onClick={() => props.onNewChat()}
 				>
 					<span className="codicon codicon-add" aria-hidden="true" />
-					<span>{localize('vsclone.rail.newChat', 'New Chat')}</span>
+					<span>{localize('vsclone.rail.newChat', 'New chat')}</span>
 				</button>
 			</div>
 		</div>

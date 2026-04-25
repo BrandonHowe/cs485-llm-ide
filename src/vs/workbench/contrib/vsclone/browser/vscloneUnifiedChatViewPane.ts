@@ -895,7 +895,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const emptyIcon = document.createElement("div");
 		emptyIcon.className = "vsclone-thread-empty-state-icon";
 		const emptyIconGlyph = document.createElement("span");
-		emptyIconGlyph.className = "codicon codicon-sparkle-filled";
+		emptyIconGlyph.className = "codicon codicon-sparkle";
 		emptyIconGlyph.setAttribute("aria-hidden", "true");
 		emptyIcon.appendChild(emptyIconGlyph);
 		const emptyTitle = document.createElement("div");
@@ -980,7 +980,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		);
 		send.title = localize("vsclone.composer.sendTooltip", "Send message");
 		const sendIcon = document.createElement('span');
-		sendIcon.className = 'codicon codicon-send';
+		sendIcon.className = 'codicon codicon-arrow-up';
 		sendIcon.setAttribute('aria-hidden', 'true');
 		send.appendChild(sendIcon);
 		this.composerSendButton = send;
@@ -1245,10 +1245,17 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		imageFileInput.multiple = true;
 		imageFileInput.className = 'vsclone-composer-image-file-input';
 
+		// Wrap the textarea and toolbar together so they share a single rounded border. Without this
+		// outer card both elements drew their own borders, leaving a faint horizontal seam where
+		// the input's border-bottom met the toolbar's border-top.
+		const composerCard = document.createElement('div');
+		composerCard.className = 'vsclone-thread-composer-card';
+		composerCard.appendChild(inputWrap);
+		composerCard.appendChild(toolbar);
+
 		composer.appendChild(imageStrip);
 		composer.appendChild(contextStrip);
-		composer.appendChild(inputWrap);
-		composer.appendChild(toolbar);
+		composer.appendChild(composerCard);
 		composer.appendChild(hint);
 
 		parent.appendChild(actions);
@@ -1509,7 +1516,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	private updateConversationModeVisibility(): void {
 		this.settingsContainer?.classList.toggle("hidden", !this.settingsVisible);
-		this.conversationList?.classList.toggle("hidden", this.settingsVisible);
+		// Both the messages list and empty state declare flex: 1, so leaving the empty messages
+		// container in the layout would split the vertical space and push the empty state into
+		// the lower half of the pane instead of centering it.
+		this.conversationList?.classList.toggle("hidden", this.settingsVisible || !this.conversationHasContent);
 		// Settings mode temporarily hides chat chrome, but closing it must restore the
 		// message-aware empty state instead of showing the placeholder over an existing thread.
 		this.conversationEmptyState?.classList.toggle("hidden", this.settingsVisible || this.conversationHasContent);
@@ -5093,8 +5103,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		// Force auto height first so scrollHeight reflects the current value after deletions.
 		this.composerInput.style.height = "0px";
 		const nextHeight = Math.max(
-			40,
-			Math.min(132, this.composerInput.scrollHeight),
+			32,
+			Math.min(104, this.composerInput.scrollHeight),
 		);
 		this.composerInput.style.height = `${nextHeight}px`;
 	}

@@ -23,6 +23,7 @@ export interface IVSCloneThreadCatalogEntry {
 export interface IVSCloneThreadRailRow {
 	threadId: string;
 	title: string;
+	updatedAt: number;
 	updatedLabel: string;
 	streamStateKind: VSCloneThreadStreamStateKind | undefined;
 	selected: boolean;
@@ -36,6 +37,7 @@ export function toVSCloneThreadRailRows(
 	return threads.map(thread => ({
 		threadId: thread.threadId,
 		title: thread.title,
+		updatedAt: thread.updatedAt,
 		updatedLabel: formatRelativeTime(thread.updatedAt),
 		streamStateKind: thread.streamStateKind,
 		selected: thread.threadId === selectedThreadId,
