@@ -33,6 +33,23 @@ interface IVSCloneUnifiedChatViewPaneHarness {
 	): HTMLElement | undefined;
 }
 
+interface IStreamingMarkdownHarness {
+	streamedAssistantTextByMessageId: Map<string, string>;
+	appendRuntimeAssistantMarkdownSegment(
+		container: HTMLElement,
+		messageId: string,
+		markdownText: string,
+		streaming: boolean,
+	): void;
+}
+
+interface IRuntimeEntranceHarness {
+	enteredRuntimeElementKeys: Set<string>;
+	currentRuntimeElementKeys: Set<string>;
+	markRuntimeElementEntrance(element: HTMLElement, key: string): void;
+	pruneEnteredRuntimeElementKeys(): void;
+}
+
 interface ISettingsHarness {
 	pane: VSCloneUnifiedChatViewPane;
 	host: HTMLElement;
@@ -110,6 +127,24 @@ function createHarness(): IVSCloneUnifiedChatViewPaneHarness {
 	pane.notificationService = {
 		warn: () => undefined,
 	};
+	return pane;
+}
+
+function createStreamingMarkdownHarness(): IStreamingMarkdownHarness {
+	// The streaming regression only needs the markdown append helpers and the per-message text cache.
+	// Keep it prototype-backed so the test exercises the real private methods without constructing
+	// the full workbench pane graph.
+	const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as IStreamingMarkdownHarness;
+	pane.streamedAssistantTextByMessageId = new Map<string, string>();
+	return pane;
+}
+
+function createRuntimeEntranceHarness(): IRuntimeEntranceHarness {
+	// Mirrors the pane's constructor-created tracking fields so the regression can exercise the
+	// real keying helpers without constructing unrelated workbench services.
+	const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as IRuntimeEntranceHarness;
+	pane.enteredRuntimeElementKeys = new Set<string>();
+	pane.currentRuntimeElementKeys = new Set<string>();
 	return pane;
 }
 
@@ -349,6 +384,41 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		assert.strictEqual(harness.renderRuntimeToolActions('thread-1', state, firstRequest), undefined);
 		assert.ok(harness.renderRuntimeToolActions('thread-1', state, repeatedRequest));
+	});
+
+	test('streaming assistant text fades only newly appended words', () => {
+		const harness = createStreamingMarkdownHarness();
+		const firstContainer = document.createElement('div');
+		const secondContainer = document.createElement('div');
+
+		harness.appendRuntimeAssistantMarkdownSegment(firstContainer, 'assistant-1', 'Hello world', true);
+		harness.appendRuntimeAssistantMarkdownSegment(secondContainer, 'assistant-1', 'Hello world again now', true);
+
+		const secondPrefix = secondContainer.querySelector('.vsclone-thread-message-streaming-prefix');
+		const secondWords = Array.from(secondContainer.querySelectorAll<HTMLElement>('.vsclone-streamed-word'));
+
+		assert.strictEqual(secondPrefix?.textContent, 'Hello world');
+		assert.deepStrictEqual(secondWords.map(word => word.textContent), ['again', 'now']);
+		assert.strictEqual(secondPrefix?.querySelector('.vsclone-streamed-word'), null);
+	});
+
+	test('runtime entrance animation is keyed so refreshed rows do not fade again', () => {
+		const harness = createRuntimeEntranceHarness();
+		const firstRow = document.createElement('div');
+		const refreshedRow = document.createElement('div');
+
+		harness.markRuntimeElementEntrance(firstRow, 'tool:read-file-1:compact');
+		harness.currentRuntimeElementKeys = new Set<string>();
+		harness.markRuntimeElementEntrance(refreshedRow, 'tool:read-file-1:compact');
+
+		assert.strictEqual(firstRow.classList.contains('vsclone-runtime-enter'), true);
+		assert.strictEqual(refreshedRow.classList.contains('vsclone-runtime-enter'), false);
+
+		harness.currentRuntimeElementKeys = new Set<string>();
+		harness.pruneEnteredRuntimeElementKeys();
+		harness.markRuntimeElementEntrance(refreshedRow, 'tool:read-file-1:compact');
+
+		assert.strictEqual(refreshedRow.classList.contains('vsclone-runtime-enter'), true);
 	});
 
 	test('opens settings into the conversation surface and closes back to the composer', () => {

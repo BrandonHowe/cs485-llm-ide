@@ -453,6 +453,15 @@
 	}
 }
 
+.vsclone-runtime-enter {
+	/*
+	 * Runtime rows are keyed in the renderer, so this entrance animation runs for newly appearing
+	 * chat UI only: tool activity, command approvals, read/list/search summaries, errors, and
+	 * reasoning panels. Existing rows keep their opacity during streaming refreshes.
+	 */
+	animation: vsclone-streamed-text-fade-in 180ms ease-out both;
+}
+
 .vsclone-thread-message.runtime.runtime-status {
 	padding: 8px 10px;
 }
@@ -622,11 +631,22 @@
 
 .vsclone-streamed-text-fragment {
 	/*
-	Only the newly appended provider suffix gets animated. The stable markdown prefix is rendered
-	without animation so prior text never disappears and refades on each runtime refresh.
-	*/
-	animation: vsclone-streamed-text-fade-in 180ms ease-out both;
+	 * Only the newly appended provider suffix gets animated. The stable markdown prefix is rendered
+	 * without animation so prior text never disappears and refades on each runtime refresh.
+	 */
 	white-space: pre-wrap;
+}
+
+.vsclone-streamed-word {
+	animation: vsclone-streamed-text-fade-in 180ms ease-out both;
+	display: inline-block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.vsclone-runtime-enter,
+	.vsclone-streamed-word {
+		animation: none;
+	}
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown,

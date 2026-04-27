@@ -19,7 +19,6 @@ import {
 import { RunOnceScheduler } from "../../../../base/common/async.js";
 import { onUnexpectedError } from "../../../../base/common/errors.js";
 import { MarkdownString } from "../../../../base/common/htmlContent.js";
-import { escape } from "../../../../base/common/strings.js";
 import {
 	DisposableStore,
 	MutableDisposable,
@@ -437,6 +436,10 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	// Streaming rows are rebuilt from scratch on every refresh. Keep the last text by assistant id
 	// so only the newly appended suffix is animated instead of replaying the whole answer.
 	private readonly streamedAssistantTextByMessageId = new Map<string, string>();
+	// Runtime transcript nodes are also rebuilt from scratch on refresh. Keep stable element keys so
+	// tool rows, approval prompts, status rows, and reasoning panels fade only when they first appear.
+	private readonly enteredRuntimeElementKeys = new Set<string>();
+	private currentRuntimeElementKeys = new Set<string>();
 	private readonly refreshRailScheduler = this._register(
 		new RunOnceScheduler(() => {
 			this.refreshRailRows();
@@ -2587,9 +2590,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		// call so listeners added during render (e.g. the reasoning-toggle listener) are not
 		// immediately disposed along with the prior pass.
 		this.renderedMarkdownDisposables.clear();
+		this.currentRuntimeElementKeys = new Set<string>();
 		const runtimeNodes = runtimeState
 			? this.renderRuntimeConversationNodes(runtimeState)
 			: [];
+		this.pruneEnteredRuntimeElementKeys();
 		const hasRuntimeNodes = runtimeNodes.length > 0;
 		this.conversationHasContent = hasRuntimeNodes;
 		this.conversationList.replaceChildren();
@@ -2686,6 +2691,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		return nodes;
 	}
 
+	private markRuntimeElementEntrance(element: HTMLElement, key: string): void {
+		this.currentRuntimeElementKeys.add(key);
+		if (this.enteredRuntimeElementKeys.has(key)) {
+			return;
+		}
+		this.enteredRuntimeElementKeys.add(key);
+		element.classList.add('vsclone-runtime-enter');
+	}
+
+	private pruneEnteredRuntimeElementKeys(): void {
+		for (const key of Array.from(this.enteredRuntimeElementKeys)) {
+			if (!this.currentRuntimeElementKeys.has(key)) {
+				this.enteredRuntimeElementKeys.delete(key);
+			}
+		}
+	}
+
 	private isActiveRuntimeAssistantMessage(
 		state: IVSCloneThreadRuntimeState,
 		messageIndex: number,
@@ -2732,6 +2754,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const item = document.createElement('div');
 		item.className = 'vsclone-thread-message assistant runtime runtime-thought';
+		this.markRuntimeElementEntrance(item, `thought:${entries.map(entry => entry.message.id).join(':')}`);
 
 		// Render the reasoning panel for every intermediate assistant message that has reasoning,
 		// regardless of whether the same message also has visible text. Mirrors Void, which renders
@@ -2792,6 +2815,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	): HTMLElement {
 		const item = document.createElement('div');
 		item.className = 'vsclone-thread-message user runtime';
+		this.markRuntimeElementEntrance(item, `user:${message.id}`);
 
 		const meta = document.createElement('div');
 		meta.className = 'vsclone-thread-message-meta';
@@ -2864,6 +2888,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const item = document.createElement('div');
 		item.className = 'vsclone-thread-message assistant runtime runtime-assistant';
+		this.markRuntimeElementEntrance(item, `assistant:${message.id}`);
 		if (streaming) {
 			// The imperative runtime renderer bypasses the Preact conversation item's `streaming`
 			// class, so mark the active assistant row here to let CSS animate provider deltas.
@@ -2950,6 +2975,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const details = document.createElement('details');
 		details.className = 'vsclone-thinking-block vsclone-reasoning-block';
+		this.markRuntimeElementEntrance(details, `reasoning:${message.id}`);
 
 		// Attach the toggle listener BEFORE flipping `details.open` programmatically. Setting
 		// `details.open = true` queues a `toggle` event; without the guard, that event would fire
@@ -2996,7 +3022,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const content = document.createElement('div');
 		content.className = 'vsclone-thinking-content';
-		this.appendMarkdownSegment(content, reasoningText, 'vsclone-thinking-step');
+		this.appendRuntimeAssistantMarkdownSegment(content, `reasoning:${message.id}`, reasoningText, isWriting);
 		details.appendChild(content);
 
 		return details;
@@ -3044,6 +3070,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private renderRuntimeErrorMessage(rawErrorText: string): HTMLElement {
 		const item = document.createElement('div');
 		item.className = 'vsclone-thread-message assistant runtime runtime-error';
+		this.markRuntimeElementEntrance(item, `error:${rawErrorText.trim()}`);
 
 		const row = document.createElement('div');
 		row.className = 'vsclone-runtime-error-row';
@@ -3223,6 +3250,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const status = document.createElement("div");
 		status.className = "vsclone-thread-message assistant runtime runtime-status";
 		status.classList.add(`status-${statusClass}`);
+		this.markRuntimeElementEntrance(status, `status:${state.threadId}:${state.streamState.kind}:${state.streamState.kind === 'tool' ? state.streamState.toolName : ''}`);
 
 		const body = document.createElement("div");
 		body.className = "vsclone-thread-message-body";
@@ -3271,6 +3299,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				}
 				const item = document.createElement("div");
 				item.className = "vsclone-thread-message assistant runtime runtime-assistant";
+				this.markRuntimeElementEntrance(item, `assistant-tool-completion:${message.id}`);
 				const body = document.createElement("div");
 				body.className = "vsclone-thread-message-body";
 				this.appendMarkdownSegment(body, result, "vsclone-thread-message-assistant-text");
@@ -3317,6 +3346,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				if (diffCard) {
 					const item = document.createElement("div");
 					item.className = "vsclone-thread-message assistant runtime runtime-tool runtime-tool-flat-diff";
+					this.markRuntimeElementEntrance(item, `tool:${message.id}:flat-diff`);
 					const body = document.createElement("div");
 					body.className = "vsclone-thread-message-body";
 					body.appendChild(diffCard);
@@ -3337,6 +3367,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const toolOutput = message.type === "running_now" ? undefined : message.output;
 		const item = document.createElement("div");
 		item.className = "vsclone-thread-message assistant runtime runtime-tool";
+		this.markRuntimeElementEntrance(item, `tool:${message.id}:${message.type}`);
 
 		const body = document.createElement("div");
 		body.className = "vsclone-thread-message-body";
@@ -3361,6 +3392,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	): HTMLElement {
 		const item = document.createElement("div");
 		item.className = "vsclone-thread-message assistant runtime runtime-tool runtime-tool-compact";
+		this.markRuntimeElementEntrance(item, `tool:${message.id}:compact`);
 		const status = this.toRuntimeToolCardStatus(message);
 		item.classList.add(`status-${status}`);
 
@@ -3480,6 +3512,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	): HTMLElement {
 		const item = document.createElement("div");
 		item.className = "vsclone-thread-message assistant runtime runtime-tool runtime-tool-approval";
+		this.markRuntimeElementEntrance(item, `approval:${message.id}`);
 
 		const row = document.createElement("div");
 		row.className = "vsclone-runtime-approval";
@@ -4261,12 +4294,20 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const previousText = this.streamedAssistantTextByMessageId.get(messageId);
 		this.streamedAssistantTextByMessageId.set(messageId, markdownText);
 
-		if (!previousText || !markdownText.startsWith(previousText) || previousText === markdownText) {
+		if (previousText === markdownText) {
 			this.appendMarkdownSegment(container, markdownText, "vsclone-thread-message-assistant-text");
 			return;
 		}
 
-		const appendedText = markdownText.slice(previousText.length);
+		if (previousText && !markdownText.startsWith(previousText)) {
+			// Provider/tool rewrites can replace earlier text instead of appending to it. In that case
+			// there is no stable prefix to preserve, so render normally rather than refading old words.
+			this.appendMarkdownSegment(container, markdownText, "vsclone-thread-message-assistant-text");
+			return;
+		}
+
+		const stablePrefix = previousText ?? "";
+		const appendedText = markdownText.slice(stablePrefix.length);
 		if (!appendedText) {
 			this.appendMarkdownSegment(container, markdownText, "vsclone-thread-message-assistant-text");
 			return;
@@ -4278,11 +4319,34 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		// Render the stable prefix as markdown and append only the new provider delta as a fading
 		// plain-text fragment. This avoids the full-answer fade caused by rebuilding the DOM.
-		this.appendMarkdownSegment(segment, previousText, "vsclone-thread-message-streaming-prefix");
+		this.appendMarkdownSegment(segment, stablePrefix, "vsclone-thread-message-streaming-prefix");
+		this.appendFadingStreamedText(segment, appendedText);
+	}
+
+	private appendFadingStreamedText(container: HTMLElement, text: string): void {
 		const streamedFragment = document.createElement("span");
 		streamedFragment.className = "vsclone-streamed-text-fragment";
-		streamedFragment.innerHTML = escape(appendedText).replace(/\n/g, "<br>");
-		segment.appendChild(streamedFragment);
+		container.appendChild(streamedFragment);
+
+		let wordIndex = 0;
+		for (const token of text.split(/(\s+)/)) {
+			if (!token) {
+				continue;
+			}
+			if (/^\s+$/.test(token)) {
+				streamedFragment.appendChild(document.createTextNode(token));
+				continue;
+			}
+
+			const word = document.createElement("span");
+			word.className = "vsclone-streamed-word";
+			// Stagger only the new suffix and cap the delay so large provider chunks do not trickle in
+			// long after the text is already available to read.
+			word.style.animationDelay = `${Math.min(wordIndex, 12) * 14}ms`;
+			word.textContent = token;
+			streamedFragment.appendChild(word);
+			wordIndex++;
+		}
 	}
 
 	/**
