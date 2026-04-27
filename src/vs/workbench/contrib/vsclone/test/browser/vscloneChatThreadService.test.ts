@@ -258,6 +258,71 @@ suite('VSCloneChatThreadService', () => {
 		assert.strictEqual(runtimeService.cancelledThreadId, 'thread-1');
 	});
 
+	test('continues a restored thread when the pane only passes the thread id', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const runtimeService = new RecordingThreadRuntimeService();
+		runtimeService.statesByThreadId.set('thread-restored', {
+			threadId: 'thread-restored',
+			catalog: {
+				threadId: 'thread-restored',
+				sessionResource: 'vsclone://api/original-session',
+				title: 'Restored chat',
+				createdAt: 1,
+				updatedAt: 2,
+				status: 'completed',
+				archived: false,
+				turnCount: 1,
+				lastTurnPreview: 'Assistant response',
+			},
+			streamState: { kind: 'idle' },
+			messages: [
+				{
+					id: 'thread-restored:turn-1:user',
+					role: 'user',
+					mode: 'act',
+					createdAt: 1,
+					content: 'Initial prompt',
+				},
+				{
+					id: 'thread-restored:turn-1:assistant',
+					role: 'assistant',
+					mode: 'act',
+					createdAt: 2,
+					content: 'Assistant response',
+				},
+			],
+			checkpoints: [],
+			lastUpdatedAt: 2,
+		});
+		const threadService = testDisposables.add(new VSCloneChatThreadService(
+			new StaticSettingsService(createSelection()),
+			new StaticPlanModeService(),
+			new NullLogService(),
+			runtimeService,
+			new StaticContextGatheringService(),
+			new TestVSCloneUnifiedChatBackendService(),
+			createVSCloneTestFileService(),
+		));
+
+		const result = await threadService.sendMessage('Follow up after reload', {
+			threadId: 'thread-restored',
+			// Reopened views can briefly lack this rail-side cache value; runtime state remains the
+			// canonical continuation source and must prevent accidental new-chat creation.
+			sessionResource: undefined,
+		});
+
+		assert.deepStrictEqual(result, {
+			threadId: 'thread-restored',
+			sessionResource: 'vsclone://api/original-session',
+		});
+		assert.strictEqual(runtimeService.lastOptions?.threadId, 'thread-restored');
+		assert.strictEqual(runtimeService.lastOptions?.sessionResource, 'vsclone://api/original-session');
+		assert.deepStrictEqual(runtimeService.lastOptions?.previousTurns, [
+			{ role: 'user', content: 'Initial prompt' },
+			{ role: 'assistant', content: 'Assistant response' },
+		]);
+	});
+
 	test('updates an existing thread binding when the submit-time selection changes', async () => {
 		const testDisposables = store.add(new DisposableStore());
 		const settingsService = new RecordingSettingsService(createSelectionWithOverrides({

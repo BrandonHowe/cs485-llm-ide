@@ -16,6 +16,15 @@
 	border-radius: 10px;
 	position: relative;
 	color: #d8dbe3;
+	/* Keep Codex-brand affordances visible without the saturated neon blue drawing attention
+	 * away from message content. These locals intentionally avoid workbench button colors because
+	 * the view uses a fixed dark surface instead of inheriting the full theme ramp. */
+	--vsclone-subtle-accent: #5f8fb8;
+	--vsclone-subtle-accent-border: #2a4358;
+	--vsclone-subtle-accent-surface: #18202a;
+	--vsclone-subtle-accent-surface-hover: #202b37;
+	--vsclone-subtle-accent-foreground: #b7c8d8;
+	--vsclone-subtle-accent-strong: #3f78a8;
 }
 
 
@@ -96,12 +105,12 @@
 	gap: 8px;
 	height: 24px;
 	padding: 0 8px;
-	border: 1px solid #12324a;
+	border: 1px solid var(--vsclone-subtle-accent-border);
 	border-radius: 8px;
 	cursor: pointer;
 	font-size: 11px;
 	font-weight: 600;
-	background: #151922;
+	background: var(--vsclone-subtle-accent-surface);
 	color: #d9dce5;
 }
 
@@ -117,16 +126,16 @@
 	width: 24px;
 	height: 24px;
 	padding: 0;
-	border: 1px solid #12324a;
+	border: 1px solid var(--vsclone-subtle-accent-border);
 	border-radius: 8px;
 	cursor: pointer;
-	background: #151922;
+	background: var(--vsclone-subtle-accent-surface);
 	color: #aeb4c2;
 }
 
 .vsclone-thread-action-button:hover,
 .vsclone-thread-action-overflow:hover {
-	background: #1f2f46;
+	background: var(--vsclone-subtle-accent-surface-hover);
 	color: #f1f3f8;
 }
 
@@ -184,7 +193,7 @@
 	border-radius: 14px;
 	border: 1px solid #3a3d44;
 	background: #222326;
-	color: #007acc;
+	color: var(--vsclone-subtle-accent);
 	margin-bottom: 10px;
 }
 
@@ -219,9 +228,9 @@
 	width: 100%;
 	min-height: 34px;
 	padding: 0 12px;
-	border: 1px solid #12324a;
+	border: 1px solid var(--vsclone-subtle-accent-border);
 	border-radius: 8px;
-	background: #172536;
+	background: var(--vsclone-subtle-accent-surface);
 	color: #cfd0d4;
 	font: inherit;
 	font-size: 13px;
@@ -231,12 +240,12 @@
 }
 
 .vsclone-thread-empty-state-suggestion .codicon {
-	color: #007acc;
+	color: var(--vsclone-subtle-accent);
 }
 
 .vsclone-thread-empty-state-suggestion:hover {
-	background: #1f2f46;
-	border-color: #007acc;
+	background: var(--vsclone-subtle-accent-surface-hover);
+	border-color: var(--vsclone-subtle-accent);
 }
 
 .vsclone-thread-messages.hidden,
@@ -433,6 +442,17 @@
 	border-color: color-mix(in srgb, var(--vscode-focusBorder) 50%, transparent 50%);
 }
 
+@keyframes vsclone-streamed-text-fade-in {
+	from {
+		opacity: 0;
+		transform: translateY(2px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
 .vsclone-thread-message.runtime.runtime-status {
 	padding: 8px 10px;
 }
@@ -586,6 +606,27 @@
 .vsclone-thread-message-text-segment,
 .vsclone-thread-message-assistant-text {
 	margin-bottom: 6px;
+}
+
+.vsclone-thread-message-streaming-composite {
+	margin-bottom: 6px;
+}
+
+.vsclone-thread-message-streaming-composite > .vsclone-thread-message-streaming-prefix {
+	margin-bottom: 0;
+}
+
+.vsclone-thread-message-streaming-composite > .vsclone-thread-message-streaming-prefix > :last-child {
+	margin-bottom: 0;
+}
+
+.vsclone-streamed-text-fragment {
+	/*
+	Only the newly appended provider suffix gets animated. The stable markdown prefix is rendered
+	without animation so prior text never disappears and refades on each runtime refresh.
+	*/
+	animation: vsclone-streamed-text-fade-in 180ms ease-out both;
+	white-space: pre-wrap;
 }
 
 .vsclone-thread-message-text-segment.rendered-markdown,
@@ -1703,7 +1744,7 @@
 .vsclone-thread-composer-card {
 	display: flex;
 	flex-direction: column;
-	border: 1px solid #12324a;
+	border: 1px solid var(--vsclone-subtle-accent-border);
 	border-radius: 8px;
 	background: #181a23;
 	/* No overflow: hidden -- that would clip the model switcher and mention popups that anchor
@@ -1712,7 +1753,7 @@
 }
 
 .vsclone-thread-composer-card:focus-within {
-	border-color: var(--vscode-focusBorder);
+	border-color: var(--vsclone-subtle-accent);
 }
 
 .vsclone-thread-composer-input {
@@ -1769,7 +1810,7 @@
 	cursor: pointer;
 	font-size: 13px;
 	font-weight: 700;
-	background: #007acc;
+	background: var(--vsclone-subtle-accent-strong);
 	color: #ffffff;
 }
 
@@ -1779,7 +1820,7 @@
 }
 
 .vsclone-thread-composer-send:hover {
-	background: #0e8fe3;
+	background: color-mix(in srgb, var(--vsclone-subtle-accent-strong) 88%, white 12%);
 }
 
 .vsclone-thread-composer-send.stop-mode {
@@ -2115,8 +2156,8 @@
 	justify-content: center;
 	border: none;
 	border-radius: 7px;
-	background: #1f2f46;
-	color: #d7ecff;
+	background: var(--vsclone-subtle-accent-surface-hover);
+	color: var(--vsclone-subtle-accent-foreground);
 	font-size: 14px;
 	cursor: pointer;
 	transition: border-color 120ms ease, background 120ms ease;
@@ -2225,7 +2266,7 @@
 	width: auto;
 	border-radius: 5px;
 	border: none;
-	background: #1f2f46;
+	background: var(--vsclone-subtle-accent-surface-hover);
 	color: #bfc1ca;
 	font-size: 12px;
 	font-weight: 600;
@@ -2265,9 +2306,9 @@
 	max-width: 100%;
 	min-width: 0;
 	border-radius: 7px;
-	border: 1px solid #007acc;
-	background: #12324a;
-	color: #9cdcfe;
+	border: 1px solid var(--vsclone-subtle-accent);
+	background: var(--vsclone-subtle-accent-surface);
+	color: var(--vsclone-subtle-accent-foreground);
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
@@ -2431,7 +2472,7 @@
 }
 
 .vsclone-model-switcher-row.selected {
-	background: #007acc;
+	background: var(--vsclone-subtle-accent-strong);
 	color: #f4f8ff;
 }
 
@@ -2723,7 +2764,7 @@
 	padding: 0 12px;
 	border: none;
 	border-radius: 8px;
-	background: #007acc;
+	background: var(--vsclone-subtle-accent-strong);
 	color: #ffffff;
 	font: inherit;
 	font-size: 13px;
@@ -2732,7 +2773,7 @@
 }
 
 .vsclone-thread-rail-new-chat:hover {
-	background: #0e8fe3;
+	background: color-mix(in srgb, var(--vsclone-subtle-accent-strong) 88%, white 12%);
 }
 
 .vsclone-thread-rail-list.hidden,
@@ -2763,6 +2804,11 @@
 	opacity: 1;
 	min-height: 30px;
 	min-width: 0;
+	/*
+	Rows are frequently hovered while scanning recent threads, so ease the paint-only state changes
+	without changing sizing or keyboard focus behavior.
+	*/
+	transition: background-color 120ms ease-out, color 120ms ease-out;
 }
 
 .vsclone-thread-rail-row:hover,
@@ -2775,8 +2821,9 @@
 	color: #e5e5e7;
 }
 
-/* Dot indicator on the selected row, mirroring the target design's blue marker. */
-.vsclone-thread-rail-row.selected::before {
+/* Keep unread state visually separate from selection: selected owns the gray background, while
+ * this blue marker is reserved for unseen assistant output in non-active threads. */
+.vsclone-thread-rail-row.unread-agent-message::before {
 	content: "";
 	position: absolute;
 	left: 7px;
@@ -2784,7 +2831,7 @@
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
-	background: var(--vscode-focusBorder, #007acc);
+	background: var(--vsclone-subtle-accent);
 	transform: translateY(-50%);
 }
 
@@ -2827,6 +2874,7 @@
 	height: 20px;
 	font-size: 11px;
 	opacity: 0.76;
+	transition: opacity 120ms ease-out;
 }
 
 .vsclone-thread-rail-row-icon {
@@ -2842,6 +2890,7 @@
 	color: inherit;
 	opacity: 0.75;
 	cursor: pointer;
+	transition: background-color 120ms ease-out, opacity 120ms ease-out, color 120ms ease-out;
 }
 
 .vsclone-thread-rail-row-icon:hover {
@@ -2867,6 +2916,16 @@
 .vsclone-thread-rail-row:focus-within .vsclone-thread-rail-row-timestamp,
 .vsclone-thread-rail-row.hovered .vsclone-thread-rail-row-timestamp {
 	display: none;
+}
+
+.monaco-reduce-motion .vsclone-streamed-text-fragment {
+	animation: none;
+}
+
+.monaco-reduce-motion .vsclone-thread-rail-row,
+.monaco-reduce-motion .vsclone-thread-rail-row-timestamp,
+.monaco-reduce-motion .vsclone-thread-rail-row-icon {
+	transition: none;
 }
 
 .vsclone-thread-rail-show-more {

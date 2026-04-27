@@ -909,8 +909,6 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		// the trailing empty line and findDiffs reports a phantom deletion below the file. Split on
 		// every Monaco-recognized line break (\r\n, \r, \n) so mixed-ending payloads count correctly.
 		const lineCount = plan.finalContent === '' ? 1 : plan.finalContent.split(/\r\n|\r|\n/).length;
-		this.clearAssistantApplyDiffZonesForURI(uri);
-
 		const adding: Omit<VSCloneDiffZone, 'diffareaid'> = {
 			type: 'DiffZone',
 			originalCode: plan.originalContent ?? '',
@@ -923,6 +921,10 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		};
 		const diffZone = this.addDiffArea(adding);
 
+		// Multiple assistant edits can land against the same file before the user has reviewed the
+		// earlier ones. Keep each review zone alive so a later apply does not implicitly accept the
+		// previous suggestion by deleting its diff surface. Explicit accept/reject and undo paths
+		// remain responsible for clearing zones once the user or transcript action resolves them.
 		this.trackAssistantApplyDiffZone(diffZone);
 		// Under Void's refresh-rebuild model, _diffOfId is populated by the refresh pass that runs
 		// here. `plan.resolvedEdits` no longer drives the diff list -- findDiffs does.

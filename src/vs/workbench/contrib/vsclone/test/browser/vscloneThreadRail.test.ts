@@ -37,9 +37,11 @@ function createRow(overrides: Partial<IVSCloneThreadRailRow> = {}): IVSCloneThre
 	return {
 		threadId: 'thread-1',
 		title: 'Thread 1',
+		updatedAt: 0,
 		updatedLabel: 'just now',
 		streamStateKind: undefined,
 		selected: false,
+		hasUnreadAgentMessage: false,
 		...overrides,
 	};
 }
@@ -93,6 +95,7 @@ suite('VSCloneThreadRail', () => {
 			assert.strictEqual(rail.getSelectedThread(), 'thread-2');
 			assert.strictEqual(secondRow.getAttribute('aria-pressed'), 'true');
 			assert.strictEqual(secondRow.classList.contains('selected'), true);
+			assert.strictEqual(secondRow.classList.contains('unread-agent-message'), false);
 
 			rail.setRows([createRow({ threadId: 'thread-1', title: 'Alpha', updatedLabel: '2m ago' })]);
 			assert.strictEqual(rail.getSelectedThread(), undefined);
@@ -103,6 +106,26 @@ suite('VSCloneThreadRail', () => {
 			assert.deepStrictEqual(selectedThreads, ['thread-1']);
 			assert.strictEqual(rail.getSelectedThread(), 'thread-1');
 			assert.strictEqual((container.querySelector('[data-thread-id="thread-1"]') as HTMLElement).classList.contains('selected'), true);
+		} finally {
+			container.remove();
+		}
+	});
+
+	test('unread marker is independent from selected row background', () => {
+		const { rail, container } = createHarness(store);
+		try {
+			rail.setRows([
+				createRow({ threadId: 'thread-1', title: 'Alpha', hasUnreadAgentMessage: true }),
+				createRow({ threadId: 'thread-2', title: 'Beta', selected: true }),
+			]);
+
+			const unreadRow = container.querySelector('[data-thread-id="thread-1"]') as HTMLElement;
+			const selectedRow = container.querySelector('[data-thread-id="thread-2"]') as HTMLElement;
+
+			assert.strictEqual(unreadRow.classList.contains('unread-agent-message'), true);
+			assert.strictEqual(unreadRow.classList.contains('selected'), false);
+			assert.strictEqual(selectedRow.classList.contains('selected'), true);
+			assert.strictEqual(selectedRow.classList.contains('unread-agent-message'), false);
 		} finally {
 			container.remove();
 		}

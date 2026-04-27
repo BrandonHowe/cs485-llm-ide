@@ -129,6 +129,17 @@
 	}
 }
 
+@keyframes chat-streaming-text-fade-in {
+	from {
+		opacity: 0.35;
+		transform: translateY(1px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
 .interactive-item-container .chat-animated-ellipsis::after {
 	content: '';
 	white-space: nowrap;
@@ -456,6 +467,18 @@
 	line-height: 1.5em;
 	font-size: var(--vscode-chat-font-size-body-m);
 	font-family: var(--vscode-chat-font-family, inherit);
+}
+
+.interactive-item-container.interactive-response .value .chat-markdown-streaming > .rendered-markdown > :last-child {
+	/*
+	Provider chunks can repaint the same markdown part many times per second. Animating only the
+	current trailing block gives new text a Cursor-like soft arrival without fading the whole answer.
+	*/
+	animation: chat-streaming-text-fade-in 120ms ease-out both;
+}
+
+.monaco-reduce-motion .interactive-item-container.interactive-response .value .chat-markdown-streaming > .rendered-markdown > :last-child {
+	animation: none;
 }
 
 .interactive-item-container .value > .rendered-markdown p {
@@ -2494,6 +2517,7 @@ have to be updated for changes to the rules above, or to support more deeply nes
 		width: fit-content;
 		margin-bottom: 5px;
 		position: relative;
+		transition: background-color 120ms ease-out;
 	}
 
 	.interactive-item-container.interactive-request .value .rendered-markdown {
@@ -2503,6 +2527,10 @@ have to be updated for changes to the rules above, or to support more deeply nes
 	.interactive-item-container.interactive-request .value .rendered-markdown.clickable:hover {
 		cursor: pointer;
 		background-color: var(--vscode-chat-requestBubbleHoverBackground);
+	}
+
+	.monaco-reduce-motion & .interactive-item-container.interactive-request .value .rendered-markdown {
+		transition: none;
 	}
 
 	.hc-black .interactive-item-container.interactive-request .value .rendered-markdown,

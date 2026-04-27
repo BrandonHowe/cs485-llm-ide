@@ -19,6 +19,7 @@ import {
 import { RunOnceScheduler } from "../../../../base/common/async.js";
 import { onUnexpectedError } from "../../../../base/common/errors.js";
 import { MarkdownString } from "../../../../base/common/htmlContent.js";
+import { escape } from "../../../../base/common/strings.js";
 import {
 	DisposableStore,
 	MutableDisposable,
@@ -424,6 +425,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	// The pane only keeps a transient pending set so repeated refreshes do not launch duplicate
 	// browser-local apply work while the engine bridge is still running.
 	private readonly pendingAssistantApplyMessageIds = new Set<string>();
+	private readonly lastSeenAssistantMessageByThread = new Map<string, string>();
+	private readonly readBaselineInitializedThreads = new Set<string>();
 	/**
 	 * Sticky open/closed state for each assistant turn's reasoning dropdown. Mirrors Void's
 	 * `ReasoningWrapper` behavior: auto-open while streaming, auto-collapse when the final text
@@ -431,6 +434,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	 * passes (which rebuild DOM from scratch) don't reset the user's explicit toggle.
 	 */
 	private readonly reasoningPanelStateByMessageId = new Map<string, { userToggled: boolean; open: boolean }>();
+	// Streaming rows are rebuilt from scratch on every refresh. Keep the last text by assistant id
+	// so only the newly appended suffix is animated instead of replaying the whole answer.
+	private readonly streamedAssistantTextByMessageId = new Map<string, string>();
 	private readonly refreshRailScheduler = this._register(
 		new RunOnceScheduler(() => {
 			this.refreshRailRows();
@@ -549,6 +555,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this._register(
 			this.threadRuntimeService.onDidChangeState((state) => {
 				this.syncThreadCatalogEntryFromRuntime(state);
+				if (state.threadId === this.activeThreadId) {
+					this.markLatestAssistantMessageSeen(state.threadId, state);
+				}
 				this.refreshRailScheduler.schedule(0);
 				if (state.threadId !== this.activeThreadId) {
 					return;
@@ -723,6 +732,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		this.activeThreadId = targetThreadId;
 		this.rail.setSelectedThread(targetThreadId);
+		this.markLatestAssistantMessageSeen(targetThreadId, runtimeState);
 		this.railVisible = false;
 		// Thread navigation is a return to chat content, so clear the settings surface before
 		// focusing the composer to avoid sending focus into UI that remains visually hidden.
@@ -2401,6 +2411,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			// Only surface a spinner while the thread is actively streaming. `streamState.kind`
 			// is `'idle'` for completed threads too, so we map those to undefined here.
 			streamStateKind: this.resolveActiveStreamStateKind(thread.threadId),
+			hasUnreadAgentMessage: this.hasUnreadAgentMessage(thread.threadId),
 		}));
 
 		const rows = toVSCloneThreadRailRows(catalogEntries, this.activeThreadId, (timestamp) =>
@@ -2420,6 +2431,38 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return kind;
 		}
 		return undefined;
+	}
+
+	private getLatestAssistantMessageId(state: IVSCloneThreadRuntimeState | undefined): string | undefined {
+		return [...(state?.messages ?? [])].reverse().find((message): message is Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }> =>
+			message.role === 'assistant',
+		)?.id;
+	}
+
+	private markLatestAssistantMessageSeen(threadId: string, state: IVSCloneThreadRuntimeState | undefined = this.threadRuntimeService.getState?.(threadId)): void {
+		const latestAssistantMessageId = this.getLatestAssistantMessageId(state);
+		this.readBaselineInitializedThreads.add(threadId);
+		if (latestAssistantMessageId) {
+			this.lastSeenAssistantMessageByThread.set(threadId, latestAssistantMessageId);
+		} else {
+			this.lastSeenAssistantMessageByThread.delete(threadId);
+		}
+	}
+
+	private hasUnreadAgentMessage(threadId: string): boolean {
+		if (threadId === this.activeThreadId) {
+			return false;
+		}
+
+		const state = this.threadRuntimeService.getState?.(threadId);
+		const latestAssistantMessageId = this.getLatestAssistantMessageId(state);
+		if (!this.readBaselineInitializedThreads.has(threadId)) {
+			// Restored or first-rendered threads start as read. From that point forward, only a new
+			// assistant message observed while the thread is inactive can light the unread marker.
+			this.markLatestAssistantMessageSeen(threadId, state);
+			return false;
+		}
+		return !!latestAssistantMessageId && this.lastSeenAssistantMessageByThread.get(threadId) !== latestAssistantMessageId;
 	}
 
 	private getRuntimeThreadCatalogService(): (IVSCloneThreadRuntimeService & IVSCloneThreadRuntimeCatalogService) | undefined {
@@ -2612,7 +2655,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 						narrationGroup.push(message as IntermediateAssistantMessage);
 					} else {
 						flushNarration();
-						nodes.push(this.renderRuntimeAssistantMessage(message, state.threadId));
+						nodes.push(this.renderRuntimeAssistantMessage(
+							message,
+							state.threadId,
+							this.isActiveRuntimeAssistantMessage(state, index),
+						));
 					}
 					break;
 				case 'tool': {
@@ -2637,6 +2684,24 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			nodes.push(statusMessage);
 		}
 		return nodes;
+	}
+
+	private isActiveRuntimeAssistantMessage(
+		state: IVSCloneThreadRuntimeState,
+		messageIndex: number,
+	): boolean {
+		if (state.streamState.kind !== 'llm') {
+			return false;
+		}
+
+		// Only the assistant row currently receiving provider deltas should fade in. Earlier
+		// assistant messages in the same thread are stable history and should not pulse on rerender.
+		for (let index = messageIndex + 1; index < state.messages.length; index++) {
+			if (state.messages[index].role === 'assistant') {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private renderRuntimeAssistantNarrationBlock(
@@ -2786,6 +2851,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private renderRuntimeAssistantMessage(
 		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>,
 		threadId: string = this.activeThreadId ?? "",
+		streaming = false,
 	): HTMLElement {
 		const visibleText = this.stripRuntimeAssistantWorkflowMarkup(message.content);
 		// Upstream provider failures (400 status code, auth errors, safety-limit termination) are
@@ -2798,6 +2864,11 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const item = document.createElement('div');
 		item.className = 'vsclone-thread-message assistant runtime runtime-assistant';
+		if (streaming) {
+			// The imperative runtime renderer bypasses the Preact conversation item's `streaming`
+			// class, so mark the active assistant row here to let CSS animate provider deltas.
+			item.classList.add('streaming');
+		}
 
 		const meta = document.createElement('div');
 		meta.className = 'vsclone-thread-message-meta';
@@ -2815,9 +2886,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		if (visibleText.trim().length > 0) {
 			if (visibleText.includes("<<<<<<< SEARCH") || this.looksLikePartialSearchReplaceBlock(visibleText)) {
-				this.renderSearchReplaceAwareText(body, visibleText, false);
+				this.renderSearchReplaceAwareText(body, visibleText, streaming);
 			} else {
-				this.appendMarkdownSegment(body, visibleText, 'vsclone-thread-message-assistant-text');
+				this.appendRuntimeAssistantMarkdownSegment(body, message.id, visibleText, streaming);
 			}
 		}
 		item.appendChild(body);
@@ -4173,6 +4244,45 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			segment,
 		);
 		this.renderedMarkdownDisposables.add(rendered);
+	}
+
+	private appendRuntimeAssistantMarkdownSegment(
+		container: HTMLElement,
+		messageId: string,
+		markdownText: string,
+		streaming: boolean,
+	): void {
+		if (!streaming) {
+			this.streamedAssistantTextByMessageId.delete(messageId);
+			this.appendMarkdownSegment(container, markdownText, "vsclone-thread-message-assistant-text");
+			return;
+		}
+
+		const previousText = this.streamedAssistantTextByMessageId.get(messageId);
+		this.streamedAssistantTextByMessageId.set(messageId, markdownText);
+
+		if (!previousText || !markdownText.startsWith(previousText) || previousText === markdownText) {
+			this.appendMarkdownSegment(container, markdownText, "vsclone-thread-message-assistant-text");
+			return;
+		}
+
+		const appendedText = markdownText.slice(previousText.length);
+		if (!appendedText) {
+			this.appendMarkdownSegment(container, markdownText, "vsclone-thread-message-assistant-text");
+			return;
+		}
+
+		const segment = document.createElement("div");
+		segment.className = "vsclone-thread-message-assistant-text vsclone-thread-message-streaming-composite";
+		container.appendChild(segment);
+
+		// Render the stable prefix as markdown and append only the new provider delta as a fading
+		// plain-text fragment. This avoids the full-answer fade caused by rebuilding the DOM.
+		this.appendMarkdownSegment(segment, previousText, "vsclone-thread-message-streaming-prefix");
+		const streamedFragment = document.createElement("span");
+		streamedFragment.className = "vsclone-streamed-text-fragment";
+		streamedFragment.innerHTML = escape(appendedText).replace(/\n/g, "<br>");
+		segment.appendChild(streamedFragment);
 	}
 
 	/**

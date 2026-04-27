@@ -15,6 +15,11 @@
 
 	.monaco-list-row {
 		border-radius: 6px;
+		/*
+		Session rows use Monaco's list colors for hover/selection. Transitioning those paint-only
+		properties keeps thread hover feedback subtle without changing row layout or focus behavior.
+		*/
+		transition: background-color 120ms ease-out, color 120ms ease-out;
 	}
 
 	.monaco-list-row .force-no-twistie {
@@ -83,6 +88,7 @@
 		display: flex;
 		flex-direction: row;
 		padding: 4px 6px;
+		transition: color 120ms ease-out;
 
 		&.archived {
 			color: var(--vscode-descriptionForeground);
@@ -108,6 +114,7 @@
 				display: flex;
 				align-items: center;
 				justify-content: center;
+				transition: color 120ms ease-out;
 
 				&.codicon.codicon-session-in-progress {
 					color: var(--vscode-textLink-foreground);
@@ -230,6 +237,7 @@
 			margin-right: 16px;
 			mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
 			-webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
+			transition: color 120ms ease-out;
 		}
 
 		.agent-session-title {
@@ -244,6 +252,7 @@
 			font-size: 12px;
 			color: var(--vscode-disabledForeground);
 			white-space: nowrap;
+			transition: color 120ms ease-out;
 
 			.agent-session-status-provider-icon {
 				font-size: 11px;
@@ -299,5 +308,16 @@
 
 	.monaco-list:not(:focus) .monaco-list-row.selected .agent-session-section-label {
 		color: var(--vscode-list-inactiveSelectionForeground);
+	}
+}
+
+.monaco-reduce-motion .agent-sessions-viewer {
+	.monaco-list-row,
+	.agent-session-item,
+	.agent-session-icon,
+	.agent-session-title,
+	.agent-session-description,
+	.agent-session-status {
+		transition: none;
 	}
 }

@@ -63,6 +63,24 @@ function createApiSessionResource(sessionId: string): string {
 	return `vsclone://api/${encodeURIComponent(sessionId)}`;
 }
 
+function resolveThreadSubmissionIdentity(
+	options: IVSCloneChatThreadSubmitOptions,
+	runtimeState: IVSCloneThreadRuntimeState | undefined,
+): IVSCloneChatThreadSubmitResult {
+	const threadId = options.threadId;
+	const sessionResource = options.sessionResource
+		?? runtimeState?.catalog.sessionResource
+		?? createApiSessionResource(threadId ?? generateUuid());
+
+	// A restored pane can know the selected thread before its rail cache has repopulated the
+	// session resource. In that case the selected thread is still the user's continuation target,
+	// so keep it authoritative instead of deriving a brand-new thread from a fallback session URI.
+	return {
+		threadId: threadId ?? deriveVSCloneThreadId(sessionResource),
+		sessionResource,
+	};
+}
+
 /**
  * Phase 1.2 starts collapsing the session/runtime split by giving one service ownership of prompt
  * submission plus thread lifecycle actions. The old runtime still executes the loop underneath for
@@ -173,9 +191,10 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 		modelSelection: IVSCloneModelSelection,
 		mode: VSCloneChatMode,
 	): Promise<IVSCloneChatThreadSubmitResult> {
-		const sessionResource = options.sessionResource ?? createApiSessionResource(generateUuid());
-		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
-		const threadId = canReuseThreadId ? options.threadId! : deriveVSCloneThreadId(sessionResource);
+		const { threadId, sessionResource } = resolveThreadSubmissionIdentity(
+			options,
+			options.threadId ? this.threadRuntimeService.getState(options.threadId) : undefined,
+		);
 		await this.planModeService.setModeForThread(threadId, mode);
 		const resolvedSelection = await this.ensureThreadSelectionBinding(threadId, modelSelection);
 		let systemMessage: string | undefined;
@@ -283,9 +302,10 @@ export class VSCloneChatThreadService extends Disposable implements IVSCloneChat
 		modelSelection: IVSCloneModelSelection | undefined,
 		mode: VSCloneChatMode,
 	): Promise<IVSCloneChatThreadSubmitResult> {
-		const sessionResource = options.sessionResource ?? createApiSessionResource(generateUuid());
-		const canReuseThreadId = !!options.threadId && options.sessionResource === sessionResource;
-		const threadId = canReuseThreadId ? options.threadId! : deriveVSCloneThreadId(sessionResource);
+		const { threadId, sessionResource } = resolveThreadSubmissionIdentity(
+			options,
+			options.threadId ? this.threadRuntimeService.getState(options.threadId) : undefined,
+		);
 		await this.planModeService.setModeForThread(threadId, mode);
 		await this.injectRejectedTurn({
 			threadId,

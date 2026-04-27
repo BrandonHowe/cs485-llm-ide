@@ -152,6 +152,9 @@ export function VSCloneThreadRailView(props: IVSCloneRailViewProps) {
 						if (selected) {
 							className += ' selected';
 						}
+						if (row.hasUnreadAgentMessage) {
+							className += ' unread-agent-message';
+						}
 						if (hovered) {
 							className += ' hovered';
 						}

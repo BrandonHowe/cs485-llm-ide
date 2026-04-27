@@ -37,6 +37,7 @@ suite('VSCloneEditCodeService', () => {
 		_diffidPool: number;
 		_onDidAddOrDeleteDiffZones: { fire: (value: unknown) => void };
 		_onDidChangeDiffsInDiffZoneNotStreaming: { fire: (value: unknown) => void };
+		_modelService: { getModel: (uri: URI) => null };
 		bulkEditService: { apply: (edits: readonly unknown[], options: { label: string }) => Promise<{ isApplied: boolean }> };
 		workspaceContextService: { getWorkspace: () => { folders: Array<{ uri: URI; name: string; index: number }> } };
 		editorService: { openEditor: (input: { resource: URI }) => Promise<void> };
@@ -62,6 +63,10 @@ suite('VSCloneEditCodeService', () => {
 		service._diffidPool = 0;
 		service._onDidAddOrDeleteDiffZones = { fire: () => undefined };
 		service._onDidChangeDiffsInDiffZoneNotStreaming = { fire: () => undefined };
+		// The constructor normally supplies this dependency. The prototype harness only cares about
+		// bookkeeping state, so returning null exercises the production "model not loaded yet" path
+		// without forcing editor decoration setup into these narrow unit tests.
+		service._modelService = { getModel: () => null };
 		service.bulkEditService = {
 			apply: async () => ({ isApplied: true }),
 		};
@@ -98,7 +103,6 @@ suite('VSCloneEditCodeService', () => {
 		});
 
 		assert.strictEqual(Object.keys(service.diffAreaOfId).length, 1);
-		assert.strictEqual(Object.keys(service.diffOfId).length, 1);
 		assert.strictEqual(service.assistantApplyDiffZoneIdsByURI.get(uri.fsPath)?.size, 1);
 
 		const undoResult = await service.undoEditApply([{
@@ -120,7 +124,7 @@ suite('VSCloneEditCodeService', () => {
 		assert.strictEqual(service.assistantApplyDiffZoneIdsByURI.has(uri.fsPath), false);
 	});
 
-	test('recordAppliedDiffZone replaces the previous assistant apply zone for the same file', () => {
+	test('recordAppliedDiffZone keeps previous assistant apply zones for the same file', () => {
 		const service = createServiceHarness();
 		const uri = URI.file('/workspace/src/app.ts');
 		service.recordAppliedDiffZone({
@@ -164,10 +168,10 @@ suite('VSCloneEditCodeService', () => {
 		});
 
 		const trackedZoneIds = [...(service.assistantApplyDiffZoneIdsByURI.get(uri.fsPath) ?? [])];
-		assert.strictEqual(trackedZoneIds.length, 1);
-		assert.notStrictEqual(trackedZoneIds[0], firstZoneIds[0]);
-		assert.strictEqual(Object.keys(service.diffAreaOfId).length, 1);
-		assert.strictEqual(Object.keys(service.diffOfId).length, 1);
+		assert.strictEqual(trackedZoneIds.length, 2);
+		assert.strictEqual(trackedZoneIds.includes(firstZoneIds[0]), true);
+		assert.notStrictEqual(trackedZoneIds[1], firstZoneIds[0]);
+		assert.strictEqual(Object.keys(service.diffAreaOfId).length, 2);
 	});
 
 	test('instantlyApplySearchReplaceBlocks accepts bare SEARCH/REPLACE blocks when the target URI is already known', async () => {

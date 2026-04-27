@@ -13,6 +13,7 @@ function createThread(overrides: Partial<IVSCloneThreadCatalogEntry>): IVSCloneT
 		title: 'Thread 1',
 		updatedAt: 2000,
 		streamStateKind: undefined,
+		hasUnreadAgentMessage: false,
 		...overrides,
 	};
 }
@@ -27,6 +28,7 @@ suite('VSCloneThreadRailTree', () => {
 				title: 'Alpha',
 				updatedAt: 1111,
 				streamStateKind: 'llm',
+				hasUnreadAgentMessage: true,
 			}),
 			createThread({
 				threadId: 'thread-2',
@@ -42,16 +44,20 @@ suite('VSCloneThreadRailTree', () => {
 			{
 				threadId: 'thread-1',
 				title: 'Alpha',
+				updatedAt: 1111,
 				updatedLabel: '2m ago',
 				streamStateKind: 'llm',
 				selected: false,
+				hasUnreadAgentMessage: true,
 			},
 			{
 				threadId: 'thread-2',
 				title: 'Beta',
+				updatedAt: 2222,
 				updatedLabel: 'just now',
 				streamStateKind: undefined,
 				selected: true,
+				hasUnreadAgentMessage: false,
 			},
 		]);
 	});

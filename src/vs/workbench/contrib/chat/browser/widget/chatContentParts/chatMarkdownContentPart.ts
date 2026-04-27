@@ -131,6 +131,11 @@ export class ChatMarkdownContentPart extends Disposable implements IChatContentP
 		let thisPartCodeBlockIndexStart = 0;
 
 		this.domNode = $('div.chat-markdown-part');
+		if (isResponseVM(element) && !element.isComplete && markdown.content.value.length > 0) {
+			// Streaming responses re-render frequently as provider chunks arrive. Marking only incomplete
+			// response markdown lets CSS soften newly painted text without affecting restored history.
+			this.domNode.classList.add('chat-markdown-streaming');
+		}
 
 		if (this.rendererOptions.accessibilityOptions?.statusMessage) {
 			this.domNode.ariaLabel = this.rendererOptions.accessibilityOptions.statusMessage;

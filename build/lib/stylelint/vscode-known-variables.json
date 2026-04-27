@@ -1,5 +1,11 @@
 {
 	"colors": [
+		"--vsclone-subtle-accent",
+		"--vsclone-subtle-accent-border",
+		"--vsclone-subtle-accent-foreground",
+		"--vsclone-subtle-accent-strong",
+		"--vsclone-subtle-accent-surface",
+		"--vsclone-subtle-accent-surface-hover",
 		"--vscode-actionBar-toggledBackground",
 		"--vscode-activityBar-activeBackground",
 		"--vscode-activityBar-activeBorder",

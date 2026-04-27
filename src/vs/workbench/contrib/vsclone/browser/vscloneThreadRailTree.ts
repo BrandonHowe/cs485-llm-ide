@@ -18,6 +18,7 @@ export interface IVSCloneThreadCatalogEntry {
 	title: string;
 	updatedAt: number;
 	streamStateKind: VSCloneThreadStreamStateKind | undefined;
+	hasUnreadAgentMessage: boolean;
 }
 
 export interface IVSCloneThreadRailRow {
@@ -27,6 +28,7 @@ export interface IVSCloneThreadRailRow {
 	updatedLabel: string;
 	streamStateKind: VSCloneThreadStreamStateKind | undefined;
 	selected: boolean;
+	hasUnreadAgentMessage: boolean;
 }
 
 export function toVSCloneThreadRailRows(
@@ -41,5 +43,6 @@ export function toVSCloneThreadRailRows(
 		updatedLabel: formatRelativeTime(thread.updatedAt),
 		streamStateKind: thread.streamStateKind,
 		selected: thread.threadId === selectedThreadId,
+		hasUnreadAgentMessage: thread.hasUnreadAgentMessage,
 	}));
 }
