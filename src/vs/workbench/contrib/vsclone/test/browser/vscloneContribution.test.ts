@@ -80,7 +80,7 @@ suite('VSCloneContribution', () => {
 		assert.strictEqual(properties['vsclone.modelSwitcher.enabled']?.scope, ConfigurationScope.WINDOW);
 
 		assert.strictEqual(properties[VSCloneAutocompleteEnabledSetting]?.type, 'boolean');
-		assert.strictEqual(properties[VSCloneAutocompleteEnabledSetting]?.default, true);
+		assert.strictEqual(properties[VSCloneAutocompleteEnabledSetting]?.default, false);
 		assert.strictEqual(properties[VSCloneAutocompleteEnabledSetting]?.scope, ConfigurationScope.WINDOW);
 
 		assert.strictEqual(properties[VSCloneAutocompleteDebounceMsSetting]?.type, 'number');

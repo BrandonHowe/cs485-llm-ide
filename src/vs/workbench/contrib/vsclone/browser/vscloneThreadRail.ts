@@ -50,7 +50,9 @@ export class VSCloneThreadRail extends Disposable {
 	private selectedThreadId: string | undefined;
 	private hoveredThreadId: string | undefined;
 	private pendingDeleteThreadId: string | undefined;
-	private showAll = true;
+	// Keep the rail compact on first paint so a long conversation history does not push the
+	// composer controls out of reach before the user explicitly asks to expand the list.
+	private showAll = false;
 	private searchQuery = '';
 	private viewState: VSCloneRailState = 'loading';
 	private errorMessage: string | undefined;

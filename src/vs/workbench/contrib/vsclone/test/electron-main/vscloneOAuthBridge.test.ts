@@ -153,6 +153,15 @@ suite('VSCloneOAuth renderer/main-process integration', () => {
 					write(body: string) {
 						tokenRequestBodies.push(body);
 					},
+					setTimeout(_timeout: number, _callback: () => void) {
+						// The real ClientRequest arms a timeout before the body is written. The fake
+						// request completes synchronously through the mocked response path, so it only
+						// needs to accept the registration to exercise production token-exchange code.
+						return this;
+					},
+					destroy() {
+						return this;
+					},
 					end() {
 						queueMicrotask(() => {
 							callback?.(response as unknown as IncomingMessage);

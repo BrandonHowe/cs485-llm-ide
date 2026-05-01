@@ -320,7 +320,7 @@ suite('VSCloneThreadRail', () => {
 			rail.setRows([]);
 			const stateContainer = container.querySelector('.vsclone-thread-rail-state') as HTMLElement;
 			assert.strictEqual(stateContainer.getAttribute('role'), 'status');
-			assert.strictEqual(stateContainer.querySelector('.vsclone-thread-rail-state-icon')?.textContent, '[]');
+			assert.ok(stateContainer.querySelector('.vsclone-thread-rail-state-icon .codicon-comment-discussion'));
 			assert.strictEqual(stateContainer.querySelector('.vsclone-thread-rail-state-title')?.textContent, 'No threads yet');
 
 			rail.setLoading();
