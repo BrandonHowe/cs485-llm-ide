@@ -284,7 +284,18 @@ jobs:
           # Ship the Apple Silicon bundle directly as the macOS release asset.
           # The Intel/universal merge path was removed because macos-13 runner
           # availability made it the long pole on every release.
-          ditto -c -k --sequesterRsrc --keepParent "../VSCode-darwin-arm64/Code - OSS.app" "release/VSCode-darwin-arm64-${VERSION}.zip"
+          # GitHub-hosted macOS runners invoke the gulp package task from the
+          # repository checkout, but the actual app bundle location can vary
+          # between ../VSCode-darwin-arm64 and .build depending on the build
+          # layout. Resolve it from the package output instead of assuming the
+          # Azure Pipelines workspace shape.
+          APP_PATH="$(find .. .build -type d -name '*.app' -path '*/VSCode-darwin-arm64/*' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: macOS app bundle was not produced." >&2
+            find .. .build -type d -name 'VSCode-darwin-arm64' -print >&2
+            exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "release/VSCode-darwin-arm64-${VERSION}.zip"
           # Stable alias so deep links like /releases/latest/download/VSCode-darwin-arm64-latest.zip
           # keep resolving when package.json version bumps change the versioned filename.
           cp "release/VSCode-darwin-arm64-${VERSION}.zip" "release/VSCode-darwin-arm64-latest.zip"
