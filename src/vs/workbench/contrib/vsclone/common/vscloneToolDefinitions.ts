@@ -10,7 +10,7 @@ import { type VSCloneChatMode } from './vsclonePlanModeTypes.js';
  * buckets for gating edits and terminal access. Keeping the approval union next to the tool
  * metadata lets the message stream, prompt text, and execution service share one definition.
  */
-export type VSCloneToolApprovalType = 'edits' | 'terminal' | 'MCP tools';
+export type VSCloneToolApprovalType = 'edits' | 'terminal' | 'MCP tools' | 'user input';
 
 /**
  * Tool metadata stays centralized so prompt assembly and runtime dispatch keep the same contract.
@@ -44,14 +44,17 @@ export interface IVSCloneToolResultPayload {
 
 export interface IVSCloneToolJsonSchema {
 	readonly type: 'object';
-	readonly properties?: Readonly<Record<string, {
-		readonly type?: string;
-		readonly description: string;
-		readonly enum?: readonly string[];
-		readonly items?: unknown;
-		readonly properties?: unknown;
-		readonly additionalProperties?: unknown;
-	}>>;
+	readonly properties?: Readonly<Record<string, IVSCloneToolJsonSchemaProperty>>;
+	readonly required?: readonly string[];
+	readonly additionalProperties?: unknown;
+}
+
+export interface IVSCloneToolJsonSchemaProperty {
+	readonly type?: string;
+	readonly description: string;
+	readonly enum?: readonly string[];
+	readonly items?: IVSCloneToolJsonSchemaProperty;
+	readonly properties?: Readonly<Record<string, IVSCloneToolJsonSchemaProperty>>;
 	readonly required?: readonly string[];
 	readonly additionalProperties?: unknown;
 }
@@ -150,6 +153,51 @@ export const VSCLONE_TOOL_DEFINITIONS: readonly IVSCloneToolDefinition[] = [
 		],
 	},
 	{
+		name: 'ask_user',
+		description: 'Ask the user one or more multiple-choice questions, optionally allowing a free-response note for each question, then wait for their answer.',
+		approvalType: 'user input',
+		planModeAllowed: true,
+		parameters: [
+			{ name: 'questions', required: true, description: 'JSON array of question objects. Each object should include id, question, options, and optionally allow_free_response.' },
+		],
+		inputSchema: {
+			type: 'object',
+			properties: {
+				questions: {
+					type: 'array',
+					description: 'Questions to show the user. Use at most three focused questions.',
+					items: {
+						type: 'object',
+						description: 'A single question with options.',
+						properties: {
+							id: { type: 'string', description: 'Stable snake_case identifier for this question.' },
+							question: { type: 'string', description: 'The question to ask the user.' },
+							allow_free_response: { type: 'boolean', description: 'Whether the user may add a free-response answer.' },
+							options: {
+								type: 'array',
+								description: 'Two to five mutually exclusive options.',
+								items: {
+									type: 'object',
+									description: 'One option the user can choose.',
+									properties: {
+										label: { type: 'string', description: 'Short user-facing option label.' },
+										description: { type: 'string', description: 'One sentence explaining the tradeoff or impact.' },
+									},
+									required: ['label', 'description'],
+									additionalProperties: false,
+								},
+							},
+						},
+						required: ['id', 'question', 'options'],
+						additionalProperties: false,
+					},
+				},
+			},
+			required: ['questions'],
+			additionalProperties: false,
+		},
+	},
+	{
 		name: 'attempt_completion',
 		description: 'Signal that the requested task is complete.',
 		planModeAllowed: true,
@@ -239,6 +287,7 @@ export function formatToolDefinitionsForPrompt(
 	lines.push('## Tool Guidelines');
 	if (mode === 'plan') {
 		lines.push('- Use read_file, search_for_files, and ls_dir to gather codebase context before answering.');
+		lines.push('- Use ask_user when a choice materially changes the implementation plan and the answer cannot be inferred from codebase context.');
 		lines.push('- Do not attempt to edit files, run terminal commands, or propose executable SEARCH/REPLACE patches in plan mode.');
 		lines.push('- When you have enough context, call attempt_completion with a detailed implementation plan in its `result` argument.');
 	} else {
@@ -253,6 +302,7 @@ export function formatToolDefinitionsForPrompt(
 		lines.push('<replacement text>');
 		lines.push('>>>>>>> REPLACE');
 		lines.push('- Use run_command for one-off shell output and open_persistent_terminal/run_persistent_command when a shell needs to stay open.');
+		lines.push('- Use ask_user only when you are blocked on a decision that cannot be discovered with tools. Keep questions short and offer concrete options.');
 	}
 	lines.push('- The system prompt does not include a precomputed workspace tree, open-files list, or diagnostics dump. Discover that context lazily with tools.');
 	// Keep follow-up reads grounded in observed evidence rather than guessed starter files.

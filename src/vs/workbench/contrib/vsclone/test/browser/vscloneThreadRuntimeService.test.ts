@@ -158,7 +158,15 @@ suite('VSCloneThreadRuntimeService', () => {
 			_serviceBrand: undefined,
 			listToolDefinitions: () => [],
 			getToolDefinition: () => undefined,
-			getApprovalType: toolName => toolName === 'run_terminal_command' ? 'terminal' : undefined,
+			getApprovalType: toolName => {
+				if (toolName === 'run_terminal_command') {
+					return 'terminal';
+				}
+				if (toolName === 'ask_user') {
+					return 'user input';
+				}
+				return undefined;
+			},
 		};
 		const toolExecutionService: IVSCloneToolExecutionService = {
 			_serviceBrand: undefined,
@@ -245,5 +253,57 @@ suite('VSCloneThreadRuntimeService', () => {
 		// this assertion aligned with the actual message shape instead of over-constraining the type.
 		assert.ok(rejectedMessage && rejectedMessage.type === 'rejected');
 		assert.strictEqual(rejectedMessage.output, 'Rejected by the test harness.');
+	});
+
+	test('records ask_user answer as the terminal tool outcome and resumes the loop', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const { service } = createService(testDisposables, [
+			{
+				fullText: 'I need to ask a focused question.',
+				toolCall: {
+					id: 'tool-call-ask',
+					name: 'ask_user',
+					rawParams: {
+						questions: JSON.stringify([{
+							id: 'strategy',
+							question: 'Which implementation strategy should I use?',
+							options: [{ label: 'Conservative', description: 'Keep the change narrow.' }],
+						}]),
+					},
+					doneParams: ['questions'],
+					isDone: true,
+				},
+			},
+			{
+				fullText: 'I will use the conservative strategy.',
+			},
+		]);
+
+		const handle = service.runThread({
+			threadId: 'thread-ask',
+			turnId: 'thread-ask:turn-1',
+			sequence: 1,
+			sessionResource: 'vsclone://api/thread-ask',
+			promptText: 'Implement this with the right strategy',
+			mode: 'act',
+			vendor: 'openai',
+			modelId: 'gpt-5.3-codex',
+			modelIdentifier: 'openai/gpt-5.3-codex',
+		});
+
+		await waitForAwaitingApproval(service, 'thread-ask');
+		const answer = JSON.stringify({ answers: [{ id: 'strategy', choice: 'Conservative', free_response: '' }] }, undefined, 2);
+		assert.strictEqual(service.answerLatestToolRequest('thread-ask', answer), true);
+		await handle.done;
+
+		const state = service.getState('thread-ask');
+		const toolMessages = state?.messages.filter(message => message.role === 'tool') ?? [];
+		assert.deepStrictEqual(toolMessages.map(message => message.type), ['tool_request', 'success']);
+		const resultMessage = toolMessages.at(-1);
+		assert.ok(resultMessage?.type === 'success');
+		assert.strictEqual(resultMessage.output, answer);
+		const finalMessage = state?.messages.at(-1);
+		assert.ok(finalMessage?.role === 'assistant');
+		assert.strictEqual(finalMessage.content, 'I will use the conservative strategy.');
 	});
 });

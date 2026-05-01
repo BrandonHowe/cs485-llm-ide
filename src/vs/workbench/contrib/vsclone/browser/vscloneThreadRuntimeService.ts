@@ -83,6 +83,7 @@ export interface IVSCloneThreadRuntimeService {
 	cancelThread(threadId: string): void;
 	approveLatestToolRequest(threadId: string): boolean;
 	rejectLatestToolRequest(threadId: string, reason?: string): boolean;
+	answerLatestToolRequest(threadId: string, output: string): boolean;
 	/**
 	 * When enabled, approvals for `edits` tools (edit_file, create_file) are granted automatically
 	 * for the active workspace. Terminal and MCP tool approvals are unaffected.
@@ -451,6 +452,53 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		// uses. The rejected tool message is already persisted above, so resume from runtime state
 		// instead of terminating the restored thread at the approval boundary.
 		this.resumeThreadFromPersistedToolDecision(threadId, pendingToolRequest, 'rejection');
+		return true;
+	}
+
+	answerLatestToolRequest(threadId: string, output: string): boolean {
+		const execution = this.activeExecutions.get(threadId);
+		const pendingApproval = execution?.pendingApproval;
+		if (execution && pendingApproval?.toolName === 'ask_user') {
+			execution.pendingApproval = undefined;
+			pendingApproval.status = 'approved';
+			this.appendMessage(threadId, {
+				role: 'tool',
+				createdAt: Date.now(),
+				type: 'success',
+				toolName: pendingApproval.toolName,
+				approvalType: pendingApproval.approvalType,
+				params: pendingApproval.params,
+				output,
+				success: true,
+			});
+			this.updateState(threadId, state => ({
+				...state,
+				streamState: { kind: 'llm' },
+			}));
+			pendingApproval.deferred.complete({ kind: 'answered', output });
+			return true;
+		}
+
+		const pendingToolRequest = this.getAwaitingUserToolRequest(threadId);
+		if (!pendingToolRequest || pendingToolRequest.toolName !== 'ask_user') {
+			return false;
+		}
+
+		this.appendMessage(threadId, {
+			role: 'tool',
+			createdAt: Date.now(),
+			type: 'success',
+			toolName: pendingToolRequest.toolName,
+			approvalType: pendingToolRequest.approvalType,
+			params: pendingToolRequest.params,
+			output,
+			success: true,
+		});
+		this.updateState(threadId, state => ({
+			...state,
+			streamState: { kind: 'llm' },
+		}));
+		this.resumeThreadFromPersistedToolDecision(threadId, pendingToolRequest, 'approval');
 		return true;
 	}
 
@@ -941,6 +989,15 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				};
 				formattedToolResult = formatToolResult(toolCall.name, rejectedResult);
 				this.logTrace('warn', `[Tool Result] ${toolCall.name} rejected`);
+			} else if (approvalDecision.kind === 'answered') {
+				// ask_user is fulfilled by the pane itself. The answer is already persisted as the
+				// terminal tool result, so the loop only needs to replay that same result to the model.
+				const answeredResult = {
+					success: true,
+					output: approvalDecision.output,
+				};
+				formattedToolResult = formatToolResult(toolCall.name, answeredResult);
+				this.logTrace('info', `[Tool Result] ${toolCall.name} answered`);
 			} else {
 				const toolResult = await this.executeToolWithCancellation(toolCall.name, toolCall.rawParams, options.mode, execution);
 				this.recordToolResult(

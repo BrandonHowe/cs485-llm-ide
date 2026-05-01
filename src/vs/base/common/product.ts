@@ -46,6 +46,16 @@ export interface IChatSessionRecommendation {
 	readonly postInstallCommand?: string;
 }
 
+export interface IVSCloneProductConfiguration {
+	readonly oauth?: {
+		readonly google?: {
+			readonly clientId?: string;
+			readonly clientSecret?: string;
+			readonly quotaProject?: string;
+		};
+	};
+}
+
 export type ConfigurationSyncStore = {
 	url: string;
 	insidersUrl: string;
@@ -155,6 +165,8 @@ export interface IProductConfiguration {
 	readonly aiConfig?: {
 		readonly ariaKey: string;
 	};
+
+	readonly vsclone?: IVSCloneProductConfiguration;
 
 	readonly documentationUrl?: string;
 	readonly serverDocumentationUrl?: string;

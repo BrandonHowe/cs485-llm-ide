@@ -58,7 +58,8 @@ export type VSCloneThreadStreamState =
  */
 export type VSCloneThreadToolApprovalDecision =
 	| { readonly kind: 'approved' }
-	| { readonly kind: 'rejected'; readonly reason?: string };
+	| { readonly kind: 'rejected'; readonly reason?: string }
+	| { readonly kind: 'answered'; readonly output: string };
 
 /**
  * Checkpoints deliberately store full pre-edit file contents and directory existence because

@@ -208,6 +208,11 @@ export class VSCloneToolExecutionService implements IVSCloneToolExecutionService
 					return this.executeRunPersistentCommand(params, token);
 				case 'kill_persistent_terminal':
 					return this.executeKillPersistentTerminal(params, token);
+				case 'ask_user':
+					return {
+						success: false,
+						output: 'ask_user must be answered by the user before the agent can continue.',
+					};
 				case 'attempt_completion':
 					return {
 						success: true,

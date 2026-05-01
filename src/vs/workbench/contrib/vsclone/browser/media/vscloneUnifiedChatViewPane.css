@@ -531,9 +531,11 @@
 	background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent 88%);
 }
 
-/* Runtime error row: upstream API failures etc. render as a red-tinted compact row so they
- * stop reading as leaked debug prose. Borders/padding match the Void-style approval row shape
- * so failures fit the same visual family as other runtime status rows. */
+/* Runtime error card: upstream API failures (auth errors, 503s, rate limits, tool approval
+ * crashes) render as a tinted card with severity-based color, a title row, an explanation
+ * line, and an optional collapsible "Show details" disclosure that exposes the raw provider
+ * payload for debugging. Borders match the Void-style approval row shape so failures fit the
+ * same visual family as other runtime status rows. */
 .vsclone-thread-message.runtime-error {
 	padding: 0;
 	background: transparent;
@@ -543,33 +545,145 @@
 	gap: 0;
 }
 
-.vsclone-runtime-error-row {
+.vsclone-runtime-error-card {
 	display: flex;
-	align-items: center;
-	gap: 7px;
-	padding: 6px 10px;
+	flex-direction: column;
+	gap: 6px;
+	padding: 9px 11px;
+	border-radius: 6px;
 	border: 1px solid color-mix(in srgb, var(--vscode-errorForeground, #f85149) 45%, transparent 55%);
-	border-radius: 4px;
 	background: color-mix(in srgb, var(--vscode-errorForeground, #f85149) 10%, transparent 90%);
 	font-size: 12px;
-	line-height: 1.4;
+	line-height: 1.45;
+	min-width: 0;
+}
+
+.vsclone-thread-message.runtime-error.severity-warning .vsclone-runtime-error-card {
+	border-color: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground, #d29922) 55%, transparent 45%);
+	background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground, #d29922) 10%, transparent 90%);
+}
+
+.vsclone-runtime-error-header {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
 	min-width: 0;
 }
 
 .vsclone-runtime-error-icon {
 	font-size: 14px;
+	line-height: 18px;
 	color: var(--vscode-errorForeground, #f85149);
 	flex-shrink: 0;
 }
 
-.vsclone-runtime-error-label {
-	flex: 1;
+.vsclone-thread-message.runtime-error.severity-warning .vsclone-runtime-error-icon {
+	color: var(--vscode-notificationsWarningIcon-foreground, #d29922);
+}
+
+.vsclone-runtime-error-title-column {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
 	min-width: 0;
+	flex: 1;
+}
+
+.vsclone-runtime-error-title-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.vsclone-runtime-error-title {
+	font-weight: 600;
+	font-size: 12px;
+	color: color-mix(in srgb, var(--vscode-errorForeground, #f85149) 82%, var(--vscode-editor-foreground) 18%);
+	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	white-space: nowrap;
+	min-width: 0;
+}
+
+.vsclone-thread-message.runtime-error.severity-warning .vsclone-runtime-error-title {
+	color: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground, #d29922) 88%, var(--vscode-editor-foreground) 12%);
+}
+
+.vsclone-runtime-error-status-badge {
+	font-size: 10.5px;
+	font-weight: 600;
+	font-family: var(--monaco-monospace-font);
+	padding: 1px 5px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--vscode-errorForeground, #f85149) 22%, transparent 78%);
 	color: color-mix(in srgb, var(--vscode-errorForeground, #f85149) 82%, var(--vscode-editor-foreground) 18%);
-	font-weight: 500;
+	flex-shrink: 0;
+	letter-spacing: 0.02em;
+}
+
+.vsclone-thread-message.runtime-error.severity-warning .vsclone-runtime-error-status-badge {
+	background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground, #d29922) 22%, transparent 78%);
+	color: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground, #d29922) 88%, var(--vscode-editor-foreground) 12%);
+}
+
+.vsclone-runtime-error-message {
+	color: color-mix(in srgb, var(--vscode-foreground) 82%, transparent 18%);
+	font-size: 12px;
+	line-height: 1.45;
+	word-break: break-word;
+	white-space: pre-wrap;
+}
+
+.vsclone-runtime-error-details {
+	margin-left: 23px;
+	font-size: 11.5px;
+}
+
+.vsclone-runtime-error-details-summary {
+	cursor: pointer;
+	color: color-mix(in srgb, var(--vscode-foreground) 60%, transparent 40%);
+	user-select: none;
+	list-style: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 0;
+}
+
+.vsclone-runtime-error-details-summary::-webkit-details-marker {
+	display: none;
+}
+
+.vsclone-runtime-error-details-summary::before {
+	content: ">";
+	font-size: 9px;
+	transition: transform 120ms ease;
+	display: inline-block;
+}
+
+.vsclone-runtime-error-details[open] .vsclone-runtime-error-details-summary::before {
+	transform: rotate(90deg);
+}
+
+.vsclone-runtime-error-details-summary:hover {
+	color: var(--vscode-foreground);
+}
+
+.vsclone-runtime-error-details-body {
+	margin: 4px 0 0 0;
+	padding: 8px 10px;
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--vscode-editor-background) 70%, black 30%);
+	border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent 88%);
+	color: color-mix(in srgb, var(--vscode-foreground) 75%, transparent 25%);
+	font-family: var(--monaco-monospace-font);
+	font-size: 11px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-all;
+	max-height: 240px;
+	overflow: auto;
 }
 
 .vsclone-thread-message-meta {
@@ -741,6 +855,64 @@
 .vsclone-thread-message-assistant-text > .rendered-markdown > :last-child,
 .vsclone-tool-card-output > .rendered-markdown > :last-child {
 	margin-bottom: 0;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown pre,
+.vsclone-thread-message-assistant-text.rendered-markdown pre,
+.vsclone-tool-card-output.rendered-markdown pre,
+.vsclone-thread-message-text-segment > .rendered-markdown pre,
+.vsclone-thread-message-assistant-text > .rendered-markdown pre,
+.vsclone-tool-card-output > .rendered-markdown pre {
+	position: relative;
+	box-sizing: border-box;
+	max-width: 100%;
+	margin: 10px 0;
+	padding: 12px 42px 12px 12px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border, #303442) 78%, var(--vsclone-subtle-accent) 22%);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--vscode-editor-background, #101114) 82%, #000 18%);
+	overflow-x: auto;
+	overflow-y: hidden;
+	white-space: pre;
+}
+
+.vsclone-thread-message-text-segment.rendered-markdown pre code,
+.vsclone-thread-message-assistant-text.rendered-markdown pre code,
+.vsclone-tool-card-output.rendered-markdown pre code,
+.vsclone-thread-message-text-segment > .rendered-markdown pre code,
+.vsclone-thread-message-assistant-text > .rendered-markdown pre code,
+.vsclone-tool-card-output > .rendered-markdown pre code {
+	display: block;
+	width: max-content;
+	min-width: 100%;
+	white-space: pre;
+	word-break: normal;
+	overflow-wrap: normal;
+}
+
+.vsclone-code-block-copy {
+	position: absolute;
+	top: 7px;
+	right: 7px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border, #303442) 75%, transparent 25%);
+	border-radius: 5px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background, #1f222a) 88%, #000 12%);
+	color: color-mix(in srgb, var(--vscode-editor-foreground, #d8dbe3) 78%, transparent 22%);
+	cursor: pointer;
+}
+
+.vsclone-code-block-copy:hover,
+.vsclone-code-block-copy:focus-visible,
+.vsclone-code-block-copy.copied {
+	color: #f1f3f8;
+	border-color: var(--vsclone-subtle-accent-border);
+	background: var(--vsclone-subtle-accent-surface-hover);
 }
 
 /* Agent trace lines: fallback styling for older turns that still render as flat trace rows. */
@@ -1238,6 +1410,106 @@
 .vsclone-runtime-approval-button:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);
 	outline-offset: 1px;
+}
+
+.vsclone-runtime-user-question {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px;
+	border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 55%, var(--vscode-panel-border) 45%);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 78%, var(--vscode-editor-background) 22%);
+	box-sizing: border-box;
+	max-width: 100%;
+}
+
+.vsclone-runtime-user-question-header {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--vscode-editor-foreground);
+}
+
+.vsclone-runtime-user-question-fieldset {
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.vsclone-runtime-user-question-prompt {
+	margin: 0 0 2px;
+	padding: 0;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--vscode-editor-foreground);
+}
+
+.vsclone-runtime-user-question-option {
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr);
+	gap: 8px;
+	align-items: start;
+	padding: 7px 9px;
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 72%, transparent 28%);
+	border-radius: 5px;
+	background: color-mix(in srgb, var(--vscode-editor-background) 74%, transparent 26%);
+	cursor: pointer;
+}
+
+.vsclone-runtime-user-question-option:hover {
+	background: color-mix(in srgb, var(--vscode-list-hoverBackground) 70%, transparent 30%);
+}
+
+.vsclone-runtime-user-question-option input {
+	margin: 2px 0 0;
+}
+
+.vsclone-runtime-user-question-option-copy {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.vsclone-runtime-user-question-option-label {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--vscode-editor-foreground);
+	overflow-wrap: anywhere;
+}
+
+.vsclone-runtime-user-question-option-description {
+	font-size: 11.5px;
+	line-height: 1.35;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 72%, transparent 28%);
+	overflow-wrap: anywhere;
+}
+
+.vsclone-runtime-user-question-free-response {
+	width: 100%;
+	min-height: 52px;
+	padding: 7px 8px;
+	box-sizing: border-box;
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+	border-radius: 4px;
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	font-family: inherit;
+	font-size: 12px;
+	line-height: 1.4;
+	resize: vertical;
+}
+
+.vsclone-runtime-user-question-free-response:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
 }
 
 .vsclone-thread-message.runtime-tool-compact {

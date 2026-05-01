@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { env } from '../../../../base/common/process.js';
+import product from '../../../../platform/product/common/product.js';
 
 export type VSCloneModelVendor = 'openai' | 'anthropic' | 'google';
 
@@ -74,6 +75,19 @@ export interface IVSCloneOAuthProviderConfig {
 	readonly apiEndpoint: string;
 }
 
+interface IVSCloneOAuthProductConfig {
+	readonly google?: {
+		readonly clientId?: string;
+		readonly clientSecret?: string;
+		readonly quotaProject?: string;
+	};
+}
+
+function getVSCloneOAuthProductConfig(): IVSCloneOAuthProductConfig {
+	const candidate = (product as { readonly vsclone?: { readonly oauth?: IVSCloneOAuthProductConfig } }).vsclone?.oauth;
+	return candidate ?? {};
+}
+
 /**
  * Resolve optional OAuth credential overrides from process environment.
  * Empty strings are normalized to `undefined` so local `.env` files can leave keys blank.
@@ -83,7 +97,15 @@ function optionalOAuthEnvValue(key: string): string | undefined {
 	return rawValue && rawValue.length > 0 ? rawValue : undefined;
 }
 
-const googleOAuthClientId = optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_ID') ?? 'vsclone-google-client-id';
+function optionalProductOAuthValue(value: string | undefined): string | undefined {
+	const rawValue = value?.trim();
+	return rawValue && rawValue.length > 0 ? rawValue : undefined;
+}
+
+const productOAuthConfig = getVSCloneOAuthProductConfig();
+const googleOAuthClientId = optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_ID')
+	?? optionalProductOAuthValue(productOAuthConfig.google?.clientId)
+	?? 'vsclone-google-client-id';
 
 /**
  * Google's desktop OAuth client IDs embed the owning Cloud project number as the leading token
@@ -131,9 +153,14 @@ export const defaultOAuthProviderConfig: Readonly<Record<VSCloneModelVendor, IVS
 	google: {
 		vendor: 'google',
 		displayName: 'Google',
-		// Keep repository defaults credential-free while letting local env vars provide real credentials.
+		// Keep repository defaults credential-free. Local development can use environment overrides,
+		// while distributable builds can carry Google installed-app credentials in product.json because
+		// packaged mac apps do not inherit the repo-local `.env.vsclone` launcher file. Google desktop
+		// client secrets are not treated as confidential, but they must still match the client id when
+		// the token endpoint requires one.
 		clientId: googleOAuthClientId,
-		clientSecret: optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET'),
+		clientSecret: optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET')
+			?? optionalProductOAuthValue(productOAuthConfig.google?.clientSecret),
 		authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
 		tokenUrl: 'https://oauth2.googleapis.com/token',
 		// The public Gemini OAuth quickstart's manual OAuth flow uses the Gemini retriever scope for
@@ -148,7 +175,9 @@ export const defaultOAuthProviderConfig: Readonly<Record<VSCloneModelVendor, IVS
 		preferredPort: 0,
 		extraAuthorizeParams: { access_type: 'offline', prompt: 'consent' },
 		extraTokenParams: {},
-		quotaProject: optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT') ?? inferGoogleQuotaProjectFromClientId(googleOAuthClientId),
+		quotaProject: optionalOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT')
+			?? optionalProductOAuthValue(productOAuthConfig.google?.quotaProject)
+			?? inferGoogleQuotaProjectFromClientId(googleOAuthClientId),
 		apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
 	},
 } as const;

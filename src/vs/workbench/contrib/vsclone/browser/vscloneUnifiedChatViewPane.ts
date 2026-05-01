@@ -125,6 +125,18 @@ const COMPACT_RUNTIME_TOOL_NAMES = new Set<string>([
 	"search_for_files",
 ]);
 
+interface IVSCloneAskUserOption {
+	readonly label: string;
+	readonly description?: string;
+}
+
+interface IVSCloneAskUserQuestion {
+	readonly id: string;
+	readonly question: string;
+	readonly options: readonly IVSCloneAskUserOption[];
+	readonly allowFreeResponse: boolean;
+}
+
 function isCompactRuntimeTool(toolName: string): boolean {
 	return COMPACT_RUNTIME_TOOL_NAMES.has(toolName);
 }
@@ -209,12 +221,15 @@ interface ICompactRuntimeToolAction {
 }
 
 // Heuristic error detection for assistant content produced by `applyLoopError`. The runtime
-// stores upstream API failures (e.g. "400 status code (no body)"), tool-approval crashes
-// ("Tool approval failed for ..."), and safety-limit terminations as a plain assistant message.
-// We detect those shapes so the renderer can surface an error row instead of leaking the raw
-// string as prose. Single-line + known-error-prefix keeps false positives low.
+// stores upstream API failures (e.g. "400 status code (no body)", "got status: 503 ..."),
+// tool-approval crashes ("Tool approval failed for ..."), and safety-limit terminations as a
+// plain assistant message. We detect those shapes so the renderer can surface a structured
+// error row instead of leaking the raw string as prose. Known-error-prefix keeps false
+// positives low; we tolerate embedded newlines because some provider SDKs (Google) inline
+// pretty-printed JSON into the error message.
 const RUNTIME_ERROR_PATTERNS: readonly RegExp[] = [
 	/^\d{3}\b.*\bstatus code\b/i,
+	/^got status:\s*\d{3}\b/i,
 	/^Request failed\b/i,
 	/^Tool approval failed for\b/i,
 	/^Agent loop exceeded the safety limit\b/i,
@@ -224,23 +239,184 @@ const RUNTIME_ERROR_PATTERNS: readonly RegExp[] = [
 
 function looksLikeRuntimeErrorContent(content: string): boolean {
 	const trimmed = content.trim();
+	// Reject multi-line content to avoid misclassifying an assistant response that just happens
+	// to discuss a status code (e.g. "503 status code typically means...\n\nThe server is ...").
+	// All currently known producers (`applyLoopError` plus provider SDK wrappers) emit single
+	// lines - the Google SDK inlines its JSON via `JSON.stringify`, which is also single-line.
 	if (trimmed.length === 0 || trimmed.includes('\n')) {
 		return false;
 	}
 	return RUNTIME_ERROR_PATTERNS.some(pattern => pattern.test(trimmed));
 }
 
-function toHumanReadableRuntimeError(raw: string): string {
-	const trimmed = raw.trim();
-	const statusMatch = /^(\d{3})\b.*\bstatus code\b/i.exec(trimmed);
-	if (statusMatch) {
-		return localize(
-			"vsclone.thread.runtime.error.requestFailed",
-			"Request failed ({0})",
-			statusMatch[1],
-		);
+interface IRuntimeErrorDescriptor {
+	readonly title: string;
+	readonly message: string;
+	readonly severity: 'error' | 'warning';
+	readonly statusCode?: number;
+	readonly raw: string;
+}
+
+function statusTitle(status: number): string {
+	switch (status) {
+		case 400: return localize("vsclone.thread.runtime.error.title.badRequest", "Bad request");
+		case 401: return localize("vsclone.thread.runtime.error.title.unauthorized", "Authentication required");
+		case 403: return localize("vsclone.thread.runtime.error.title.forbidden", "Access denied");
+		case 404: return localize("vsclone.thread.runtime.error.title.notFound", "Not found");
+		case 408: return localize("vsclone.thread.runtime.error.title.timeout", "Request timed out");
+		case 409: return localize("vsclone.thread.runtime.error.title.conflict", "Conflict");
+		case 413: return localize("vsclone.thread.runtime.error.title.tooLarge", "Request too large");
+		case 422: return localize("vsclone.thread.runtime.error.title.unprocessable", "Unprocessable request");
+		case 429: return localize("vsclone.thread.runtime.error.title.rateLimited", "Rate limit exceeded");
+		case 500: return localize("vsclone.thread.runtime.error.title.internal", "Internal server error");
+		case 502: return localize("vsclone.thread.runtime.error.title.badGateway", "Bad gateway");
+		case 503: return localize("vsclone.thread.runtime.error.title.unavailable", "Service unavailable");
+		case 504: return localize("vsclone.thread.runtime.error.title.gatewayTimeout", "Gateway timeout");
+		case 529: return localize("vsclone.thread.runtime.error.title.overloaded", "Provider overloaded");
+		default: return localize("vsclone.thread.runtime.error.title.requestFailed", "Request failed ({0})", status);
 	}
-	return trimmed;
+}
+
+function severityForStatus(status: number): 'error' | 'warning' {
+	if (status === 429 || status === 401 || status === 403 || status === 408 || status === 503 || status === 529) {
+		return 'warning';
+	}
+	return 'error';
+}
+
+// Walks a parsed JSON payload from a provider error and returns the most user-visible
+// `message` string we can find. Providers nest these inconsistently - sometimes the inner
+// `error.message` is itself a JSON-stringified envelope (Google), so we recurse one level.
+function pickProviderErrorMessage(payload: unknown, depth = 0): string | undefined {
+	// Recursion goes object to object.error to string to JSON.parse to object to object.error to string,
+	// which is six hops for the common Google-wraps-stringified-Google case. Cap a little higher
+	// to absorb future provider quirks.
+	if (depth > 8 || payload === null || payload === undefined) {
+		return undefined;
+	}
+	if (typeof payload === 'string') {
+		const trimmed = payload.trim();
+		if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+			try {
+				return pickProviderErrorMessage(JSON.parse(trimmed), depth + 1);
+			} catch {
+				return trimmed;
+			}
+		}
+		return trimmed.length > 0 ? trimmed : undefined;
+	}
+	if (Array.isArray(payload)) {
+		for (const entry of payload) {
+			const found = pickProviderErrorMessage(entry, depth + 1);
+			if (found) {
+				return found;
+			}
+		}
+		return undefined;
+	}
+	if (typeof payload === 'object') {
+		const record = payload as Record<string, unknown>;
+		if (typeof record.message === 'string' && record.message.trim().length > 0) {
+			return pickProviderErrorMessage(record.message, depth + 1);
+		}
+		if (record.error !== undefined) {
+			const fromError = pickProviderErrorMessage(record.error, depth + 1);
+			if (fromError) {
+				return fromError;
+			}
+		}
+		if (typeof record.detail === 'string' && record.detail.trim().length > 0) {
+			return record.detail.trim();
+		}
+	}
+	return undefined;
+}
+
+function extractTrailingJsonPayload(raw: string): unknown {
+	const start = raw.indexOf('{');
+	if (start === -1) {
+		return undefined;
+	}
+	const end = raw.lastIndexOf('}');
+	if (end <= start) {
+		return undefined;
+	}
+	const slice = raw.slice(start, end + 1);
+	try {
+		return JSON.parse(slice);
+	} catch {
+		return undefined;
+	}
+}
+
+function parseRuntimeError(raw: string): IRuntimeErrorDescriptor {
+	const trimmed = raw.trim();
+
+	// Google `@google/genai` SDK: `got status: 503 Service Unavailable. {...}`
+	const googleMatch = /^got status:\s*(\d{3})\b\s*([^.{]*)\.?\s*(\{[\s\S]*\})?\s*$/i.exec(trimmed);
+	if (googleMatch) {
+		const status = parseInt(googleMatch[1], 10);
+		const statusText = googleMatch[2]?.trim();
+		const payload = googleMatch[3] ? (() => { try { return JSON.parse(googleMatch[3]); } catch { return undefined; } })() : undefined;
+		const detail = pickProviderErrorMessage(payload);
+		return {
+			title: statusText && statusText.length > 0 ? statusText : statusTitle(status),
+			message: detail ?? localize("vsclone.thread.runtime.error.providerUnavailable", "The model provider returned an error."),
+			severity: severityForStatus(status),
+			statusCode: status,
+			raw: trimmed,
+		};
+	}
+
+	// Generic "<code> status code (no body)" / "Bad status code 400 ..." patterns.
+	const genericStatusMatch = /^(?:Bad |Unexpected )?(?:status code\s*)?(\d{3})\b/i.exec(trimmed);
+	if (genericStatusMatch && /\bstatus code\b/i.test(trimmed)) {
+		const status = parseInt(genericStatusMatch[1], 10);
+		const payload = extractTrailingJsonPayload(trimmed);
+		const detail = pickProviderErrorMessage(payload);
+		return {
+			title: statusTitle(status),
+			message: detail ?? trimmed,
+			severity: severityForStatus(status),
+			statusCode: status,
+			raw: trimmed,
+		};
+	}
+
+	if (/^Tool approval failed for\b/i.test(trimmed)) {
+		const message = trimmed.replace(/^Tool approval failed for\s*/i, '').trim();
+		return {
+			title: localize("vsclone.thread.runtime.error.title.toolApproval", "Tool approval failed"),
+			message: message.length > 0 ? message : trimmed,
+			severity: 'error',
+			raw: trimmed,
+		};
+	}
+
+	if (/^Agent loop exceeded the safety limit\b/i.test(trimmed)) {
+		return {
+			title: localize("vsclone.thread.runtime.error.title.safetyLimit", "Agent loop stopped"),
+			message: trimmed,
+			severity: 'warning',
+			raw: trimmed,
+		};
+	}
+
+	if (/^Not signed in to\b/i.test(trimmed)) {
+		return {
+			title: localize("vsclone.thread.runtime.error.title.signedOut", "Not signed in"),
+			message: trimmed,
+			severity: 'warning',
+			raw: trimmed,
+		};
+	}
+
+	return {
+		title: localize("vsclone.thread.runtime.error.title.generic", "Something went wrong"),
+		message: trimmed,
+		severity: 'error',
+		raw: trimmed,
+	};
 }
 
 function formatTokenEstimate(tokens: number): string {
@@ -306,6 +482,8 @@ function compactRuntimeToolAction(toolName: string): ICompactRuntimeToolAction {
 			return { past: "Edited", gerund: "Editing", infinitive: "edit" };
 		case "create_file":
 			return { past: "Created", gerund: "Creating", infinitive: "create" };
+		case "ask_user":
+			return { past: "Answered", gerund: "Asking", infinitive: "ask" };
 		case "read_file":
 		default:
 			return { past: "Read", gerund: "Reading", infinitive: "read" };
@@ -3068,27 +3246,71 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	private renderRuntimeErrorMessage(rawErrorText: string): HTMLElement {
-		const item = document.createElement('div');
-		item.className = 'vsclone-thread-message assistant runtime runtime-error';
-		this.markRuntimeElementEntrance(item, `error:${rawErrorText.trim()}`);
+		const descriptor = parseRuntimeError(rawErrorText);
 
-		const row = document.createElement('div');
-		row.className = 'vsclone-runtime-error-row';
+		const item = document.createElement('div');
+		item.className = `vsclone-thread-message assistant runtime runtime-error severity-${descriptor.severity}`;
+		this.markRuntimeElementEntrance(item, `error:${descriptor.raw}`);
+
+		const card = document.createElement('div');
+		card.className = 'vsclone-runtime-error-card';
+
+		const header = document.createElement('div');
+		header.className = 'vsclone-runtime-error-header';
 
 		const icon = document.createElement('span');
-		icon.className = 'codicon codicon-warning vsclone-runtime-error-icon';
+		const iconCodicon = descriptor.severity === 'warning' ? 'codicon-warning' : 'codicon-error';
+		icon.className = `codicon ${iconCodicon} vsclone-runtime-error-icon`;
 		icon.setAttribute('aria-hidden', 'true');
-		row.appendChild(icon);
+		header.appendChild(icon);
 
-		const label = document.createElement('span');
-		label.className = 'vsclone-runtime-error-label';
-		label.textContent = toHumanReadableRuntimeError(rawErrorText);
-		// Full error surface stays available on hover for debugging, since the humanized label
-		// intentionally drops provider-specific detail like "(no body)".
-		label.title = rawErrorText.trim();
-		row.appendChild(label);
+		const titleColumn = document.createElement('div');
+		titleColumn.className = 'vsclone-runtime-error-title-column';
 
-		item.appendChild(row);
+		const titleRow = document.createElement('div');
+		titleRow.className = 'vsclone-runtime-error-title-row';
+		const title = document.createElement('span');
+		title.className = 'vsclone-runtime-error-title';
+		title.textContent = descriptor.title;
+		titleRow.appendChild(title);
+		if (descriptor.statusCode !== undefined) {
+			const badge = document.createElement('span');
+			badge.className = 'vsclone-runtime-error-status-badge';
+			badge.textContent = String(descriptor.statusCode);
+			titleRow.appendChild(badge);
+		}
+		titleColumn.appendChild(titleRow);
+
+		if (descriptor.message && descriptor.message !== descriptor.title) {
+			const message = document.createElement('div');
+			message.className = 'vsclone-runtime-error-message';
+			message.textContent = descriptor.message;
+			titleColumn.appendChild(message);
+		}
+
+		header.appendChild(titleColumn);
+		card.appendChild(header);
+
+		// Only surface the disclosure when the raw payload carries information beyond the
+		// already-displayed title/message - avoids a redundant "Show details" toggle that just
+		// reveals the same sentence the user is already reading.
+		const rawTrimmed = descriptor.raw.trim();
+		const hasExtraDetail = rawTrimmed !== descriptor.message.trim() && rawTrimmed !== descriptor.title.trim();
+		if (hasExtraDetail) {
+			const details = document.createElement('details');
+			details.className = 'vsclone-runtime-error-details';
+			const summary = document.createElement('summary');
+			summary.className = 'vsclone-runtime-error-details-summary';
+			summary.textContent = localize("vsclone.thread.runtime.error.showDetails", "Show details");
+			details.appendChild(summary);
+			const pre = document.createElement('pre');
+			pre.className = 'vsclone-runtime-error-details-body';
+			pre.textContent = rawTrimmed;
+			details.appendChild(pre);
+			card.appendChild(details);
+		}
+
+		item.appendChild(card);
 		return item;
 	}
 
@@ -3283,7 +3505,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	): HTMLElement | undefined {
 		// attempt_completion is the agent's "I'm done" signal, not a real tool call. Cursor/Void
 		// allow-any-unicode-next-line
-		// don't have an equivalent — their agent loops stop when the model emits no tool call.
+		// don't have an equivalent - their agent loops stop when the model emits no tool call.
 		// Rendering the tool card made it look like the agent was still working after its final
 		// summary, so we fold the completion text into a final assistant-style row and drop the
 		// intermediate request/running transitions. Rejections/errors still surface as compact
@@ -3309,8 +3531,22 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			return this.renderCompactRuntimeToolMessage(message);
 		}
 
+		if (message.toolName === "ask_user") {
+			if (message.type === "tool_request") {
+				const livePendingRequest = this.getLatestAwaitingRuntimeToolRequest(state);
+				if (livePendingRequest?.id === message.id) {
+					return this.renderRuntimeUserQuestionRequest(threadId, message);
+				}
+				return undefined;
+			}
+			if (message.type === "running_now") {
+				return undefined;
+			}
+			return this.renderCompactRuntimeToolMessage(message);
+		}
+
 		// Read-only tools (read_file, ls_dir, search_for_files) are high-volume and low-signal:
-		// every call otherwise renders three cards (pending → running → completed) plus the full
+		// every call otherwise renders three cards (pending to running to completed) plus the full
 		// tool output. Collapse them to a single italic status line emitted only on the terminal
 		// state, and suppress the intermediate transitions entirely.
 		if (isCompactRuntimeTool(message.toolName)) {
@@ -3504,6 +3740,121 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		actions.appendChild(rejectButton);
 
 		return actions;
+	}
+
+	private renderRuntimeUserQuestionRequest(
+		threadId: string,
+		message: Extract<IVSCloneThreadRuntimeMessage, { readonly role: "tool"; readonly type: "tool_request" }>,
+	): HTMLElement {
+		const item = document.createElement("div");
+		item.className = "vsclone-thread-message assistant runtime runtime-tool runtime-user-question";
+		this.markRuntimeElementEntrance(item, `ask-user:${message.id}`);
+
+		const form = document.createElement("form");
+		form.className = "vsclone-runtime-user-question";
+
+		const header = document.createElement("div");
+		header.className = "vsclone-runtime-user-question-header";
+		const icon = document.createElement("span");
+		icon.className = "codicon codicon-question";
+		icon.setAttribute("aria-hidden", "true");
+		header.appendChild(icon);
+		const title = document.createElement("span");
+		title.textContent = localize("vsclone.thread.runtime.askUser.title", "Agent needs your input");
+		header.appendChild(title);
+		form.appendChild(header);
+
+		const questions = parseAskUserQuestions(message.params.questions);
+		const answers = new Map<string, { choice?: string; freeResponse?: string }>();
+
+		for (const question of questions) {
+			const fieldset = document.createElement("fieldset");
+			fieldset.className = "vsclone-runtime-user-question-fieldset";
+			const legend = document.createElement("legend");
+			legend.className = "vsclone-runtime-user-question-prompt";
+			legend.textContent = question.question;
+			fieldset.appendChild(legend);
+
+			for (const option of question.options) {
+				const label = document.createElement("label");
+				label.className = "vsclone-runtime-user-question-option";
+				const input = document.createElement("input");
+				input.type = "radio";
+				input.name = `vsclone-ask-user-${message.id}-${question.id}`;
+				input.value = option.label;
+				input.required = true;
+				input.addEventListener(EventType.CHANGE, () => {
+					answers.set(question.id, {
+						...answers.get(question.id),
+						choice: option.label,
+					});
+				});
+				label.appendChild(input);
+
+				const copy = document.createElement("span");
+				copy.className = "vsclone-runtime-user-question-option-copy";
+				const optionLabel = document.createElement("span");
+				optionLabel.className = "vsclone-runtime-user-question-option-label";
+				optionLabel.textContent = option.label;
+				copy.appendChild(optionLabel);
+				if (option.description) {
+					const description = document.createElement("span");
+					description.className = "vsclone-runtime-user-question-option-description";
+					description.textContent = option.description;
+					copy.appendChild(description);
+				}
+				label.appendChild(copy);
+				fieldset.appendChild(label);
+			}
+
+			if (question.allowFreeResponse) {
+				const textarea = document.createElement("textarea");
+				textarea.className = "vsclone-runtime-user-question-free-response";
+				textarea.rows = 2;
+				textarea.required = question.options.length === 0;
+				textarea.placeholder = localize("vsclone.thread.runtime.askUser.freeResponse", "Optional note");
+				textarea.addEventListener(EventType.INPUT, () => {
+					answers.set(question.id, {
+						...answers.get(question.id),
+						freeResponse: textarea.value,
+					});
+				});
+				fieldset.appendChild(textarea);
+			}
+
+			form.appendChild(fieldset);
+		}
+
+		const buttons = document.createElement("div");
+		buttons.className = "vsclone-runtime-approval-buttons";
+		const submitButton = document.createElement("button");
+		submitButton.type = "submit";
+		submitButton.className = "vsclone-runtime-approval-button approve";
+		submitButton.textContent = localize("vsclone.thread.runtime.askUser.submit", "Send answer");
+		buttons.appendChild(submitButton);
+
+		const rejectButton = document.createElement("button");
+		rejectButton.type = "button";
+		rejectButton.className = "vsclone-runtime-approval-button reject";
+		rejectButton.textContent = localize("vsclone.thread.runtime.askUser.cancel", "Cancel");
+		rejectButton.addEventListener(EventType.CLICK, () => {
+			if (!this.threadRuntimeService.rejectLatestToolRequest(threadId, "User input request was cancelled by the user.")) {
+				this.notificationService.warn(localize("vsclone.thread.runtime.askUser.missing", "The pending user input request is no longer available."));
+			}
+		});
+		buttons.appendChild(rejectButton);
+		form.appendChild(buttons);
+
+		form.addEventListener(EventType.SUBMIT, event => {
+			event.preventDefault();
+			const output = formatAskUserAnswers(questions, answers);
+			if (!this.threadRuntimeService.answerLatestToolRequest(threadId, output)) {
+				this.notificationService.warn(localize("vsclone.thread.runtime.askUser.missing", "The pending user input request is no longer available."));
+			}
+		});
+
+		item.appendChild(form);
+		return item;
 	}
 
 	private renderRuntimeApprovalRequest(
@@ -4277,6 +4628,72 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			segment,
 		);
 		this.renderedMarkdownDisposables.add(rendered);
+		this.decorateRenderedCodeBlocks(rendered.element);
+	}
+
+	private decorateRenderedCodeBlocks(renderedRoot: HTMLElement): void {
+		const preElements: HTMLElement[] = [];
+		const collectPreElements = (element: Element): void => {
+			if (isHTMLElement(element) && element.tagName.toLowerCase() === 'pre') {
+				preElements.push(element);
+			}
+			for (const child of element.children) {
+				collectPreElements(child);
+			}
+		};
+		const findFirstCodeElement = (element: Element): HTMLElement | undefined => {
+			for (const child of element.children) {
+				if (isHTMLElement(child) && child.tagName.toLowerCase() === 'code') {
+					return child;
+				}
+				const nested = findFirstCodeElement(child);
+				if (nested) {
+					return nested;
+				}
+			}
+			return undefined;
+		};
+
+		collectPreElements(renderedRoot);
+		for (const pre of preElements) {
+			if (!isHTMLElement(pre) || pre.classList.contains('vsclone-code-block')) {
+				continue;
+			}
+
+			pre.classList.add('vsclone-code-block');
+
+			const code = findFirstCodeElement(pre);
+			const copyText = code?.textContent ?? pre.textContent ?? '';
+			if (!copyText) {
+				continue;
+			}
+
+			const copyButton = document.createElement('button');
+			copyButton.type = 'button';
+			copyButton.className = 'vsclone-code-block-copy';
+			copyButton.title = localize('vsclone.copyCodeBlock', "Copy code");
+			copyButton.setAttribute('aria-label', localize('vsclone.copyCodeBlockAria', "Copy code block"));
+
+			const copyIcon = document.createElement('span');
+			copyIcon.className = 'codicon codicon-copy';
+			copyButton.appendChild(copyIcon);
+
+			// The markdown renderer owns the code DOM; this lightweight decoration keeps the copy
+			// action close to the bounded scroll container without replacing or reparsing tokens.
+			this.renderedMarkdownDisposables.add(addDisposableListener(copyButton, EventType.CLICK, async event => {
+				event.stopPropagation();
+				await this.clipboardService.writeText(copyText);
+				copyIcon.className = 'codicon codicon-check';
+				copyButton.classList.add('copied');
+				const resetHandle = setTimeout(() => {
+					copyIcon.className = 'codicon codicon-copy';
+					copyButton.classList.remove('copied');
+				}, 1200);
+				this.renderedMarkdownDisposables.add(toDisposable(() => clearTimeout(resetHandle)));
+			}));
+
+			pre.appendChild(copyButton);
+		}
 	}
 
 	private appendRuntimeAssistantMarkdownSegment(
@@ -4579,6 +4996,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		if (lower.includes("completion") || lower.includes("attempt")) {
 			return "codicon-sparkle";
+		}
+		if (lower.includes("ask") || lower.includes("question")) {
+			return "codicon-question";
 		}
 		if (lower.includes("delete") || lower.includes("remove")) {
 			return "codicon-trash";
@@ -6331,4 +6751,98 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		this.applyRailLayout();
 		this.focusInput();
 	}
+}
+
+function parseAskUserQuestions(rawQuestions: unknown): readonly IVSCloneAskUserQuestion[] {
+	const parsed = parseJsonValue(rawQuestions);
+	const rawList = Array.isArray(parsed) ? parsed : [];
+	const questions = rawList
+		.map((entry, index) => toAskUserQuestion(entry, index))
+		.filter((entry): entry is IVSCloneAskUserQuestion => Boolean(entry));
+	if (questions.length > 0) {
+		return questions.slice(0, 3);
+	}
+
+	return [{
+		id: "answer",
+		question: localize("vsclone.thread.runtime.askUser.fallbackQuestion", "What should the agent do next?"),
+		options: [],
+		allowFreeResponse: true,
+	}];
+}
+
+function toAskUserQuestion(value: unknown, index: number): IVSCloneAskUserQuestion | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return undefined;
+	}
+	const candidate = value as Record<string, unknown>;
+	const question = typeof candidate.question === "string" ? candidate.question.trim() : "";
+	if (!question) {
+		return undefined;
+	}
+	const options = Array.isArray(candidate.options)
+		? candidate.options.map(toAskUserOption).filter((entry): entry is IVSCloneAskUserOption => Boolean(entry)).slice(0, 5)
+		: [];
+	const allowFreeResponse = candidate.allow_free_response === true || candidate.allowFreeResponse === true || options.length === 0;
+	return {
+		id: sanitizeAskUserQuestionId(candidate.id, index),
+		question,
+		options,
+		allowFreeResponse,
+	};
+}
+
+function toAskUserOption(value: unknown): IVSCloneAskUserOption | undefined {
+	if (typeof value === "string") {
+		const label = value.trim();
+		return label ? { label } : undefined;
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return undefined;
+	}
+	const candidate = value as Record<string, unknown>;
+	const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
+	if (!label) {
+		return undefined;
+	}
+	const description = typeof candidate.description === "string" ? candidate.description.trim() : "";
+	return {
+		label,
+		...(description ? { description } : {}),
+	};
+}
+
+function parseJsonValue(value: unknown): unknown {
+	if (typeof value !== "string") {
+		return value;
+	}
+	try {
+		return JSON.parse(value);
+	} catch {
+		return undefined;
+	}
+}
+
+function sanitizeAskUserQuestionId(value: unknown, index: number): string {
+	const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+	const sanitized = raw.replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+	return sanitized || `question_${index + 1}`;
+}
+
+function formatAskUserAnswers(
+	questions: readonly IVSCloneAskUserQuestion[],
+	answers: ReadonlyMap<string, { readonly choice?: string; readonly freeResponse?: string }>,
+): string {
+	const payload = {
+		answers: questions.map(question => {
+			const answer = answers.get(question.id);
+			return {
+				id: question.id,
+				question: question.question,
+				choice: answer?.choice ?? "",
+				free_response: answer?.freeResponse?.trim() ?? "",
+			};
+		}),
+	};
+	return JSON.stringify(payload, undefined, 2);
 }

@@ -904,6 +904,12 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 
 	private recordAppliedDiffZone(plan: IFileApplyPlan): void {
 		const uri = plan.uri;
+		// Assistant apply zones are whole-file review surfaces, not per-edit ranges. Keeping an older
+		// whole-file zone around after a second apply to the same file makes both zones re-diff the
+		// same live text, so one Accept/Reject can leave duplicate red/green hunks from the stale
+		// zone. Treat the next assistant apply as the new review boundary for that file.
+		this.clearAssistantApplyDiffZonesForURI(uri);
+
 		// Monaco counts a trailing newline as its own empty line; our custom `countLines` strips it.
 		// The DiffZone has to cover every line the model reports, otherwise the refresh slice drops
 		// the trailing empty line and findDiffs reports a phantom deletion below the file. Split on
@@ -921,10 +927,8 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		};
 		const diffZone = this.addDiffArea(adding);
 
-		// Multiple assistant edits can land against the same file before the user has reviewed the
-		// earlier ones. Keep each review zone alive so a later apply does not implicitly accept the
-		// previous suggestion by deleting its diff surface. Explicit accept/reject and undo paths
-		// remain responsible for clearing zones once the user or transcript action resolves them.
+		// Track the single live assistant review zone so undo and the next assistant apply can clear
+		// it without disturbing user-created Ctrl+K zones or unrelated diff areas.
 		this.trackAssistantApplyDiffZone(diffZone);
 		// Under Void's refresh-rebuild model, _diffOfId is populated by the refresh pass that runs
 		// here. `plan.resolvedEdits` no longer drives the diff list -- findDiffs does.

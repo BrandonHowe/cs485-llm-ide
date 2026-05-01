@@ -124,7 +124,7 @@ suite('VSCloneEditCodeService', () => {
 		assert.strictEqual(service.assistantApplyDiffZoneIdsByURI.has(uri.fsPath), false);
 	});
 
-	test('recordAppliedDiffZone keeps previous assistant apply zones for the same file', () => {
+	test('recordAppliedDiffZone replaces previous assistant apply zones for the same file', () => {
 		const service = createServiceHarness();
 		const uri = URI.file('/workspace/src/app.ts');
 		service.recordAppliedDiffZone({
@@ -168,10 +168,10 @@ suite('VSCloneEditCodeService', () => {
 		});
 
 		const trackedZoneIds = [...(service.assistantApplyDiffZoneIdsByURI.get(uri.fsPath) ?? [])];
-		assert.strictEqual(trackedZoneIds.length, 2);
-		assert.strictEqual(trackedZoneIds.includes(firstZoneIds[0]), true);
-		assert.notStrictEqual(trackedZoneIds[1], firstZoneIds[0]);
-		assert.strictEqual(Object.keys(service.diffAreaOfId).length, 2);
+		assert.strictEqual(trackedZoneIds.length, 1);
+		assert.notStrictEqual(trackedZoneIds[0], firstZoneIds[0]);
+		assert.strictEqual(Object.keys(service.diffAreaOfId).length, 1);
+		assert.strictEqual(service.diffAreasOfURI[uri.fsPath]?.has(firstZoneIds[0].toString()), false);
 	});
 
 	test('instantlyApplySearchReplaceBlocks accepts bare SEARCH/REPLACE blocks when the target URI is already known', async () => {

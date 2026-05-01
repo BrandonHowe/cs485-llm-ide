@@ -51,7 +51,7 @@ async function runDmgBuild(settingsFile: string, volumeName: string, artifactPat
 
 async function main(buildDir?: string, outDir?: string): Promise<void> {
 	const arch = process.env['VSCODE_ARCH'];
-	const quality = process.env['VSCODE_QUALITY'];
+	const quality = process.env['VSCODE_QUALITY'] ?? 'vsclone';
 
 	if (!buildDir) {
 		throw new Error('Build directory argument is required');
@@ -83,6 +83,9 @@ async function main(buildDir?: string, outDir?: string): Promise<void> {
 		case 'exploration':
 			title = 'VS Code Exploration';
 			break;
+		case 'vsclone':
+			title = product.nameLong;
+			break;
 	}
 
 	if (!fs.existsSync(appPath)) {
@@ -103,7 +106,8 @@ async function main(buildDir?: string, outDir?: string): Promise<void> {
 		'badge-icon': diskIconPath,
 		background: backgroundPath,
 		format: 'ULMO',
-		'text-size': 12,
+		'icon-size': 96,
+		'text-size': 13,
 		window: {
 			position: { x: 100, y: 400 },
 			size: { width: 480, height: 352 }
@@ -112,13 +116,13 @@ async function main(buildDir?: string, outDir?: string): Promise<void> {
 			{
 				path: appPath,
 				x: 120,
-				y: 160,
+				y: 170,
 				type: 'file'
 			},
 			{
 				path: '/Applications',
 				x: 360,
-				y: 160,
+				y: 170,
 				type: 'link'
 			}
 		]
