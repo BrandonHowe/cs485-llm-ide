@@ -280,8 +280,9 @@ jobs:
         run: |
           set -e
           VERSION="$(node -p "require('./package.json').version")"
-          mkdir -p release
-          # Ship the Apple Silicon bundle directly as the macOS release asset.
+          mkdir -p release dmg-out
+          # Ship the Apple Silicon build as a DMG so macOS users get the normal
+          # drag-to-Applications installer experience instead of a raw app zip.
           # The Intel/universal merge path was removed because macos-13 runner
           # availability made it the long pole on every release.
           # GitHub-hosted macOS runners invoke the gulp package task from the
@@ -295,16 +296,19 @@ jobs:
             find .. .build -type d -name 'VSCode-darwin-arm64' -print >&2
             exit 1
           fi
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "release/VSCode-darwin-arm64-${VERSION}.zip"
-          # Stable alias so deep links like /releases/latest/download/VSCode-darwin-arm64-latest.zip
+          BUILD_DIR="$(dirname "$(dirname "$APP_PATH")")"
+          node build/darwin/create-dmg.ts "$BUILD_DIR" dmg-out
+          python3 build/darwin/patch-dmg.py dmg-out/VSCode-darwin-arm64.dmg resources/darwin/disk.icns
+          cp "dmg-out/VSCode-darwin-arm64.dmg" "release/VSCode-darwin-arm64-${VERSION}.dmg"
+          # Stable alias so deep links like /releases/latest/download/VSCode-darwin-arm64-latest.dmg
           # keep resolving when package.json version bumps change the versioned filename.
-          cp "release/VSCode-darwin-arm64-${VERSION}.zip" "release/VSCode-darwin-arm64-latest.zip"
+          cp "release/VSCode-darwin-arm64-${VERSION}.dmg" "release/VSCode-darwin-arm64-latest.dmg"
 
       - name: Upload macOS arm64 Release Asset
         uses: actions/upload-artifact@v6
         with:
           name: macos-arm64-release-assets
-          path: release/*.zip
+          path: release/*.dmg
           if-no-files-found: error
 
   publish-release:
@@ -358,7 +362,7 @@ jobs:
 
           Assets:
           - Windows: unsigned x64 installer \`.exe\`
-          - macOS: unsigned Apple Silicon (arm64) \`.app\` bundle packaged as \`.zip\`
+          - macOS: unsigned Apple Silicon (arm64) \`.dmg\`
 
           Install notes:
           - Windows: if SmartScreen warns, click "More info" and then "Run anyway".
