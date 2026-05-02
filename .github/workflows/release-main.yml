@@ -303,7 +303,7 @@ jobs:
           # build and output directories so the generated settings file, app
           # bundle, and DMG are found regardless of the helper's working directory.
           node build/darwin/create-dmg.ts "$BUILD_DIR" "$DMG_OUT"
-          python3 build/darwin/patch-dmg.py "$DMG_OUT/VSCode-darwin-arm64.dmg" resources/darwin/disk.icns
+          python3 build/darwin/patch-dmg.py "$DMG_OUT/VSCode-darwin-arm64.dmg" resources/darwin/code.icns
           cp "$DMG_OUT/VSCode-darwin-arm64.dmg" "release/VSCode-darwin-arm64-${VERSION}.dmg"
           # Stable alias so deep links like /releases/latest/download/VSCode-darwin-arm64-latest.dmg
           # keep resolving when package.json version bumps change the versioned filename.
