@@ -296,12 +296,12 @@ jobs:
             find .. .build -type d -name 'VSCode-darwin-arm64' -print >&2
             exit 1
           fi
-          BUILD_DIR="$(dirname "$(dirname "$APP_PATH")")"
+          BUILD_DIR="$(cd "$(dirname "$(dirname "$APP_PATH")")" && pwd)"
           DMG_OUT="$PWD/dmg-out"
           # create-dmg.ts passes the settings path through dmg-builder, which
-          # resolves relative paths from its own helper process. Use an absolute
-          # output directory so the generated settings file and DMG are found
-          # regardless of the helper's working directory.
+          # resolves relative paths from its own helper process. Use absolute
+          # build and output directories so the generated settings file, app
+          # bundle, and DMG are found regardless of the helper's working directory.
           node build/darwin/create-dmg.ts "$BUILD_DIR" "$DMG_OUT"
           python3 build/darwin/patch-dmg.py "$DMG_OUT/VSCode-darwin-arm64.dmg" resources/darwin/disk.icns
           cp "$DMG_OUT/VSCode-darwin-arm64.dmg" "release/VSCode-darwin-arm64-${VERSION}.dmg"
