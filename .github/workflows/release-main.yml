@@ -297,9 +297,14 @@ jobs:
             exit 1
           fi
           BUILD_DIR="$(dirname "$(dirname "$APP_PATH")")"
-          node build/darwin/create-dmg.ts "$BUILD_DIR" dmg-out
-          python3 build/darwin/patch-dmg.py dmg-out/VSCode-darwin-arm64.dmg resources/darwin/disk.icns
-          cp "dmg-out/VSCode-darwin-arm64.dmg" "release/VSCode-darwin-arm64-${VERSION}.dmg"
+          DMG_OUT="$PWD/dmg-out"
+          # create-dmg.ts passes the settings path through dmg-builder, which
+          # resolves relative paths from its own helper process. Use an absolute
+          # output directory so the generated settings file and DMG are found
+          # regardless of the helper's working directory.
+          node build/darwin/create-dmg.ts "$BUILD_DIR" "$DMG_OUT"
+          python3 build/darwin/patch-dmg.py "$DMG_OUT/VSCode-darwin-arm64.dmg" resources/darwin/disk.icns
+          cp "$DMG_OUT/VSCode-darwin-arm64.dmg" "release/VSCode-darwin-arm64-${VERSION}.dmg"
           # Stable alias so deep links like /releases/latest/download/VSCode-darwin-arm64-latest.dmg
           # keep resolving when package.json version bumps change the versioned filename.
           cp "release/VSCode-darwin-arm64-${VERSION}.dmg" "release/VSCode-darwin-arm64-latest.dmg"
