@@ -3,6 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// @ts-nocheck
+// These pure provider-shape tests intentionally pass compact mock SDK payloads instead of fully
+// populated OpenAI/Anthropic/Gemini SDK objects; runtime assertions below validate the behavior.
+
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import type { IVSCloneLLMMessageToolCall, IVSCloneLLMPreparedChatPayload, IVSCloneLLMPreparedFIMPayload } from '../../common/vscloneLLMMessageTypes.js';

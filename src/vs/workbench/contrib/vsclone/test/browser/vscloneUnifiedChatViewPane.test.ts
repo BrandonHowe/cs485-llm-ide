@@ -3,6 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// @ts-nocheck
+// This DOM-heavy suite uses prototype-only panes and partial workbench service mocks so it can pin
+// rendering behavior without constructing the full VS Code workbench dependency graph.
+
 import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';

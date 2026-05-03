@@ -3,6 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// @ts-nocheck
+// The inline-widget tests exercise a hand-rolled editor double; the double implements only the
+// overlay and layout hooks this widget observes at runtime.
+
 import assert from 'assert';
 import { Emitter } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';

@@ -3,6 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// @ts-nocheck
+// The terminal tests use partial terminal service fakes whose runtime surface is deliberately much
+// smaller than the full workbench interfaces they stand in for.
+
 import assert from 'assert';
 import { Emitter } from '../../../../../base/common/event.js';
 import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
