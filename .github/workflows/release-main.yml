@@ -144,6 +144,15 @@ jobs:
       VSCODE_ARCH: x64
       ELECTRON_SKIP_BINARY_DOWNLOAD: 1
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+      # The gulp `vscode-*-min-ci` task reads these env vars in
+      # build/gulpfile.vscode.ts:getVSCloneProductJsonUpdates and bakes them
+      # into the packaged product.json. .env.vsclone is gitignored and not
+      # present on a fresh runner checkout, so the values must arrive via env
+      # or the shipped installer ends up with an empty vsclone.oauth.google
+      # block and Google sign-in is broken for end users.
+      VSCODE_VSCLONE_GOOGLE_CLIENT_ID: ${{ secrets.VSCODE_VSCLONE_GOOGLE_CLIENT_ID }}
+      VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET: ${{ secrets.VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET }}
+      VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT: ${{ secrets.VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
@@ -175,6 +184,22 @@ jobs:
         run: node build/lib/builtInExtensions.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify VSClone OAuth Secrets
+        shell: pwsh
+        # Fail fast if the repository secrets that feed product.json are
+        # missing. Without this, gulp would silently produce an installer
+        # with an empty vsclone.oauth.google block and Google sign-in would
+        # break for every end user of this build.
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:VSCODE_VSCLONE_GOOGLE_CLIENT_ID)) {
+            Write-Error "VSCODE_VSCLONE_GOOGLE_CLIENT_ID secret is missing; refusing to ship a build without Google OAuth credentials."
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET)) {
+            Write-Error "VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET secret is missing; refusing to ship a build without Google OAuth credentials."
+            exit 1
+          }
 
       - name: Build Windows Client
         shell: pwsh
@@ -232,6 +257,12 @@ jobs:
       VSCODE_ARCH: arm64
       ELECTRON_SKIP_BINARY_DOWNLOAD: 1
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+      # See note on the Windows job: gulp reads these env vars when building
+      # product.json, and without them the DMG ships with an empty
+      # vsclone.oauth.google block.
+      VSCODE_VSCLONE_GOOGLE_CLIENT_ID: ${{ secrets.VSCODE_VSCLONE_GOOGLE_CLIENT_ID }}
+      VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET: ${{ secrets.VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET }}
+      VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT: ${{ secrets.VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
@@ -270,6 +301,21 @@ jobs:
         run: node build/lib/builtInExtensions.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify VSClone OAuth Secrets
+        # Fail fast if the repository secrets that feed product.json are
+        # missing. Without this, gulp would silently produce a DMG with an
+        # empty vsclone.oauth.google block and Google sign-in would break
+        # for every end user of this build.
+        run: |
+          if [ -z "${VSCODE_VSCLONE_GOOGLE_CLIENT_ID}" ]; then
+            echo "ERROR: VSCODE_VSCLONE_GOOGLE_CLIENT_ID secret is missing; refusing to ship a build without Google OAuth credentials." >&2
+            exit 1
+          fi
+          if [ -z "${VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET}" ]; then
+            echo "ERROR: VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET secret is missing; refusing to ship a build without Google OAuth credentials." >&2
+            exit 1
+          fi
 
       - name: Build macOS arm64 Client
         run: npm run gulp "vscode-darwin-arm64-min-ci"
