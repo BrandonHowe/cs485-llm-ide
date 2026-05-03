@@ -1,6 +1,6 @@
 # Tab Completion
 
-Shared backend architecture lives in [the backend architecture document](../backend-unified-spec.md). This document focuses on the implemented `Tab Completion` backend: the editor-facing inline completion provider, bounded context gathering, completion prompt shaping, provider transport, retry policy, and post-processing.
+Shared backend architecture lives in [the backend architecture document](../backend-unified-spec.md). This document focuses on the implemented `Tab Completion` backend: the editor-facing inline completion provider, bounded context gathering, completion prompt shaping, provider transport, retry policy, and post-processing. For product and architecture improvement research, see [Tab Completion Research Notes](../../docs/tab-completion-research.md).
 
 ## 1. Features
 
@@ -101,7 +101,7 @@ Relevant persistent contracts consumed indirectly:
 
 Important implementation limits:
 
-- completion backend timeout: `8000ms`
+- completion backend timeout: `1800ms`
 - cache entry limit per document: `20`
 - cache entry max age: `30000ms`
 - max concurrent requests per document: `2`

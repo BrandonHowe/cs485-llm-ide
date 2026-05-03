@@ -99,7 +99,7 @@ export type IVSCloneGeminiLLMChatMessage =
 		readonly role: 'model';
 		readonly parts: readonly (
 			| { readonly text: string }
-			| { readonly functionCall: { readonly id: string; readonly name: string; readonly args: Readonly<Record<string, string>> } }
+			| { readonly functionCall: { readonly id: string; readonly name: string; readonly args: Readonly<Record<string, string>> }; readonly thoughtSignature?: string }
 		)[];
 	}
 	| {
@@ -203,6 +203,11 @@ export interface IVSCloneLLMMessageToolCall {
 	readonly doneParams: readonly string[];
 	readonly id: string;
 	readonly isDone: boolean;
+	/**
+	 * Google returns provider-issued thought signatures on function-call parts. Gemini 3 requires
+	 * replaying that signature on the same functionCall part when the tool result is sent back.
+	 */
+	readonly googleThoughtSignature?: string;
 }
 
 export type IVSCloneLLMMessageReasoningBlock =

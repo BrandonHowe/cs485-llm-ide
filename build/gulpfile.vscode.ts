@@ -42,6 +42,62 @@ const commit = getVersion(root);
 const useVersionedUpdate = process.platform === 'win32' && (product as typeof product & { win32VersionedUpdate?: boolean })?.win32VersionedUpdate;
 const versionedResourcesFolder = useVersionedUpdate ? commit!.substring(0, 10) : '';
 
+function readVSCloneOAuthEnvValue(key: string): string | undefined {
+	const rawValue = process.env[key]?.trim();
+	if (rawValue) {
+		return rawValue;
+	}
+
+	// Packaged apps do not run through scripts/code.sh, so copy the same repo-local OAuth
+	// inputs into product.json during packaging instead of depending on the user's shell.
+	for (const envFileName of ['.env.vsclone', '.env.local', '.env']) {
+		const envFilePath = path.join(root, envFileName);
+		if (!fs.existsSync(envFilePath)) {
+			continue;
+		}
+
+		const lines = fs.readFileSync(envFilePath, 'utf8').split(/\r?\n/);
+		for (const line of lines) {
+			const trimmedLine = line.trim();
+			if (!trimmedLine || trimmedLine.startsWith('#')) {
+				continue;
+			}
+
+			const separatorIndex = trimmedLine.indexOf('=');
+			if (separatorIndex === -1 || trimmedLine.slice(0, separatorIndex).trim() !== key) {
+				continue;
+			}
+
+			const fileValue = trimmedLine.slice(separatorIndex + 1).trim();
+			return fileValue || undefined;
+		}
+	}
+
+	return undefined;
+}
+
+function getVSCloneProductJsonUpdates(): Record<string, unknown> {
+	const googleClientId = readVSCloneOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_ID');
+	const googleClientSecret = readVSCloneOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET');
+	const googleQuotaProject = readVSCloneOAuthEnvValue('VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT');
+
+	if (!googleClientId && !googleClientSecret && !googleQuotaProject) {
+		return {};
+	}
+
+	return {
+		vsclone: {
+			oauth: {
+				google: {
+					clientId: googleClientId,
+					clientSecret: googleClientSecret,
+					quotaProject: googleQuotaProject
+				}
+			}
+		}
+	};
+}
+
 // Build
 const vscodeEntryPoints = [
 	buildfile.workerEditor,
@@ -272,7 +328,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 
 		let productJsonContents: string;
 		const productJsonStream = gulp.src(['product.json'], { base: '.' })
-			.pipe(jsonEditor({ commit, date: readISODate('out-build'), checksums, version }))
+			.pipe(jsonEditor({ commit, date: readISODate('out-build'), checksums, version, ...getVSCloneProductJsonUpdates() }))
 			.pipe(es.through(function (file) {
 				productJsonContents = file.contents.toString();
 				this.emit('data', file);

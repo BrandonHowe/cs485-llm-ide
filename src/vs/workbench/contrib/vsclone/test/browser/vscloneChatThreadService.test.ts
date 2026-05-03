@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { VSCloneChatThreadService } from '../../browser/vscloneChatThreadService.js';
@@ -20,6 +21,8 @@ import type { IVSClonePromptContext } from '../../common/vsclonePrompts.js';
 import { IVSCloneReasoningFieldOverrides, IVSCloneSettingsService } from '../../common/vscloneSettingsService.js';
 import type { IVSCloneSettingsState } from '../../common/vscloneSettingsTypes.js';
 import { IVSCloneThreadRuntimeRunOptions, IVSCloneThreadRuntimeState } from '../../common/vscloneThreadRuntimeTypes.js';
+import type { IVSCloneImageAttachment } from '../../common/vscloneImageAttachmentTypes.js';
+import type { IVSCloneContextSelection } from '../../common/vscloneContextSelectionTypes.js';
 
 class StaticSettingsService implements IVSCloneSettingsService {
 	declare readonly _serviceBrand: undefined;
@@ -128,6 +131,16 @@ class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 	readonly onDidChangeState = Event.None;
 	readonly statesByThreadId = new Map<string, IVSCloneThreadRuntimeState>();
 	lastOptions: IVSCloneThreadRuntimeRunOptions | undefined;
+	lastRejectedTurn: {
+		threadId: string;
+		turnId: string;
+		sessionResource: string;
+		promptText: string;
+		mode: IVSCloneThreadRuntimeRunOptions['mode'];
+		reason: string;
+		imageAttachments?: IVSCloneThreadRuntimeRunOptions['imageAttachments'];
+		contextSelections?: IVSCloneThreadRuntimeRunOptions['contextSelections'];
+	} | undefined;
 	cancelledThreadId: string | undefined;
 	deletedThreadId: string | undefined;
 	clearAllCallCount = 0;
@@ -137,7 +150,9 @@ class RecordingThreadRuntimeService implements IVSCloneThreadRuntimeService {
 		return new RecordingThreadRuntimeHandle();
 	}
 
-	recordRejectedTurn(): void { }
+	recordRejectedTurn(options: NonNullable<RecordingThreadRuntimeService['lastRejectedTurn']>): void {
+		this.lastRejectedTurn = options;
+	}
 	cancelThread(threadId: string): void { this.cancelledThreadId = threadId; }
 	approveLatestToolRequest(): boolean { return false; }
 	rejectLatestToolRequest(): boolean { return false; }
@@ -188,6 +203,27 @@ function createSelectionWithOverrides(overrides: Partial<IVSCloneModelSelection>
 
 function createThreadSelection(threadId: string): IVSCloneModelSelection {
 	return createSelectionWithOverrides({ threadId });
+}
+
+function createRuntimeState(threadId: string, messages: IVSCloneThreadRuntimeState['messages']): IVSCloneThreadRuntimeState {
+	return {
+		threadId,
+		catalog: {
+			threadId,
+			sessionResource: `vsclone://api/${threadId}`,
+			title: 'Existing thread',
+			createdAt: 1,
+			updatedAt: 2,
+			status: 'completed',
+			archived: false,
+			turnCount: 1,
+			lastTurnPreview: 'Assistant response',
+		},
+		streamState: { kind: 'idle' },
+		messages,
+		checkpoints: [],
+		lastUpdatedAt: 2,
+	};
 }
 
 suite('VSCloneChatThreadService', () => {
@@ -358,6 +394,135 @@ suite('VSCloneChatThreadService', () => {
 		assert.strictEqual(settingsService.setSelections[0].reasoningEffort, 'high');
 		assert.strictEqual(runtimeService.lastOptions?.modelIdentifier, 'openai/gpt-5.4-codex');
 		assert.strictEqual(runtimeService.lastOptions?.reasoningEffort, 'high');
+	});
+
+	test('replays rich previous turns while skipping non-result tool messages', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const runtimeService = new RecordingThreadRuntimeService();
+		const imageAttachments: readonly IVSCloneImageAttachment[] = [
+			{ mimeType: 'image/png', base64Data: 'iVBORw0KGgo=' },
+		];
+		const contextSelections: readonly IVSCloneContextSelection[] = [
+			{ kind: 'file', uri: URI.file('/workspace/src/app.ts'), languageId: 'typescript' },
+		];
+		runtimeService.statesByThreadId.set('thread-rich', createRuntimeState('thread-rich', [
+			{
+				id: 'thread-rich:turn-1:user',
+				role: 'user',
+				mode: 'act',
+				createdAt: 1,
+				content: 'Initial prompt',
+				imageAttachments,
+				contextSelections,
+			},
+			{
+				id: 'thread-rich:turn-1:assistant',
+				role: 'assistant',
+				mode: 'act',
+				createdAt: 2,
+				content: 'Assistant response',
+				anthropicReasoning: [
+					{ type: 'thinking', thinking: 'private chain', signature: 'sig-1' },
+				],
+			},
+			{
+				id: 'thread-rich:turn-1:tool-progress',
+				role: 'tool',
+				type: 'running_now',
+				createdAt: 3,
+				toolName: 'read_file',
+				params: { path: 'src/app.ts' },
+			},
+			{
+				id: 'thread-rich:turn-1:tool-result',
+				role: 'tool',
+				type: 'success',
+				createdAt: 4,
+				toolName: 'read_file',
+				params: { path: 'src/app.ts' },
+				output: 'export const value = 1;',
+				success: true,
+			},
+		]));
+		const threadService = testDisposables.add(new VSCloneChatThreadService(
+			new StaticSettingsService(createSelection()),
+			new StaticPlanModeService(),
+			new NullLogService(),
+			runtimeService,
+			new StaticContextGatheringService(),
+			new TestVSCloneUnifiedChatBackendService(),
+			createVSCloneTestFileService(),
+		));
+
+		await threadService.sendMessage('Continue with the existing context', {
+			threadId: 'thread-rich',
+		});
+
+		assert.deepStrictEqual(runtimeService.lastOptions?.previousTurns, [
+			{
+				role: 'user',
+				content: 'Initial prompt',
+				imageAttachments,
+				contextSelections,
+			},
+			{
+				role: 'assistant',
+				content: 'Assistant response',
+				anthropicReasoning: [
+					{ type: 'thinking', thinking: 'private chain', signature: 'sig-1' },
+				],
+			},
+			{
+				role: 'tool',
+				id: 'thread-rich:turn-1:tool-result',
+				name: 'read_file',
+				rawParams: { path: 'src/app.ts' },
+				content: '<tool_result tool_name="read_file" success="true">\nexport const value = 1;\n</tool_result>',
+			},
+		]);
+		assert.strictEqual(runtimeService.lastOptions?.sequence, 2);
+	});
+
+	test('records a rejected turn with attachments when no API-backed model is selected', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const runtimeService = new RecordingThreadRuntimeService();
+		const settingsService = new RecordingSettingsService(undefined);
+		const imageAttachments: readonly IVSCloneImageAttachment[] = [
+			{ mimeType: 'image/jpeg', base64Data: '/9j/4AAQSkZJRg==' },
+		];
+		const contextSelections: readonly IVSCloneContextSelection[] = [
+			{ kind: 'folder', uri: URI.file('/workspace/src') },
+		];
+		const threadService = testDisposables.add(new VSCloneChatThreadService(
+			settingsService,
+			new StaticPlanModeService(),
+			new NullLogService(),
+			runtimeService,
+			new StaticContextGatheringService(),
+			new TestVSCloneUnifiedChatBackendService(),
+			createVSCloneTestFileService(),
+		));
+
+		const result = await threadService.sendMessage('   Please inspect the selected folder   ', {
+			threadId: 'thread-rejected',
+			sessionResource: 'vsclone://api/thread-rejected',
+			imageAttachments,
+			contextSelections,
+		});
+
+		assert.deepStrictEqual(result, {
+			threadId: 'thread-rejected',
+			sessionResource: 'vsclone://api/thread-rejected',
+		});
+		assert.strictEqual(runtimeService.lastOptions, undefined);
+		assert.strictEqual(runtimeService.lastRejectedTurn?.threadId, 'thread-rejected');
+		assert.strictEqual(runtimeService.lastRejectedTurn?.sessionResource, 'vsclone://api/thread-rejected');
+		assert.strictEqual(runtimeService.lastRejectedTurn?.promptText, 'Please inspect the selected folder');
+		assert.strictEqual(runtimeService.lastRejectedTurn?.mode, 'act');
+		assert.strictEqual(runtimeService.lastRejectedTurn?.reason, 'Sign in to a provider and choose a model before sending messages through VSClone.');
+		assert.strictEqual(runtimeService.lastRejectedTurn?.imageAttachments, imageAttachments);
+		assert.strictEqual(runtimeService.lastRejectedTurn?.contextSelections, contextSelections);
+		assert.strictEqual(/^thread-rejected:rejected:\d+$/.test(runtimeService.lastRejectedTurn?.turnId ?? ''), true);
 	});
 
 	test('deleteThread clears unified backend sidecars after the runtime reports a successful delete', async () => {

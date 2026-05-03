@@ -208,4 +208,92 @@ suite('VSCloneModelSwitcherWidget', () => {
 		assert.strictEqual(selectedRow?.querySelector('.codicon-check'), null);
 		assert.strictEqual((container.textContent || '').includes('Reset Selection'), false);
 	});
+
+	test('selecting the same model preserves compatible reasoning fields', async () => {
+		const { settingsService, widget, container } = await createHarness();
+		const reasoningModel = settingsService.getSelectableModels().find(model => model.capabilities.reasoningCapabilities && model.capabilities.reasoningCapabilities.canTurnOffReasoning && model.capabilities.reasoningCapabilities.reasoningSlider?.type === 'effort_slider');
+		assert.ok(reasoningModel);
+		await settingsService.setSelectionForFeature('thread-1', {
+			threadId: 'thread-1',
+			location: 'chat',
+			modelIdentifier: reasoningModel.identifier,
+			vendor: reasoningModel.vendor,
+			modelId: reasoningModel.modelId,
+			modelName: reasoningModel.modelName,
+			reasoningEffort: 'high',
+			reasoningEnabled: true,
+			reasoningBudget: 1234,
+			selectedAt: Date.now(),
+		});
+
+		widget.open();
+		const selectedRow = container.querySelector('.vsclone-model-switcher-row.selected') as HTMLButtonElement;
+		assert.ok(selectedRow);
+		selectedRow.click();
+
+		const selection = settingsService.getCurrentSelectionForFeature('thread-1', 'chat');
+		assert.strictEqual(selection?.modelIdentifier, reasoningModel.identifier);
+		assert.strictEqual(selection?.reasoningEffort, 'high');
+		assert.strictEqual(selection?.reasoningEnabled, true);
+		assert.strictEqual(selection?.reasoningBudget, undefined);
+		assert.strictEqual((container.querySelector('.vsclone-model-switcher-button') as HTMLButtonElement).getAttribute('aria-expanded'), 'false');
+	});
+
+	test('locked model rows route to provider management instead of changing selection', async () => {
+		const { oauthService, settingsService, widget, container, getManageProvidersCalls } = await createHarness();
+		const selectedModel = settingsService.getSelectableModels()[0];
+		assert.ok(selectedModel);
+		await settingsService.setSelectionForFeature('thread-1', {
+			threadId: 'thread-1',
+			location: 'chat',
+			modelIdentifier: selectedModel.identifier,
+			vendor: selectedModel.vendor,
+			modelId: selectedModel.modelId,
+			modelName: selectedModel.modelName,
+			selectedAt: Date.now(),
+		});
+		oauthService.setReady('google', false);
+		await settingsService.refreshState();
+
+		widget.open();
+		const lockedRow = container.querySelector('.vsclone-model-switcher-row.locked') as HTMLButtonElement | null;
+		assert.strictEqual(lockedRow, null);
+		await widget.manageProviders();
+
+		assert.strictEqual(getManageProvidersCalls(), 1);
+		assert.strictEqual(settingsService.getCurrentSelectionForFeature('thread-1', 'chat')?.modelIdentifier, selectedModel.identifier);
+	});
+
+	test('public controller helpers delegate to settings state and tolerate missing render containers', async () => {
+		const { settingsService, widget } = await createHarness();
+		const firstModel = settingsService.getSelectableModels()[0];
+		const secondModel = settingsService.getSelectableModels()[1];
+		assert.ok(firstModel);
+		assert.ok(secondModel);
+		await settingsService.setSelectionForFeature('thread-1', {
+			threadId: 'thread-1',
+			location: 'chat',
+			modelIdentifier: firstModel.identifier,
+			vendor: firstModel.vendor,
+			modelId: firstModel.modelId,
+			modelName: firstModel.modelName,
+			selectedAt: Date.now(),
+		});
+
+		const unrenderedWidget = store.add(new VSCloneModelSwitcherWidget(
+			settingsService,
+			{ _serviceBrand: undefined, openManageProvidersPicker: async () => undefined },
+			() => ({ threadId: 'thread-1', location: 'chat' }),
+		));
+		unrenderedWidget.open();
+		unrenderedWidget.close({ restoreButtonFocus: true });
+		unrenderedWidget.refresh();
+
+		assert.strictEqual(widget.getCurrentSelection()?.modelIdentifier, firstModel.identifier);
+		await widget.switchToNextModel();
+		assert.notStrictEqual(settingsService.getCurrentSelectionForFeature('thread-1', 'chat')?.modelIdentifier, firstModel.identifier);
+
+		await widget.refreshCatalog();
+		assert.ok(settingsService.getState().models.length > 0);
+	});
 });

@@ -84,7 +84,7 @@ Plan Mode and OAuth / Auth each have their own module documents because both own
 
 - Streamed history deltas are persisted with a `300ms` delay; non-stream terminal states persist immediately.
 - Retention limits are enforced by `vsclone.chatHistory.maxThreads` and `vsclone.chatHistory.retentionDays`.
-- Inline completion requests time out after `8000ms`.
+- Inline completion requests time out after `1800ms`.
 - The agent loop stops after `25` iterations and allows at most `2` corrective reprompts when the model fails to use tools for a tool-required task.
 - The inline-completion fallback chain is policy-driven and currently prefers:
   - `openai/gpt-5.3-codex-spark`

@@ -36,6 +36,7 @@ type IVSCloneSimplePreparedMessage =
 		readonly role: 'assistant';
 		readonly content: string;
 		readonly anthropicReasoning?: readonly IVSCloneLLMMessageReasoningBlock[] | null;
+		readonly googleThoughtSignature?: string;
 	}
 	| {
 		readonly role: 'tool';
@@ -148,6 +149,7 @@ export class VSCloneConvertToLLMMessageService implements IVSCloneConvertToLLMMe
 						role: 'assistant',
 						content: message.content,
 						...(message.anthropicReasoning ? { anthropicReasoning: message.anthropicReasoning } : {}),
+						...(message.googleThoughtSignature ? { googleThoughtSignature: message.googleThoughtSignature } : {}),
 					});
 					break;
 				case 'tool':
@@ -297,10 +299,12 @@ function prepareAnthropicMessages(messages: readonly IVSCloneSimplePreparedMessa
 
 function prepareGeminiMessages(messages: readonly IVSCloneSimplePreparedMessage[]): readonly IVSCloneGeminiLLMChatMessage[] {
 	const preparedMessages: IVSCloneGeminiLLMChatMessage[] = [];
+	let pendingGoogleThoughtSignature: string | undefined;
 
 	for (const message of messages) {
 		switch (message.role) {
 			case 'user':
+				pendingGoogleThoughtSignature = undefined;
 				preparedMessages.push({
 					role: 'user',
 					parts: message.imageAttachments?.length
@@ -309,6 +313,7 @@ function prepareGeminiMessages(messages: readonly IVSCloneSimplePreparedMessage[
 				});
 				break;
 			case 'assistant':
+				pendingGoogleThoughtSignature = message.googleThoughtSignature;
 				preparedMessages.push({
 					role: 'model',
 					parts: [{ text: message.content }],
@@ -316,16 +321,27 @@ function prepareGeminiMessages(messages: readonly IVSCloneSimplePreparedMessage[
 				break;
 			case 'tool': {
 				const previousMessage = preparedMessages.at(-1);
+				if (previousMessage?.role === 'model' && !pendingGoogleThoughtSignature) {
+					// Gemini 3 rejects model functionCall replay without the provider-issued
+					// thoughtSignature. Older persisted threads may not have it, so fall back to a
+					// plain user message instead of sending an invalid structured functionResponse.
+					preparedMessages.push({
+						role: 'user',
+						parts: [{ text: message.content }],
+					});
+					break;
+				}
 				if (previousMessage?.role === 'model') {
 					preparedMessages[preparedMessages.length - 1] = {
 						role: 'model',
 						parts: [
 							// Gemini binds provider-issued thought signatures to model text that appears
-							// before function calls. VSClone does not persist those signatures yet, so
-							// replay only the structural calls here and leave assistant text on non-tool
-							// model turns where no signature is required.
+							// before function calls. Keep assistant prose out of function-call replay, but
+							// return the provider-issued signature on the exact functionCall part Gemini
+							// validates before accepting the next functionResponse.
 							...previousMessage.parts.filter(part => !hasKey(part, { text: true })),
 							{
+								...(pendingGoogleThoughtSignature ? { thoughtSignature: pendingGoogleThoughtSignature } : {}),
 								functionCall: {
 									id: message.id,
 									name: message.name,
@@ -354,6 +370,7 @@ function prepareGeminiMessages(messages: readonly IVSCloneSimplePreparedMessage[
 						},
 					}],
 				});
+				pendingGoogleThoughtSignature = undefined;
 				break;
 			}
 		}

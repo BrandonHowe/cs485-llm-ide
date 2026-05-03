@@ -189,9 +189,9 @@ export const VSCLONE_MODEL_DEFINITIONS_BY_PROVIDER: Record<VSCloneModelVendor, r
 				supportsReasoning: true,
 				canTurnOffReasoning: true,
 				canIOReasoning: true,
-				// Anthropic caps Haiku 4.5 output at 64k and requires `budget_tokens < max_tokens`.
-				// Expose coarse Claude Code-style presets in the UI and map them to concrete
-				// `budget_tokens` in the Anthropic adapter so users are not tuning raw token counts.
+				// VSClone's Anthropic provider intentionally uses Claude OAuth, not API keys. Direct
+				// OAuth `/v1/messages` access has only been reliable for Haiku in this class project,
+				// so the catalog exposes Haiku and leaves Sonnet/Opus to a future Claude Code runtime.
 				reasoningReservedOutputTokenSpace: 64_000,
 				reasoningSlider: { type: 'effort_slider', values: ['none', 'low', 'medium', 'high', 'max'], default: 'medium' },
 			},
@@ -361,17 +361,17 @@ function toVSCloneAnthropicThinkingBudget(level: VSCloneReasoningEffortLevel): n
 		case 'low':
 		case 'lite':
 		case 'minimal':
-			return 4_096;
+			return 1_024;
 		case 'medium':
 		case 'standard':
-			return 16_384;
+			return 4_096;
 		case 'high':
 		case 'xhigh':
-			return 32_768;
+			return 6_144;
 		case 'max':
-			// Anthropic requires the thinking budget to be strictly below `max_tokens`, and Haiku's
-			// output cap is 64k, so the largest valid thinking budget is one token under that cap.
-			return 63_999;
+			// Anthropic requires the thinking budget to be strictly below `max_tokens`; keep the
+			// largest preset just below VSClone's 8k chat envelope so it remains rate-limit friendly.
+			return 7_999;
 		case 'none':
 			return undefined;
 	}
@@ -490,7 +490,6 @@ export function getVSCloneIsReasoningEnabledState(
 	if (!supportsReasoning) {
 		return false;
 	}
-	// default to enabled if can't turn off, or if the featureName is Chat.
 	const defaultEnabledVal = featureName === 'Chat' || !canTurnOffReasoning;
 	return modelSelectionOptions?.reasoningEnabled ?? defaultEnabledVal;
 }

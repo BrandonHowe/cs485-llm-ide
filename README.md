@@ -108,6 +108,10 @@ This fork includes VSClone-specific OAuth wiring and launch scripts that are not
    .\scripts\code.bat
    ```
 
+### Packaging installers
+
+Before creating a distributable desktop installer, keep the same Google OAuth values in either build-machine environment variables or the repo-local `.env.vsclone` file. The packaging step copies those values into the packaged `product.json` because an installed app does not run through the development launcher scripts and cannot read this repository's local `.env.vsclone` file from an end user's machine.
+
 ## VSClone Local Test Setup
 
 The GitHub Actions workflows in [`.github/workflows/run-frontend-tests.yml`](.github/workflows/run-frontend-tests.yml) and [`.github/workflows/run-backend-tests.yml`](.github/workflows/run-backend-tests.yml) use the commands in this section. If you can run these locally, you are running the same VSClone test slices that CI runs on GitHub.

@@ -165,6 +165,7 @@ suite('VSCloneConvertToLLMMessageService', () => {
 				{
 					role: 'assistant',
 					content: 'Thinking: I need the directory contents first.',
+					googleThoughtSignature: 'google-sig-1',
 				},
 				{
 					role: 'tool',
@@ -182,6 +183,7 @@ suite('VSCloneConvertToLLMMessageService', () => {
 				role: 'model',
 				parts: [
 					{
+						thoughtSignature: 'google-sig-1',
 						functionCall: {
 							id: 'tool-call-3',
 							name: 'list_directory',
@@ -204,6 +206,130 @@ suite('VSCloneConvertToLLMMessageService', () => {
 			},
 			{ role: 'user', parts: [{ text: 'Continue from the tool output' }] },
 		]);
+	});
+
+	test('preserves signed Anthropic reasoning blocks even when assistant text is empty', () => {
+		const service = new VSCloneConvertToLLMMessageService();
+
+		const prepared = service.prepareChatRequest(createSubmitOptions({
+			vendor: 'anthropic',
+			modelId: 'claude-haiku-4-5-20251001',
+			modelIdentifier: 'anthropic/claude-haiku-4-5-20251001',
+			currentTurn: {
+				role: 'assistant',
+				content: '',
+				anthropicReasoning: [{
+					type: 'thinking',
+					thinking: 'signed thought',
+					signature: 'sig-1',
+				}],
+			},
+		}));
+
+		assert.deepStrictEqual(prepared.messages, [{
+			role: 'assistant',
+			content: [{
+				type: 'thinking',
+				thinking: 'signed thought',
+				signature: 'sig-1',
+			}],
+		}]);
+	});
+
+	test('falls back to plain Gemini user text when a tool result has no preceding model turn', () => {
+		const service = new VSCloneConvertToLLMMessageService();
+
+		const prepared = service.prepareChatRequest(createSubmitOptions({
+			vendor: 'google',
+			modelId: 'gemini-2.5-pro',
+			modelIdentifier: 'google/gemini-2.5-pro',
+			currentTurn: {
+				role: 'tool',
+				id: 'orphan-tool',
+				name: 'read_file',
+				rawParams: { path: 'src/app.ts' },
+				content: 'orphan output',
+			},
+		}));
+
+		assert.deepStrictEqual(prepared.messages, [{
+			role: 'user',
+			parts: [{ text: 'orphan output' }],
+		}]);
+	});
+
+	test('prepares multimodal Anthropic and Gemini user turns and rejects unsupported Anthropic image types', () => {
+		const service = new VSCloneConvertToLLMMessageService();
+		const imageAttachments = [{ mimeType: 'image/webp', base64Data: 'd2VicA==' }];
+
+		const anthropic = service.prepareChatRequest(createSubmitOptions({
+			vendor: 'anthropic',
+			modelId: 'claude-haiku-4-5-20251001',
+			modelIdentifier: 'anthropic/claude-haiku-4-5-20251001',
+			currentTurn: { role: 'user', content: 'Describe it', imageAttachments },
+		}));
+		const google = service.prepareChatRequest(createSubmitOptions({
+			vendor: 'google',
+			modelId: 'gemini-2.5-pro',
+			modelIdentifier: 'google/gemini-2.5-pro',
+			currentTurn: { role: 'user', content: 'Describe it', imageAttachments },
+		}));
+
+		assert.deepStrictEqual(anthropic.messages, [{
+			role: 'user',
+			content: [
+				{ type: 'image', source: { type: 'base64', media_type: 'image/webp', data: 'd2VicA==' } },
+				{ type: 'text', text: 'This user turn includes 1 image attachment. Inspect it directly when answering.\n\nDescribe it' },
+			],
+		}]);
+		assert.deepStrictEqual(google.messages, [{
+			role: 'user',
+			parts: [
+				{ inlineData: { mimeType: 'image/webp', data: 'd2VicA==' } },
+				{ text: 'This user turn includes 1 image attachment. Inspect it directly when answering.\n\nDescribe it' },
+			],
+		}]);
+		assert.throws(() => service.prepareChatRequest(createSubmitOptions({
+			vendor: 'anthropic',
+			modelId: 'claude-haiku-4-5-20251001',
+			modelIdentifier: 'anthropic/claude-haiku-4-5-20251001',
+			currentTurn: { role: 'user', content: 'Describe it', imageAttachments: [{ mimeType: 'image/svg+xml', base64Data: 'PHN2Zy8+' }] },
+		})), /image\/svg\+xml/);
+	});
+
+	test('prepares FIM payloads by stamping model selection metadata onto the completion envelope', () => {
+		const service = new VSCloneConvertToLLMMessageService();
+
+		const prepared = service.prepareFIMRequest({
+			vendor: 'openai',
+			modelId: 'gpt-5-nano',
+			modelIdentifier: 'openai/gpt-5-nano',
+			reasoningEffort: 'none',
+		}, {
+			prefix: 'const value = ',
+			suffix: ';',
+			maxTokens: 32,
+			temperature: 0,
+			stopTokens: [';'],
+			systemMessage: 'Complete the code.',
+			promptText: 'Finish the line',
+		});
+
+		assert.deepStrictEqual(prepared, {
+			vendor: 'openai',
+			modelId: 'gpt-5-nano',
+			modelIdentifier: 'openai/gpt-5-nano',
+			reasoningEffort: 'none',
+			prompt: {
+				prefix: 'const value = ',
+				suffix: ';',
+				maxTokens: 32,
+				temperature: 0,
+				stopTokens: [';'],
+				systemMessage: 'Complete the code.',
+				promptText: 'Finish the line',
+			},
+		});
 	});
 
 	test('passes through already-structured messages without reparsing assistant content', () => {

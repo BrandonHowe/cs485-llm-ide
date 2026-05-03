@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
+import { CancellationToken, CancellationTokenSource } from '../../../../../base/common/cancellation.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IBulkEditService, ResourceTextEdit } from '../../../../../editor/browser/services/bulkEditService.js';
@@ -17,7 +18,8 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { QueryBuilder } from '../../../../services/search/common/queryBuilder.js';
 import { ISearchService } from '../../../../services/search/common/search.js';
-import { VSCloneToolExecutionService } from '../../browser/vscloneToolExecutionService.js';
+import { IMcpService, McpToolVisibility, type IMcpTool } from '../../../mcp/common/mcpTypes.js';
+import { VSCloneToolExecutionService, VSCloneToolRuntimeService } from '../../browser/vscloneToolExecutionService.js';
 import { IVSCloneEditCodeService, type VSCloneEditApplyResult } from '../../browser/vscloneEditCodeServiceInterface.js';
 import { IVSCloneTerminalToolService } from '../../browser/vscloneTerminalToolService.js';
 import { type VSCloneChatMode } from '../../common/vsclonePlanModeTypes.js';
@@ -68,6 +70,7 @@ class ToolExecutionHarness {
 	readonly callBeforeApplyOrEditCalls: string[] = [];
 	readonly applySearchReplaceCalls: Array<{ uri: string; searchReplaceBlocks: string }> = [];
 	readonly rewriteFileCalls: Array<{ uri: string; newContent: string }> = [];
+	mcpService: IMcpService | undefined;
 
 	nextTerminalRunResult = {
 		result: '$ echo hi\nhi',
@@ -274,6 +277,7 @@ class ToolExecutionHarness {
 			this.logService as unknown as ILogService,
 			this.editCodeService,
 			this.terminalToolService,
+			this.mcpService,
 		);
 	}
 }
@@ -295,6 +299,41 @@ function createDirectoryStat(path: string, children: readonly IResolveStat[] = [
 		isDirectory: true,
 		children,
 	};
+}
+
+function createMcpService(tools: readonly IMcpTool[], activateCollections = async () => undefined): IMcpService {
+	return {
+		_serviceBrand: undefined,
+		servers: {
+			get: () => [{
+				tools: { get: () => tools },
+			}],
+		},
+		activateCollections,
+	} as unknown as IMcpService;
+}
+
+function createMcpTool(
+	id: string,
+	options: {
+		visibility?: McpToolVisibility;
+		inputSchema?: unknown;
+		call?: (params: Record<string, unknown>, context: unknown, token: CancellationToken | undefined) => Promise<{ content?: readonly unknown[]; structuredContent?: unknown; isError?: boolean }>;
+	} = {},
+): IMcpTool {
+	return {
+		id,
+		referenceName: id,
+		icons: {},
+		visibility: options.visibility ?? McpToolVisibility.Model,
+		definition: {
+			name: id,
+			description: `Run ${id}.`,
+			inputSchema: options.inputSchema,
+		},
+		call: options.call ?? (async () => ({ content: [{ type: 'text', text: 'done' }] })),
+		callWithProgress: async () => ({ content: [] }),
+	} as unknown as IMcpTool;
 }
 
 function asInternals(service: VSCloneToolExecutionService): {
@@ -1005,5 +1044,152 @@ suite('VSCloneToolExecutionService', () => {
 		assert.ok(trailingNewlinePreview.includes('@@ -0,0 +1,2 @@'));
 		assert.ok(blankPathPreview.includes('+++ b/unknown-path'));
 		assert.ok(truncatedPreview.endsWith('... [diff truncated]'));
+	});
+
+	test('TE-27 keeps legacy list and search tool names executable through normalized dispatch', async () => {
+		const testHarness = new ToolExecutionHarness();
+		const service = testHarness.createService();
+		testHarness.resolveHandler = async (resource) => createDirectoryStat(resource.path, []);
+
+		const listResult = await service.executeTool('list_directory', { path: '/workspace/src' });
+		const searchResult = await service.executeTool('search_files', { path: '/workspace/src', pattern: 'TODO' });
+
+		assert.strictEqual(listResult.success, true);
+		assert.ok(listResult.output.includes('Directory listing for file:///workspace/src:'));
+		assert.strictEqual(searchResult.output, 'No matches found for pattern /TODO/ in file:///workspace/src.');
+		assert.ok(testHarness.logService.infos[0].includes('Executing ls_dir'));
+		assert.ok(testHarness.logService.infos[1].includes('Executing search_for_files'));
+	});
+
+	test('TE-28 refuses cancellation before any helper dispatch can touch the workspace', async () => {
+		const testHarness = new ToolExecutionHarness();
+		const service = testHarness.createService();
+		const cts = new CancellationTokenSource();
+		cts.cancel();
+
+		const result = await service.executeTool('read_file', { path: '/workspace/src/app.ts' }, 'act', cts.token);
+		cts.dispose();
+
+		assert.deepStrictEqual(result, { success: false, output: 'Tool read_file was cancelled before it could finish.' });
+		assert.deepStrictEqual(testHarness.resolveCalls, []);
+		assert.deepStrictEqual(testHarness.readFileCalls, []);
+	});
+
+	test('TE-29 blocks sensitive environment files on read, edit, and create paths', async () => {
+		const testHarness = new ToolExecutionHarness();
+		const service = testHarness.createService();
+		testHarness.resolveHandler = async (resource) => createFileStat(resource.path);
+		testHarness.existsHandler = async () => false;
+
+		const readResult = await service.executeTool('read_file', { path: '/workspace/.env' });
+		const editResult = await service.executeTool('edit_file', {
+			path: '/workspace/.env.local',
+			changes: [
+				'<<<<<<< SEARCH',
+				'SECRET=old',
+				'=======',
+				'SECRET=new',
+				'>>>>>>> REPLACE',
+			].join('\n'),
+		});
+		const createResult = await service.executeTool('create_file', { path: '/workspace/.env.test', content: 'SECRET=value\n' });
+
+		assert.strictEqual(readResult.success, false);
+		assert.ok(readResult.output.includes('Access denied: /workspace/.env is a .env file.'));
+		assert.strictEqual(editResult.success, false);
+		assert.ok(editResult.output.includes('Access denied: /workspace/.env.local is a .env file.'));
+		assert.strictEqual(createResult.success, false);
+		assert.ok(createResult.output.includes('Access denied: /workspace/.env.test is a .env file.'));
+		assert.deepStrictEqual(testHarness.readFileCalls, []);
+		assert.deepStrictEqual(testHarness.applySearchReplaceCalls, []);
+		assert.deepStrictEqual(testHarness.rewriteFileCalls, []);
+	});
+
+	test('TE-30 dispatches visible MCP tools by platform ID and decodes structured params', async () => {
+		const testHarness = new ToolExecutionHarness();
+		const calls: Array<{ params: Record<string, unknown>; token?: CancellationToken }> = [];
+		testHarness.mcpService = createMcpService([
+			createMcpTool('server__visible_tool', {
+				call: async (params, _context, token) => {
+					calls.push({ params, token });
+					return {
+						structuredContent: { ok: true },
+						content: [
+							{ type: 'text', text: 'text output' },
+							{ type: 'resource', resource: { uri: 'file:///workspace/result.txt' } },
+						],
+					};
+				},
+			}),
+			createMcpTool('server__app_only_tool', { visibility: McpToolVisibility.App }),
+		]);
+		const service = testHarness.createService();
+
+		const result = await service.executeTool('server__visible_tool', {
+			count: '2',
+			options: '{"enabled":true}',
+			empty: '   ',
+			text: 'plain',
+		});
+		const appOnlyResult = await service.executeTool('server__app_only_tool', {});
+
+		assert.strictEqual(result.success, true);
+		assert.ok(result.output.includes('"ok": true'));
+		assert.ok(result.output.includes('text output'));
+		assert.ok(result.output.includes('"uri": "file:///workspace/result.txt"'));
+		assert.deepStrictEqual(calls[0].params, {
+			count: 2,
+			options: { enabled: true },
+			empty: '   ',
+			text: 'plain',
+		});
+		assert.strictEqual(calls[0].token, CancellationToken.None);
+		assert.deepStrictEqual(appOnlyResult, { success: false, output: 'Unknown tool: server__app_only_tool' });
+	});
+
+	test('TE-31 lists visible MCP runtime definitions and activates lazy collections once', () => {
+		let activateCalls = 0;
+		const mcpService = createMcpService([
+			createMcpTool('server__visible_tool', {
+				inputSchema: {
+					type: 'object',
+					required: ['path'],
+					properties: {
+						path: { type: 'string', description: 'Target path.' },
+						count: { type: 'number' },
+					},
+					additionalProperties: false,
+				},
+			}),
+			createMcpTool('server__hidden_tool', { visibility: McpToolVisibility.App }),
+		], async () => {
+			activateCalls += 1;
+		});
+
+		const runtime = new VSCloneToolRuntimeService(new TestLogService() as unknown as ILogService, mcpService);
+		const definitions = runtime.listToolDefinitions('act');
+		const visibleDefinition = definitions.find(definition => definition.name === 'server__visible_tool');
+
+		assert.strictEqual(activateCalls, 1);
+		assert.ok(visibleDefinition);
+		assert.strictEqual(visibleDefinition.approvalType, 'MCP tools');
+		assert.strictEqual(visibleDefinition.planModeAllowed, false);
+		assert.deepStrictEqual(visibleDefinition.parameters, [
+			{ name: 'path', required: true, description: 'Target path.' },
+			{ name: 'count', required: false, description: 'MCP tool argument.' },
+		]);
+		assert.deepStrictEqual(visibleDefinition.inputSchema, {
+			type: 'object',
+			properties: {
+				path: { type: 'string', description: 'Target path.' },
+				count: { type: 'number' },
+			},
+			required: ['path'],
+			additionalProperties: false,
+		});
+		assert.strictEqual(definitions.some(definition => definition.name === 'server__hidden_tool'), false);
+		assert.strictEqual(runtime.getToolDefinition('list_directory')?.name, 'ls_dir');
+		assert.strictEqual(runtime.getApprovalType('search_files'), runtime.getApprovalType('search_for_files'));
+		assert.strictEqual(runtime.listToolDefinitions('plan').some(definition => definition.name === 'server__visible_tool'), false);
 	});
 });

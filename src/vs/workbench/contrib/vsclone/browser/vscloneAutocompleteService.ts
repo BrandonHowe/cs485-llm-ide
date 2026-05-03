@@ -43,11 +43,11 @@ export const VSCloneAutocompleteDebounceMsSetting = 'vsclone.autocomplete.deboun
 export const VSCloneAutocompleteDebounceMsMaximum = 2000;
 export const VSCloneInlineSuggestionVisibleContextKey = new RawContextKey<boolean>('vsclone.inlineSuggestionVisible', false, localize('vsclone.inlineSuggestionVisible', "Whether a VSClone inline suggestion is visible."));
 
-const defaultDebounceMs = 500;
-const triggerCharacterDebounceMs = 250;
-const emptyLineDebounceMs = 300;
-const identifierDebounceMs = 325;
-const fillMiddleDebounceMs = 400;
+const defaultDebounceMs = 200;
+const triggerCharacterDebounceMs = 100;
+const emptyLineDebounceMs = 150;
+const identifierDebounceMs = 175;
+const fillMiddleDebounceMs = 220;
 const defaultEnabled = false;
 const cacheEntryLimitPerDocument = 20;
 const cacheEntryMaxAgeMs = 30_000;
@@ -70,7 +70,7 @@ const maxMultiLineOutputTokens = 192;
 const completionTemperature = 0.01;
 const singleLineStopTokens = ['\r\n', '\n'];
 const multiLineStopTokens = ['\n\n'];
-const defaultCompletionRequestTimeoutMs = 8_000;
+const defaultCompletionRequestTimeoutMs = 1_800;
 const completionTriggerCharacters = new Set(['.', '(', '{', ':', '=']);
 const identifierAtEndOfLinePattern = /[A-Za-z_$][A-Za-z0-9_$]*$/;
 const openingBrackets = new Set(['(', '[', '{']);
@@ -494,6 +494,7 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 		}
 
 		this.addToCache(model.uri, completionContext.prefix, insertText);
+		this.seedHotStreakCache(model.uri, completionContext.prefix, insertText);
 
 		const range = this.getReplaceRange(model, position, predictionMode);
 		const item: InlineCompletion = {
@@ -1158,6 +1159,37 @@ export class VSCloneAutocompleteService extends Disposable implements IWorkbench
 			insertText,
 			timestamp: Date.now(),
 		});
+	}
+
+	/**
+	 * Hot-streak: when a multi-line completion arrives, also seed cache entries at each
+	 * newline boundary inside the response. After the user accepts one line, the prefix-trim
+	 * normalization in {@link getCachedCompletion} can no longer match the original entry
+	 * (the accepted text leaves a trailing newline that trim() strips), so the next request
+	 * would otherwise hit the network for a continuation we already have.
+	 */
+	private seedHotStreakCache(resource: URI, prefix: string, insertText: string): void {
+		if (!insertText.includes('\n')) {
+			return;
+		}
+
+		let cursor = 0;
+		while (cursor < insertText.length) {
+			const newlineOffset = insertText.indexOf('\n', cursor);
+			if (newlineOffset < 0) {
+				break;
+			}
+
+			const acceptedSoFar = insertText.slice(0, newlineOffset + 1);
+			const remainder = insertText.slice(newlineOffset + 1);
+			cursor = newlineOffset + 1;
+
+			if (remainder.trim().length === 0) {
+				continue;
+			}
+
+			this.addToCache(resource, prefix + acceptedSoFar, remainder);
+		}
 	}
 
 	private evictExpiredEntries(cache: LRUCache<string, IVSCloneCachedCompletion>, now: number): void {

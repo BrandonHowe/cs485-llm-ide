@@ -37,6 +37,7 @@ interface IAutocompleteServiceInternals {
 	getReplaceRange(model: ITextModel, position: Position, mode: 'single-line-redo-suffix' | 'single-line-fill-middle' | 'multi-line' | 'do-not-predict'): Range;
 	getCachedCompletion(resource: URI, prefix: string, suffix: string): string | undefined;
 	addToCache(resource: URI, prefix: string, insertText: string): void;
+	seedHotStreakCache(resource: URI, prefix: string, insertText: string): void;
 	evictExpiredEntries(cache: LRUCache<string, { readonly timestamp: number }>, now: number): void;
 	getAutocompleteSelectionCacheKey(): string | undefined;
 	isEnabled(): boolean;
@@ -299,14 +300,14 @@ suite('VSCloneAutocompleteService', () => {
 		const negativeService = negativeSetup.service as unknown as IAutocompleteServiceInternals;
 		const model = createTextModel('abcd');
 
-		assert.strictEqual(defaultService.getDebounceMs(), 500);
+		assert.strictEqual(defaultService.getDebounceMs(), 200);
 		assert.strictEqual(configuredService.getDebounceMs(), 125);
 		assert.strictEqual(negativeService.getDebounceMs(), 0);
-		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: '', lineSuffix: '' }, 'single-line-fill-middle'), 400);
-		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: '   ', lineSuffix: '   ' }, 'multi-line'), 300);
-		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: 'obj.', lineSuffix: '' }, 'single-line-redo-suffix'), 250);
-		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: 'identifier', lineSuffix: '' }, 'single-line-redo-suffix'), 325);
-		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: 'x)', lineSuffix: '' }, 'single-line-redo-suffix'), 400);
+		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: '', lineSuffix: '' }, 'single-line-fill-middle'), 220);
+		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: '   ', lineSuffix: '   ' }, 'multi-line'), 150);
+		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: 'obj.', lineSuffix: '' }, 'single-line-redo-suffix'), 100);
+		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: 'identifier', lineSuffix: '' }, 'single-line-redo-suffix'), 175);
+		assert.strictEqual(defaultService.getAdaptiveDebounceMs({ linePrefix: 'x)', lineSuffix: '' }, 'single-line-redo-suffix'), 220);
 		assert.strictEqual(defaultService.getPredictionMode('', ''), 'multi-line');
 		assert.strictEqual(defaultService.getPredictionMode('   ', '    body'), 'do-not-predict');
 		assert.strictEqual(defaultService.getPredictionMode('x', ' )'), 'single-line-redo-suffix');
@@ -334,6 +335,32 @@ suite('VSCloneAutocompleteService', () => {
 		internals.addToCache(resource, 'foo', 'ar)');
 		assert.strictEqual(internals.getCachedCompletion(resource, 'foo', 'ar)'), undefined);
 		assert.strictEqual(internals.getCachedCompletion(resource, '   ', ''), undefined);
+	});
+
+	test('seeds hot-streak cache entries at newline boundaries of multi-line completions', async () => {
+		const testDisposables = store.add(new DisposableStore());
+		const setup = await createAutocompleteService();
+		testDisposables.add(setup.disposables);
+		const internals = setup.service as unknown as IAutocompleteServiceInternals;
+		const resource = URI.file('/workspace/streak.ts');
+
+		const originalPrefix = 'function foo() {\n';
+		const insertText = '  const a = 1;\n  const b = 2;\n  return a + b;\n}';
+
+		internals.addToCache(resource, originalPrefix, insertText);
+		internals.seedHotStreakCache(resource, originalPrefix, insertText);
+
+		const afterFirstLine = originalPrefix + '  const a = 1;\n';
+		assert.strictEqual(
+			internals.getCachedCompletion(resource, afterFirstLine, ''),
+			'  const b = 2;\n  return a + b;\n}',
+		);
+
+		const afterSecondLine = afterFirstLine + '  const b = 2;\n';
+		assert.strictEqual(
+			internals.getCachedCompletion(resource, afterSecondLine, ''),
+			'  return a + b;\n}',
+		);
 	});
 
 	test('evicts only cache entries older than the 30 second boundary', async () => {

@@ -52,6 +52,11 @@ export type IVSCloneChatTransportConversationMessage =
 		 * stay intact across follow-up iterations.
 		 */
 		readonly anthropicReasoning?: readonly IVSCloneLLMMessageReasoningBlock[] | null;
+		/**
+		 * Gemini 3 validates the current tool-calling turn and rejects replayed function calls that
+		 * omit the thought signature returned on the original functionCall part.
+		 */
+		readonly googleThoughtSignature?: string;
 	}
 	| {
 		// Tool history is now carried structurally instead of being re-inferred from assistant XML.

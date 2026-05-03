@@ -43,7 +43,6 @@ interface IVSCloneLLMMessageCallbacks {
 type VSCloneAnthropicMessage = import('@anthropic-ai/sdk').default.Message;
 type VSCloneAnthropicTool = import('@anthropic-ai/sdk').default.Messages.Tool;
 type VSCloneAnthropicToolInputSchema = VSCloneAnthropicTool['input_schema'];
-type VSCloneGoogleCandidate = NonNullable<import('@google/genai').GenerateContentResponse['candidates']>[number];
 type VSCloneGoogleFunctionDeclaration = import('@google/genai').FunctionDeclaration;
 type VSCloneGoogleFunctionCallingConfigMode = import('@google/genai').FunctionCallingConfigMode;
 type VSCloneGoogleSchema = import('@google/genai').Schema;
@@ -64,11 +63,13 @@ interface IFIMStreamState {
 }
 
 const anthropicModelMap: Record<string, string> = {
-	'claude-opus-4.6': 'claude-opus-4-6',
-	'claude-sonnet-4.6': 'claude-sonnet-4-6',
-	'claude-sonnet-4.0': 'claude-sonnet-4-20250514',
 	'claude-haiku-4.5': 'claude-haiku-4-5-20251001',
 };
+
+const supportedAnthropicOAuthMessagesModelIds = new Set<string>([
+	'claude-haiku-4-5-20251001',
+	'claude-3-haiku-20240307',
+]);
 
 const googleModelMap: Record<string, string> = {
 	'gemini-3.1-pro-preview': 'gemini-3.1-pro-preview',
@@ -88,11 +89,6 @@ const googleSchemaTypeNumber = 'NUMBER' as VSCloneGoogleSchemaType;
 const googleSchemaTypeInteger = 'INTEGER' as VSCloneGoogleSchemaType;
 const googleSchemaTypeBoolean = 'BOOLEAN' as VSCloneGoogleSchemaType;
 const googleSchemaTypeArray = 'ARRAY' as VSCloneGoogleSchemaType;
-
-const supportedAnthropicOAuthMessagesModelIds = new Set<string>([
-	'claude-haiku-4-5-20251001',
-	'claude-3-haiku-20240307',
-]);
 
 const defaultSystemMessage =
 	[
@@ -665,8 +661,8 @@ async function sendGoogleChatMessage(
 		} as never,
 		httpOptions: buildGoogleHttpOptions(auth.headers),
 	});
-	// Google's SDK request types are also nominally separate from the local prepared-message union,
-	// so we cast at the boundary instead of leaking SDK types into the browser-side transport seam.
+	// Google's SDK request types are nominally separate from the local prepared-message union. The
+	// installed 1.x SDK now preserves `thoughtSignature`, so the cast can stay contained here.
 	const stream = await client.models.generateContentStream(buildGoogleChatRequest(prepared, signal) as never);
 
 	let fullText = '';
@@ -683,10 +679,12 @@ async function sendGoogleChatMessage(
 		const newText = chunk.text ?? '';
 		const functionCall = chunk.functionCalls?.[0];
 		if (functionCall) {
+			const googleThoughtSignature = getGoogleFunctionCallThoughtSignature(chunk, functionCall.id, functionCall.name) ?? toolCall.googleThoughtSignature;
 			toolCall = updateToolCallFromJsonString({
 				...toolCall,
 				id: functionCall.id ?? toolCall.id,
 				name: functionCall.name ?? toolCall.name,
+				...(googleThoughtSignature ? { googleThoughtSignature } : {}),
 			}, {
 				argsJson: JSON.stringify(functionCall.args ?? {}),
 				isDone: true,
@@ -720,6 +718,55 @@ async function sendGoogleChatMessage(
 		anthropicReasoning: null,
 		tokenUsage,
 	});
+}
+
+function getGoogleFunctionCallThoughtSignature(
+	response: unknown,
+	functionCallId: string | undefined,
+	functionCallName: string | undefined,
+): string | undefined {
+	const candidates = isRecord(response) && Array.isArray(response.candidates) ? response.candidates : [];
+	for (const candidate of candidates) {
+		if (!isRecord(candidate) || !isRecord(candidate.content) || !Array.isArray(candidate.content.parts)) {
+			continue;
+		}
+		let fallbackThoughtSignature: string | undefined;
+		for (const part of candidate.content.parts) {
+			if (!isRecord(part)) {
+				continue;
+			}
+			const partThoughtSignature = getGooglePartThoughtSignature(part);
+			fallbackThoughtSignature = partThoughtSignature ?? fallbackThoughtSignature;
+			if (!isRecord(part.functionCall)) {
+				continue;
+			}
+			const candidateFunctionCall = part.functionCall;
+			const matchesId = functionCallId && candidateFunctionCall.id === functionCallId;
+			const matchesName = functionCallName && candidateFunctionCall.name === functionCallName;
+			if (matchesId || matchesName || (!functionCallId && !functionCallName)) {
+				// Gemini 3 validates that this exact provider-issued signature is replayed on the
+				// functionCall part before VSClone sends the matching functionResponse.
+				return partThoughtSignature ?? fallbackThoughtSignature;
+			}
+		}
+	}
+	return undefined;
+}
+
+function getGooglePartThoughtSignature(part: Record<string, unknown>): string | undefined {
+	if (typeof part.thoughtSignature === 'string') {
+		return part.thoughtSignature;
+	}
+	if (typeof part.thought_signature === 'string') {
+		return part.thought_signature;
+	}
+	if (isRecord(part.functionCall) && typeof part.functionCall.thoughtSignature === 'string') {
+		return part.functionCall.thoughtSignature;
+	}
+	if (isRecord(part.functionCall) && typeof part.functionCall.thought_signature === 'string') {
+		return part.functionCall.thought_signature;
+	}
+	return undefined;
 }
 
 async function createGooglePassThroughAuthClient(): Promise<unknown> {
@@ -1704,7 +1751,7 @@ function resolveVSCloneApiModelId(vendor: VSCloneModelVendor, catalogModelId: st
 function assertSupportsAnthropicOAuthMessagesModel(modelId: string): void {
 	if (!supportedAnthropicOAuthMessagesModelIds.has(modelId)) {
 		throw new Error(
-			'Anthropic OAuth messages currently support only Claude Haiku 4.5 and Claude Haiku 3 in VSClone. Re-select an Anthropic Haiku model.',
+			'VSClone uses Anthropic OAuth directly, and that path is reliable only for Claude Haiku models. Re-select Claude Haiku.',
 		);
 	}
 }
@@ -1748,25 +1795,54 @@ function buildGoogleHttpOptions(headers: Readonly<Record<string, string>>) {
 	};
 }
 
-function getGooglePromptFeedbackErrorMessage(response: import('@google/genai').GenerateContentResponse): string | undefined {
-	const blockReason = response.promptFeedback?.blockReason;
+// These pure helpers are exported only so unit tests can pin provider wire shapes without opening
+// live SDK streams. Keeping the export grouped at the bottom avoids implying that production code
+// should call around the public `sendVSCloneLLMMessage` entry point.
+export const VSCloneLLMMessageTestHooks = {
+	buildOpenAIChatRequest,
+	buildAnthropicChatRequest,
+	buildGoogleChatRequest,
+	buildAnthropicFIMRequest,
+	buildGoogleFIMRequest,
+	parseFIMSsePayload,
+	processFIMSseLine,
+	toVSCloneToolCallFromOpenAIEventItem,
+	toVSCloneToolCallFromOpenAIResponse,
+	toVSCloneToolCallFromAnthropicMessage,
+	toGoogleToolSchema,
+	parseToolArgsJson,
+	stringifyToolParamValue,
+	getGoogleCandidateText,
+	getGoogleFunctionCallThoughtSignature,
+	getGooglePromptFeedbackErrorMessage,
+	getGoogleFinishReasonErrorMessage,
+	getOpenAIBaseUrl,
+	cloneToolJsonSchema,
+	buildGoogleHttpOptions,
+	requireBearerToken,
+	withoutHeader,
+};
+
+function getGooglePromptFeedbackErrorMessage(response: unknown): string | undefined {
+	const promptFeedback = getObjectProperty(response, 'promptFeedback');
+	const blockReason = typeof promptFeedback?.blockReason === 'string' ? promptFeedback.blockReason : undefined;
 	if (!blockReason) {
 		return undefined;
 	}
 
-	const blockReasonMessage = response.promptFeedback?.blockReasonMessage?.trim();
+	const blockReasonMessage = typeof promptFeedback?.blockReasonMessage === 'string' ? promptFeedback.blockReasonMessage.trim() : '';
 	return blockReasonMessage
 		? `Google completion blocked: ${blockReason} (${blockReasonMessage}).`
 		: `Google completion blocked: ${blockReason}.`;
 }
 
-function getGoogleFinishReasonErrorMessage(candidate: VSCloneGoogleCandidate | undefined): string | undefined {
-	const finishReason = candidate?.finishReason;
+function getGoogleFinishReasonErrorMessage(candidate: unknown): string | undefined {
+	const finishReason = isRecord(candidate) && typeof candidate.finishReason === 'string' ? candidate.finishReason : undefined;
 	if (!finishReason || finishReason === 'STOP' || finishReason === 'MAX_TOKENS') {
 		return undefined;
 	}
 
-	const finishMessage = candidate?.finishMessage?.trim();
+	const finishMessage = isRecord(candidate) && typeof candidate.finishMessage === 'string' ? candidate.finishMessage.trim() : '';
 	return finishMessage
 		? `Google completion finished with ${finishReason}: ${finishMessage}.`
 		: `Google completion finished with ${finishReason}.`;
