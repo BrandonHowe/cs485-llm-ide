@@ -563,13 +563,28 @@ function DiffCard(props: { card: IVSCloneConversationDiffCardView }) {
 	);
 }
 
-function ThinkingBlock(props: { messages: readonly string[]; open: boolean }) {
+function formatThinkingDurationPreact(durationMs: number): string {
+	const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+	if (totalSeconds < 60) {
+		return localize('vsclone.thinking.duration.seconds', '{0}s', totalSeconds.toString());
+	}
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	if (seconds === 0) {
+		return localize('vsclone.thinking.duration.minutesOnly', '{0}m', minutes.toString());
+	}
+	return localize('vsclone.thinking.duration.minutesSeconds', '{0}m {1}s', minutes.toString(), seconds.toString());
+}
+
+function ThinkingBlock(props: { messages: readonly string[]; open: boolean; durationMs?: number }) {
 	const stepCount = props.messages.filter(message => message.trim()).length;
-	const qualifier = stepCount <= 3
-		? localize('vsclone.thread.thinking.briefly', 'briefly')
-		: stepCount <= 10
-			? localize('vsclone.thread.thinking.moment', 'for a moment')
-			: localize('vsclone.thread.thinking.while', 'for a while');
+	const qualifier = props.durationMs !== undefined
+		? localize('vsclone.thread.thinking.forDuration', 'for {0}', formatThinkingDurationPreact(props.durationMs))
+		: stepCount <= 3
+			? localize('vsclone.thread.thinking.briefly', 'briefly')
+			: stepCount <= 10
+				? localize('vsclone.thread.thinking.moment', 'for a moment')
+				: localize('vsclone.thread.thinking.while', 'for a while');
 	return (
 		<details className="vsclone-thinking-block" open={props.open}>
 			<summary className="vsclone-thinking-summary">
@@ -831,7 +846,7 @@ function AssistantSegment(props: { segment: IVSCloneAssistantBodySegmentView }) 
 		case 'markdown':
 			return <div className={props.segment.className} dangerouslySetInnerHTML={{ __html: props.segment.html }} />;
 		case 'thinking':
-			return <ThinkingBlock messages={props.segment.messages} open={props.segment.open} />;
+			return <ThinkingBlock messages={props.segment.messages} open={props.segment.open} durationMs={props.segment.durationMs} />;
 		case 'activity':
 			return <ActivityGroup items={props.segment.items} streaming={props.segment.streaming} />;
 		case 'streamingEditIndicator':
@@ -845,6 +860,125 @@ function AssistantSegment(props: { segment: IVSCloneAssistantBodySegmentView }) 
 		case 'toolDiff':
 			return <DiffCard card={props.segment.card} />;
 	}
+}
+
+/**
+ * Cursor-style "Explored N files, M searches" expander: collapses runs of consecutive
+ * non-edit activity (thinking + read/list/grep/search tool calls) into a single summary
+ * the user can expand. Any segment that introduces or contains an edit (diff card, edit
+ * tool, streaming-edit indicator) -- or any plain assistant text -- breaks the run so edits
+ * stay visible inline.
+ */
+const EXPLORE_GROUP_THRESHOLD = 3;
+
+function isExploreSegment(segment: IVSCloneAssistantBodySegmentView): boolean {
+	if (segment.kind === 'thinking') {
+		return true;
+	}
+	if (segment.kind !== 'activity') {
+		return false;
+	}
+	for (const item of segment.items) {
+		if (item.kind !== 'tool') {
+			continue;
+		}
+		if (item.diffCard) {
+			return false;
+		}
+		const lower = item.toolName.toLowerCase();
+		if (lower.includes('edit') || lower.includes('write') || lower.includes('create') || lower.includes('delete') || lower.includes('remove')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function countExploredOps(segments: readonly IVSCloneAssistantBodySegmentView[]): { files: number; searches: number } {
+	let files = 0;
+	let searches = 0;
+	for (const segment of segments) {
+		if (segment.kind !== 'activity') {
+			continue;
+		}
+		for (const item of segment.items) {
+			if (item.kind !== 'tool') {
+				continue;
+			}
+			const lower = item.toolName.toLowerCase();
+			if (lower.includes('search') || lower.includes('grep') || lower.includes('find')) {
+				searches += 1;
+			} else if (lower.includes('read') || lower.includes('list') || lower.includes('ls')) {
+				files += 1;
+			}
+		}
+	}
+	return { files, searches };
+}
+
+function getSegmentKey(segment: IVSCloneAssistantBodySegmentView): string {
+	return segment.kind === 'searchReplaceDiff' || segment.kind === 'toolDiff' ? segment.card.key : segment.key;
+}
+
+function ExploredSummary(props: { segments: readonly IVSCloneAssistantBodySegmentView[]; defaultOpen: boolean }) {
+	const { files, searches } = countExploredOps(props.segments);
+	const parts: string[] = [];
+	if (files > 0) {
+		parts.push(files === 1
+			? localize('vsclone.explored.fileOne', '1 file')
+			: localize('vsclone.explored.fileMany', '{0} files', files.toString()));
+	}
+	if (searches > 0) {
+		parts.push(searches === 1
+			? localize('vsclone.explored.searchOne', '1 search')
+			: localize('vsclone.explored.searchMany', '{0} searches', searches.toString()));
+	}
+	const label = parts.length > 0
+		? localize('vsclone.explored.prefixed', 'Explored {0}', parts.join(', '))
+		: localize('vsclone.explored.thinkingOnly', 'Thought through this');
+	return (
+		<details className="vsclone-explored-group" open={props.defaultOpen}>
+			<summary className="vsclone-explored-summary">
+				<span className="vsclone-explored-summary-label">{label}</span>
+			</summary>
+			<div className="vsclone-explored-content">
+				{props.segments.map(segment => (
+					<AssistantSegment key={getSegmentKey(segment)} segment={segment} />
+				))}
+			</div>
+		</details>
+	);
+}
+
+type AssistantSegmentRun =
+	| { kind: 'segment'; segment: IVSCloneAssistantBodySegmentView }
+	| { kind: 'explored'; segments: readonly IVSCloneAssistantBodySegmentView[]; key: string };
+
+function partitionAssistantSegments(segments: readonly IVSCloneAssistantBodySegmentView[]): readonly AssistantSegmentRun[] {
+	const out: AssistantSegmentRun[] = [];
+	let run: IVSCloneAssistantBodySegmentView[] = [];
+	const flush = () => {
+		if (run.length === 0) {
+			return;
+		}
+		if (run.length >= EXPLORE_GROUP_THRESHOLD) {
+			out.push({ kind: 'explored', segments: run, key: `explored-${getSegmentKey(run[0])}` });
+		} else {
+			for (const seg of run) {
+				out.push({ kind: 'segment', segment: seg });
+			}
+		}
+		run = [];
+	};
+	for (const segment of segments) {
+		if (isExploreSegment(segment)) {
+			run.push(segment);
+		} else {
+			flush();
+			out.push({ kind: 'segment', segment });
+		}
+	}
+	flush();
+	return out;
 }
 
 function ConversationItem(props: { item: IVSCloneConversationItemView }) {
@@ -862,12 +996,15 @@ function ConversationItem(props: { item: IVSCloneConversationItemView }) {
 		);
 	}
 
+	const streaming = props.item.streaming;
 	return (
-		<div className={`vsclone-thread-message assistant${props.item.streaming ? ' streaming' : ''}${props.item.error ? ' error' : ''}`}>
+		<div className={`vsclone-thread-message assistant${streaming ? ' streaming' : ''}${props.item.error ? ' error' : ''}`}>
 			<div className="vsclone-thread-message-meta">{props.item.metaLabel}</div>
 			<div className="vsclone-thread-message-body">
-				{props.item.segments.map(segment => (
-					<AssistantSegment key={segment.kind === 'searchReplaceDiff' || segment.kind === 'toolDiff' ? segment.card.key : segment.key} segment={segment} />
+				{partitionAssistantSegments(props.item.segments).map(run => (
+					run.kind === 'segment'
+						? <AssistantSegment key={getSegmentKey(run.segment)} segment={run.segment} />
+						: <ExploredSummary key={run.key} segments={run.segments} defaultOpen={streaming} />
 				))}
 			</div>
 			{props.item.editApplySummary ? <EditApplySummaryCard summary={props.item.editApplySummary} /> : null}

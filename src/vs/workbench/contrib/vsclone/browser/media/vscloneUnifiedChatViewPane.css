@@ -15,6 +15,9 @@
 	border: 1px solid #303442;
 	border-radius: 10px;
 	position: relative;
+	/* Scope the ::before screen-blend so it lights only this pane, not whatever workbench
+	 * surface sits behind it. */
+	isolation: isolate;
 	color: #d8dbe3;
 	/* Keep Codex-brand affordances visible without the saturated neon blue drawing attention
 	 * away from message content. These locals intentionally avoid workbench button colors because
@@ -25,6 +28,34 @@
 	--vsclone-subtle-accent-surface-hover: #202b37;
 	--vsclone-subtle-accent-foreground: #b7c8d8;
 	--vsclone-subtle-accent-strong: #3f78a8;
+}
+
+/* Subtle "liquid glass" lighting: two soft radial glows (top and bottom) in the existing
+ * accent color, plus a hairline sheen along the top edge. Painted with mix-blend-mode: screen
+ * so it only ever adds light -- content underneath stays fully readable, and popups that anchor
+ * inside the pane (model switcher, mentions) are not occluded. */
+.vsclone-unified-chat-view-pane::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	z-index: 5;
+	mix-blend-mode: screen;
+	background:
+		radial-gradient(130% 55% at 50% -10%, rgba(155, 185, 220, 0.30), transparent 65%),
+		radial-gradient(100% 45% at 50% 110%, rgba(155, 185, 220, 0.26), transparent 70%);
+}
+
+.vsclone-unified-chat-view-pane::after {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: 8%;
+	right: 8%;
+	height: 1px;
+	pointer-events: none;
+	z-index: 5;
+	background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.32), transparent);
 }
 
 
@@ -1141,6 +1172,65 @@
 	border-radius: 0;
 }
 
+/* Cursor-style "Explored N files, M searches" expander: collapses runs of consecutive
+ * read/grep/list/think activity. The control itself is borderless -- the segments inside
+ * keep their own chrome (thinking blocks, activity groups) once the user expands. */
+.vsclone-explored-group {
+	margin: 4px 0;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.vsclone-explored-summary {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 0;
+	font-size: 12px;
+	color: #aeb4c2;
+	cursor: pointer;
+	user-select: none;
+	list-style: none;
+}
+
+.vsclone-explored-summary::-webkit-details-marker {
+	display: none;
+}
+
+.vsclone-explored-summary::before {
+	content: '';
+	display: inline-block;
+	width: 0;
+	height: 0;
+	border-left: 4px solid #aeb4c2;
+	border-top: 3px solid transparent;
+	border-bottom: 3px solid transparent;
+	transition: transform 0.15s ease;
+	flex-shrink: 0;
+}
+
+.vsclone-explored-group[open] > .vsclone-explored-summary::before {
+	transform: rotate(90deg);
+}
+
+.vsclone-explored-summary:hover {
+	color: #d8dbe3;
+}
+
+.vsclone-explored-summary-label {
+	font-weight: 500;
+}
+
+.vsclone-explored-content {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 4px 0 2px 14px;
+	border-left: 1px solid #2a2d36;
+	margin-left: 4px;
+	margin-top: 4px;
+}
+
 /* Compact tool row: single-line status + icon + label inside an activity group. */
 
 .vsclone-activity-row {
@@ -1660,6 +1750,12 @@
 	min-width: 0;
 	max-width: 100%;
 	background: transparent;
+	/* Cursor-style outer chrome: subtle 1px border with rounded corners so the title chip and the
+	 * diff body read as a single labeled card. `overflow: hidden` clips the body's rounded corners
+	 * cleanly when scrolling. */
+	border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 55%, transparent 45%);
+	border-radius: 6px;
+	overflow: hidden;
 }
 
 /* When diff card is nested inside a tool card, keep the original bordered behavior. */
@@ -1670,13 +1766,86 @@
 	border-radius: 0;
 }
 
+/* Streaming variant: rendered while a SEARCH/REPLACE block is still being typed by the model.
+ * The body fades in subtly at the bottom so the eye notices live additions, and the title-bar
+ * spinner signals "edit in progress" without competing with the line content. */
+.vsclone-tool-diff-card.streaming .vsclone-tool-diff-title {
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 70%, transparent 30%);
+}
+
+.vsclone-tool-diff-card.streaming .vsclone-tool-diff-body > .vsclone-tool-diff-line:last-child {
+	animation: vsclone-streaming-diff-line 1.6s ease-in-out infinite;
+}
+
+@keyframes vsclone-streaming-diff-line {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.55; }
+}
+
+.vsclone-tool-diff-title-streaming {
+	margin-left: 4px;
+	font-size: 12px;
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 60%, transparent 40%);
+	flex-shrink: 0;
+}
+
+/* Placeholder filename used when the SEARCH marker arrives before the `File:` line -- better than
+ * a blank title bar, fades back to normal as soon as the file name lands. */
+.vsclone-tool-diff-title-filename.placeholder {
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 45%, transparent 55%);
+	font-style: italic;
+	font-weight: 500;
+}
+
 .vsclone-tool-diff-title {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	padding: 2px 0 6px;
+	padding: 5px 10px;
 	font-size: 12px;
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 88%, transparent 12%);
+	/* Cursor-style header chip: a slightly lighter strip than the body, separated by a 1px divider
+	 * below it. The body sits flush underneath without its own background so the diff lines own
+	 * the visual focus. */
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 60%, transparent 40%);
+	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 45%, transparent 55%);
+	/* Snappy transition for the inkwell-style hover/active treatment below. Kept short so the
+	 * "press" reads as a button, not a hover effect. */
+	transition: background-color 90ms ease-out;
+}
+
+/* Click-anywhere header: the entire title bar acts as one button when the diff has a navigable
+ * file URI. Hover lifts the chip background; active flashes brighter for the inkwell-press feel.
+ * Filename underline-on-hover is dropped here because the whole bar is the click target now. */
+.vsclone-tool-diff-title.clickable {
+	cursor: pointer;
+	user-select: none;
+}
+
+.vsclone-tool-diff-title.clickable:hover {
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 80%, transparent 20%);
+}
+
+.vsclone-tool-diff-title.clickable:active {
+	background: color-mix(in srgb, var(--vscode-editor-foreground) 14%, transparent 86%);
+	transition-duration: 0ms;
+}
+
+.vsclone-tool-diff-title.clickable:focus-visible {
+	outline: 2px solid var(--vscode-focusBorder);
+	outline-offset: -2px;
+}
+
+.vsclone-tool-diff-title.clickable .vsclone-tool-diff-title-filename:hover {
+	text-decoration: none;
+}
+
+/* Inside a tool card the outer card already paints chrome above the title; suppress the chip
+ * background and divider here so the two layers don't double up. */
+.vsclone-tool-card .vsclone-tool-diff-title {
+	background: transparent;
+	border-bottom: none;
+	padding: 2px 0 6px;
 }
 
 /* Lang tag pill: small uppercase badge keyed to file extension. */
@@ -1776,13 +1945,31 @@
 }
 
 .vsclone-tool-diff-body {
-	max-height: 360px;
+	/* Cap the default surface so a long diff doesn't push the rest of the conversation off-screen.
+	 * Users can still scroll inside the card to see the rest. The runtime-approval preview and
+	 * other contexts override this where a taller default makes sense. */
+	max-height: 180px;
 	overflow: auto;
+	/* Workbench monospace + 13px so the diff body reads as native code rather than a separate
+	 * typographic surface. Editor-font CSS variables aren't part of the workbench's known-vars
+	 * registry, so we anchor to `--monaco-monospace-font` which is the same family the editor
+	 * defaults to. */
 	font-family: var(--monaco-monospace-font);
-	font-size: 12px;
+	font-size: 13px;
 	line-height: 1.5;
 	padding: 0;
 	border-radius: 4px;
+}
+
+/* Inner content wrapper. The outer .vsclone-tool-diff-body has overflow:auto and is constrained
+ * to the card's visible width; this inner wrapper grows to the widest line so every row's
+ * background paints across the full scrollable range instead of cutting off at the viewport's
+ * right edge when the user scrolls horizontally. */
+.vsclone-tool-diff-body-inner {
+	min-width: 100%;
+	width: max-content;
+	display: flex;
+	flex-direction: column;
 }
 
 .vsclone-tool-diff-line {
@@ -1822,6 +2009,27 @@
 	display: none;
 }
 
+/* Context lines: rendered with the same syntax tokens as the surrounding code, no background or
+ * gutter accent so they read like the rest of the editor. The 3px transparent border-left from
+ * the base `.vsclone-tool-diff-line` rule keeps horizontal alignment with red/green rows. */
+.vsclone-tool-diff-line.context {
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 70%, transparent 30%);
+}
+
+/* Cursor-style "{N} unmodified lines" placeholder shown between hunks -- matches the muted strip
+ * Cursor uses to signal a collapsed range. Centered text, dimmed, no syntax highlighting. */
+.vsclone-tool-diff-line.gap {
+	padding: 4px 12px;
+	background: color-mix(in srgb, var(--vscode-editorWidget-background) 55%, transparent 45%);
+	color: color-mix(in srgb, var(--vscode-editor-foreground) 55%, transparent 45%);
+	font-size: 11.5px;
+	border-left: none;
+	border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 30%, transparent 70%);
+	border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 30%, transparent 70%);
+	min-height: 0;
+	user-select: none;
+}
+
 /* Flat edit-card wrapper: applied when the diff card renders without the outer tool-card shell. */
 .vsclone-thread-message.runtime-tool-flat-diff {
 	padding: 4px 0;
@@ -1832,47 +2040,51 @@
 	gap: 0;
 }
 
-/* Syntax token colors for diff cards: keeps inline code readable without a full editor surface. */
+/* Syntax token colors for diff cards. Hard-coded Dark+ hex values rather than CSS vars: the
+ * --vscode-symbolIcon-* family targets the *outline panel* (it's not the editor's syntax token
+ * colors), and themes that leave it undefined or tied to plain text foreground would render the
+ * tokens with no visible highlighting at all. Editor token colors aren't exposed as CSS vars in
+ * VS Code, so anchoring to Dark+ keeps the diff card consistent across themes. */
 
 .vsclone-token-keyword {
-	color: var(--vscode-symbolIcon-keywordForeground, #c586c0);
+	color: #c586c0;
 }
 
 .vsclone-token-string {
-	color: var(--vscode-symbolIcon-stringForeground, #ce9178);
+	color: #ce9178;
 }
 
 .vsclone-token-number {
-	color: var(--vscode-symbolIcon-numberForeground, #b5cea8);
+	color: #b5cea8;
 }
 
 .vsclone-token-comment {
-	color: var(--vscode-descriptionForeground, #6a9955);
+	color: #6a9955;
 	font-style: italic;
 }
 
 .vsclone-token-type {
-	color: var(--vscode-symbolIcon-classForeground, #4ec9b0);
+	color: #4ec9b0;
 }
 
 .vsclone-token-function {
-	color: var(--vscode-symbolIcon-functionForeground, #dcdcaa);
+	color: #dcdcaa;
 }
 
 .vsclone-token-variable {
-	color: var(--vscode-symbolIcon-variableForeground, #9cdcfe);
+	color: #9cdcfe;
 }
 
 .vsclone-token-operator {
-	color: var(--vscode-symbolIcon-operatorForeground, #d4d4d4);
+	color: #d4d4d4;
 }
 
 .vsclone-token-property {
-	color: var(--vscode-symbolIcon-propertyForeground, #9cdcfe);
+	color: #9cdcfe;
 }
 
 .vsclone-token-punctuation {
-	color: color-mix(in srgb, var(--vscode-editor-foreground) 68%, transparent 32%);
+	color: rgba(212, 212, 212, 0.7);
 }
 
 .vsclone-thread-message-apply {
@@ -2347,12 +2559,15 @@
 .vsclone-thread-composer-controls {
 	display: flex;
 	align-items: center;
+	flex: 1 1 auto;
 	gap: 6px;
+	min-width: 0;
 }
 
 .vsclone-thread-model-switcher {
 	position: relative;
 	flex: 0 1 auto;
+	max-width: 168px;
 	min-width: 0;
 }
 
@@ -2595,11 +2810,14 @@
 
 .vsclone-model-switcher-button {
 	height: 24px;
+	width: 100%;
 	max-width: 100%;
 	min-width: 0;
 	border-radius: 7px;
-	border: 1px solid var(--vsclone-subtle-accent);
-	background: var(--vsclone-subtle-accent-surface);
+	border: 1px solid transparent;
+	/* Match the neighboring composer controls so the selected model reads as a compact
+	 * toolbar control, not as the primary call to action in the narrow composer. */
+	background: var(--vsclone-subtle-accent-surface-hover);
 	color: var(--vsclone-subtle-accent-foreground);
 	display: inline-flex;
 	align-items: center;
@@ -2945,6 +3163,12 @@
 }
 
 @media (max-width: 620px) {
+	.vsclone-thread-model-switcher {
+		/* The composer toolbar has several fixed-width controls. Keep the selected model
+		 * readable while forcing long provider labels to ellipsize before they collide with Send. */
+		max-width: 136px;
+	}
+
 	.vsclone-model-switcher-menu {
 		width: min(320px, 96vw);
 	}

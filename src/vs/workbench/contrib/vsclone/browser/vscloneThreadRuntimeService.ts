@@ -153,6 +153,11 @@ interface ILoopIterationResult {
 	 * provider can verify the server-issued signature. Null when the provider did not emit any.
 	 */
 	readonly anthropicReasoning?: readonly IVSCloneLLMMessageReasoningBlock[] | null;
+	/**
+	 * Google-specific signature attached to a Gemini functionCall part. Gemini validates this on the
+	 * immediate follow-up request that includes the corresponding functionResponse.
+	 */
+	readonly googleThoughtSignature?: string;
 	readonly errorMessage?: string;
 	readonly aborted: boolean;
 }
@@ -1023,6 +1028,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 				// turn so the follow-up request replays them verbatim. Anthropic rejects multi-turn
 				// requests that drop the server-issued signatures.
 				anthropicReasoning: iterationResult.anthropicReasoning,
+				...(iterationResult.googleThoughtSignature ? { googleThoughtSignature: iterationResult.googleThoughtSignature } : {}),
 			});
 			messages.push({
 				role: 'tool',
@@ -1091,6 +1097,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		let reasoning = '';
 		let tokenUsage: IVSCloneTokenUsage | undefined;
 		let anthropicReasoning: readonly IVSCloneLLMMessageReasoningBlock[] | null = null;
+		let googleThoughtSignature: string | undefined;
 		let errorMessage: string | undefined;
 		let aborted = false;
 
@@ -1171,6 +1178,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 					responseText = payload.fullText;
 					reasoning = payload.fullReasoning ?? reasoning;
 					anthropicReasoning = payload.anthropicReasoning ?? null;
+					googleThoughtSignature = payload.toolCall?.googleThoughtSignature;
 					tokenUsage = this.withRuntimeTokenUsageMetadata(payload.tokenUsage, options);
 					responseTranscriptText = this.replaceCurrentIterationTranscript(
 						options.threadId,
@@ -1202,6 +1210,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			reasoning,
 			tokenUsage,
 			anthropicReasoning,
+			googleThoughtSignature,
 			errorMessage,
 			aborted,
 		};
@@ -1570,6 +1579,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			return;
 		}
 
+		const now = Date.now();
 		const lastMessage = current.messages.at(-1);
 		if (lastMessage?.role === 'assistant') {
 			if ((lastMessage.reasoning ?? '') === reasoning) {
@@ -1579,13 +1589,15 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 			updatedMessages[updatedMessages.length - 1] = this.normalizeRuntimeConversationMessage({
 				...lastMessage,
 				reasoning,
+				reasoningStartedAt: lastMessage.reasoningStartedAt ?? now,
+				reasoningEndedAt: now,
 			}, current.mode);
 			this.setState(threadId, {
 				...current,
 				messages: updatedMessages,
 				branchHeadMessageId: lastMessage.id,
 				streamState: { kind: 'llm' },
-				lastUpdatedAt: Date.now(),
+				lastUpdatedAt: now,
 			});
 			return;
 		}
@@ -1595,16 +1607,18 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 		const assistantMessage = this.createMessage({
 			role: 'assistant',
 			mode: current.mode ?? 'act',
-			createdAt: Date.now(),
+			createdAt: now,
 			content: '',
 			reasoning,
+			reasoningStartedAt: now,
+			reasoningEndedAt: now,
 		});
 		this.setState(threadId, {
 			...current,
 			messages: [...current.messages, assistantMessage],
 			branchHeadMessageId: assistantMessage.id,
 			streamState: { kind: 'llm' },
-			lastUpdatedAt: Date.now(),
+			lastUpdatedAt: now,
 		});
 	}
 
@@ -2189,6 +2203,7 @@ export class VSCloneThreadRuntimeService extends Disposable implements IVSCloneT
 						role: 'assistant',
 						content: message.content,
 						...(message.anthropicReasoning ? { anthropicReasoning: message.anthropicReasoning } : {}),
+						...(message.googleThoughtSignature ? { googleThoughtSignature: message.googleThoughtSignature } : {}),
 					});
 					break;
 				case 'tool':

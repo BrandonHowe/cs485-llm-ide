@@ -151,6 +151,8 @@ export type IVSCloneAssistantBodySegmentView =
 		key: string;
 		messages: readonly string[];
 		open: boolean;
+		/** Wall-clock thinking duration (ms). Optional -- undefined falls back to a heuristic label. */
+		durationMs?: number;
 	}
 	| {
 		kind: 'activity';

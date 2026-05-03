@@ -88,6 +88,8 @@ import type { IVSCloneContextSelection } from "../common/vscloneContextSelection
 import { IVSCloneMentionSearchService, type IVSCloneMentionResult } from "./vscloneMentionSearchService.js";
 import { CancellationTokenSource } from "../../../../base/common/cancellation.js";
 import { ILanguageService } from "../../../../editor/common/languages/language.js";
+import { TokenizationRegistry } from "../../../../editor/common/languages.js";
+import { LineTokens } from "../../../../editor/common/tokens/lineTokens.js";
 import { ICodeEditorService } from "../../../../editor/browser/services/codeEditorService.js";
 import { VSCloneAutocompleteDebounceMsMaximum } from "./vscloneAutocompleteService.js";
 import { formatContextSelections } from "../common/vsclonePrompts.js";
@@ -182,6 +184,69 @@ function stripSelectionsBlock(content: string): string {
 		return content;
 	}
 	return content.slice(0, markerIndex);
+}
+
+/**
+ * A consecutive run of these many "explore" steps (narration thoughts + non-edit tools) collapses
+ * into a Cursor-style "Explored N files, M searches" expander. Below this threshold the steps stay
+ * inline so a single read or grep still reads at a glance.
+ */
+const EXPLORE_GROUP_THRESHOLD = 3;
+
+/**
+ * A tool result is "explore-eligible" if its tool name is a read / list / grep / search / find
+ * variant AND it doesn't produce an inline diff (edit/create tools are explicitly excluded so the
+ * user always sees diffs at the top level). Terminal/exec tools are also excluded -- the rule is
+ * "thinking, reading, and searching with no diffs" so anything else breaks the run.
+ */
+function isRuntimeExploreTool(toolName: string): boolean {
+	if (FLAT_DIFF_RUNTIME_TOOL_NAMES.has(toolName)) {
+		return false;
+	}
+	const lower = toolName.toLowerCase();
+	return lower.includes('read')
+		|| lower.includes('list')
+		|| lower.includes('ls')
+		|| lower.includes('grep')
+		|| lower.includes('search')
+		|| lower.includes('find');
+}
+
+/**
+ * Format a wall-clock thinking duration as a Cursor-style label fragment ("6s", "1m 23s", "3m").
+ * The minimum displayed value is "1s" -- the model is never described as having thought "0s",
+ * since that reads as a bug rather than an instant response.
+ */
+function formatThinkingDuration(durationMs: number): string {
+	const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+	if (totalSeconds < 60) {
+		return localize('vsclone.thinking.duration.seconds', '{0}s', totalSeconds.toString());
+	}
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	if (seconds === 0) {
+		return localize('vsclone.thinking.duration.minutesOnly', '{0}m', minutes.toString());
+	}
+	return localize('vsclone.thinking.duration.minutesSeconds', '{0}m {1}s', minutes.toString(), seconds.toString());
+}
+
+/**
+ * Sum reasoning duration across a group of assistant messages. Returns undefined when *no* message
+ * in the group carries timestamps (e.g. legacy persisted turns or providers that never streamed
+ * reasoning deltas), letting the caller fall back to a heuristic label instead of showing 0s.
+ */
+function sumReasoningDurationMs(
+	messages: readonly Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'assistant' }>[],
+): number | undefined {
+	let total = 0;
+	let hasTimestamps = false;
+	for (const message of messages) {
+		if (message.reasoningStartedAt !== undefined && message.reasoningEndedAt !== undefined) {
+			total += Math.max(0, message.reasoningEndedAt - message.reasoningStartedAt);
+			hasTimestamps = true;
+		}
+	}
+	return hasTimestamps ? total : undefined;
 }
 
 // Edit-producing tools get their own flattened treatment: the final diff card renders inline
@@ -504,8 +569,13 @@ interface IUnifiedDiffHunkHeader {
 interface IRenderedToolDiffLine {
 	readonly sourceLineIndex: number;
 	readonly rawText: string;
-	readonly kind: "file" | "hunk" | "context" | "added" | "removed";
+	readonly kind: "file" | "hunk" | "context" | "added" | "removed" | "gap";
 	readonly navigationLineNumber?: number;
+	/**
+	 * Set on `gap` rows: the count of unmodified lines between the previous hunk's end and the
+	 * next hunk's start. Drives the "{N} unmodified lines" placeholder rendered between hunks.
+	 */
+	readonly gapLineCount?: number;
 }
 
 interface IDiffLineNavigationState {
@@ -618,6 +688,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	// tool rows, approval prompts, status rows, and reasoning panels fade only when they first appear.
 	private readonly enteredRuntimeElementKeys = new Set<string>();
 	private currentRuntimeElementKeys = new Set<string>();
+	// Languages whose TextMate grammar has been requested for diff-card highlighting. Tracked so
+	// (a) we don't re-fire `requestBasicLanguageFeatures`/`getOrCreate` on every refresh, and
+	// (b) the `TokenizationRegistry.onDidChange` listener can decide whether a registration event
+	// is relevant to the visible transcript and trigger a refresh.
+	private readonly requestedTokenizationLanguageIds = new Set<string>();
+	private tokenizationRegistryListenerInstalled = false;
 	private readonly refreshRailScheduler = this._register(
 		new RunOnceScheduler(() => {
 			this.refreshRailRows();
@@ -2790,7 +2866,15 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	private renderRuntimeConversationNodes(
 		state: IVSCloneThreadRuntimeState,
 	): HTMLElement[] {
-		const nodes: HTMLElement[] = [];
+		// Two-pass build: first emit each rendered DOM node into a step list together with a
+		// classification (explore vs. plain), then post-process to wrap runs of consecutive explore
+		// steps into a Cursor-style "Explored N files, M searches" <details>. Edits, terminal calls,
+		// and the final assistant answer all classify as plain, which naturally breaks the run.
+		type ExploreToolKey = 'file' | 'search' | 'other';
+		type ConversationStep =
+			| { readonly kind: 'plain'; readonly node: HTMLElement }
+			| { readonly kind: 'explore'; readonly node: HTMLElement; readonly toolKind?: ExploreToolKey };
+		const steps: ConversationStep[] = [];
 
 		// Classify each assistant message as intermediate narration vs. the final answer of its
 		// turn. Intermediate = a tool call appears later in the same turn; final = the turn ends
@@ -2821,7 +2905,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			}
 			const block = this.renderRuntimeAssistantNarrationBlock(narrationGroup);
 			if (block) {
-				nodes.push(block);
+				steps.push({ kind: 'explore', node: block });
 			}
 			narrationGroup = [];
 		};
@@ -2831,25 +2915,44 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			switch (message.role) {
 				case 'user':
 					flushNarration();
-					nodes.push(this.renderRuntimeUserMessage(message));
+					steps.push({ kind: 'plain', node: this.renderRuntimeUserMessage(message) });
 					break;
 				case 'assistant':
 					if (isIntermediateAssistant[index]) {
 						narrationGroup.push(message as IntermediateAssistantMessage);
 					} else {
 						flushNarration();
-						nodes.push(this.renderRuntimeAssistantMessage(
-							message,
-							state.threadId,
-							this.isActiveRuntimeAssistantMessage(state, index),
-						));
+						steps.push({
+							kind: 'plain',
+							node: this.renderRuntimeAssistantMessage(
+								message,
+								state.threadId,
+								this.isActiveRuntimeAssistantMessage(state, index),
+							),
+						});
 					}
 					break;
 				case 'tool': {
 					flushNarration();
 					const toolNode = this.renderRuntimeToolMessage(state.threadId, state, message);
-					if (toolNode) {
-						nodes.push(toolNode);
+					if (!toolNode) {
+						break;
+					}
+					// Only completed (or running) non-edit tools are eligible for grouping.
+					// `tool_request` messages are an approval gate the user must act on, so they
+					// must always remain visible inline.
+					const isPendingApproval = message.type === 'tool_request';
+					if (!isPendingApproval && isRuntimeExploreTool(message.toolName)) {
+						const lower = message.toolName.toLowerCase();
+						const toolKind: ExploreToolKey =
+							(lower.includes('search') || lower.includes('grep') || lower.includes('find'))
+								? 'search'
+								: (lower.includes('read') || lower.includes('list') || lower.includes('ls'))
+									? 'file'
+									: 'other';
+						steps.push({ kind: 'explore', node: toolNode, toolKind });
+					} else {
+						steps.push({ kind: 'plain', node: toolNode });
 					}
 					break;
 				}
@@ -2862,11 +2965,94 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 		flushNarration();
 
+		const isStreaming = state.streamState.kind === 'llm' || state.streamState.kind === 'tool';
+		const nodes: HTMLElement[] = [];
+		let exploreRun: ConversationStep[] = [];
+		const flushExploreRun = () => {
+			if (exploreRun.length === 0) {
+				return;
+			}
+			if (exploreRun.length >= EXPLORE_GROUP_THRESHOLD) {
+				nodes.push(this.buildExploredExpander(exploreRun, isStreaming));
+			} else {
+				for (const step of exploreRun) {
+					nodes.push(step.node);
+				}
+			}
+			exploreRun = [];
+		};
+		for (const step of steps) {
+			if (step.kind === 'explore') {
+				exploreRun.push(step);
+			} else {
+				flushExploreRun();
+				nodes.push(step.node);
+			}
+		}
+		flushExploreRun();
+
 		const statusMessage = this.renderRuntimeStatusMessage(state);
 		if (statusMessage) {
 			nodes.push(statusMessage);
 		}
 		return nodes;
+	}
+
+	/**
+	 * Build the Cursor-style "Explored N files, M searches" expander wrapping a run of explore
+	 * steps. While the runtime is still streaming the run, the expander stays open so the user can
+	 * watch progress; once the stream lands, future re-renders default to closed.
+	 */
+	private buildExploredExpander(
+		steps: readonly { readonly node: HTMLElement; readonly toolKind?: 'file' | 'search' | 'other' }[],
+		isStreaming: boolean,
+	): HTMLElement {
+		let files = 0;
+		let searches = 0;
+		for (const step of steps) {
+			if (step.toolKind === 'file') {
+				files += 1;
+			} else if (step.toolKind === 'search') {
+				searches += 1;
+			}
+		}
+		const parts: string[] = [];
+		if (files > 0) {
+			parts.push(files === 1
+				? localize('vsclone.explored.fileOne', '1 file')
+				: localize('vsclone.explored.fileMany', '{0} files', files.toString()));
+		}
+		if (searches > 0) {
+			parts.push(searches === 1
+				? localize('vsclone.explored.searchOne', '1 search')
+				: localize('vsclone.explored.searchMany', '{0} searches', searches.toString()));
+		}
+		const labelText = parts.length > 0
+			? localize('vsclone.explored.prefixed', 'Explored {0}', parts.join(', '))
+			: localize('vsclone.explored.thinkingOnly', 'Thought through this');
+
+		const details = document.createElement('details');
+		details.className = 'vsclone-explored-group';
+		if (isStreaming) {
+			details.open = true;
+		}
+
+		const summary = document.createElement('summary');
+		summary.className = 'vsclone-explored-summary';
+		const labelSpan = document.createElement('span');
+		labelSpan.className = 'vsclone-explored-summary-label';
+		labelSpan.textContent = labelText;
+		summary.appendChild(labelSpan);
+		details.appendChild(summary);
+
+		const content = document.createElement('div');
+		content.className = 'vsclone-explored-content';
+		for (const step of steps) {
+			content.appendChild(step.node);
+		}
+		details.appendChild(content);
+
+		return details;
 	}
 
 	private markRuntimeElementEntrance(element: HTMLElement, key: string): void {
@@ -2948,12 +3134,21 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		if (visibleMessages.length > 0) {
-			const totalChars = visibleMessages.reduce((sum, entry) => sum + entry.text.length, 0);
-			const qualifierText = totalChars <= 400
-				? localize('vsclone.thread.thought.briefly', 'briefly')
-				: totalChars <= 1600
-					? localize('vsclone.thread.thought.moment', 'for a moment')
-					: localize('vsclone.thread.thought.while', 'for a while');
+			// Prefer the actual reasoning duration (sum across messages in this narration group)
+			// when the runtime captured it. Fall back to the legacy character-count heuristic for
+			// turns persisted before reasoning timestamps shipped, so old threads still get a label.
+			const reasoningDurationMs = sumReasoningDurationMs(messagesWithReasoning.map(entry => entry.message));
+			let qualifierText: string;
+			if (reasoningDurationMs !== undefined) {
+				qualifierText = localize('vsclone.thread.thought.forDuration', 'for {0}', formatThinkingDuration(reasoningDurationMs));
+			} else {
+				const totalChars = visibleMessages.reduce((sum, entry) => sum + entry.text.length, 0);
+				qualifierText = totalChars <= 400
+					? localize('vsclone.thread.thought.briefly', 'briefly')
+					: totalChars <= 1600
+						? localize('vsclone.thread.thought.moment', 'for a moment')
+						: localize('vsclone.thread.thought.while', 'for a while');
+			}
 
 			const details = document.createElement('details');
 			details.className = 'vsclone-thinking-block';
@@ -4768,22 +4963,33 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 	/**
 	 * Checks whether the text ends with what looks like the beginning of a search/replace block
-	 * that hasn't been completed yet (e.g. a trailing `File: xxx` followed by a partial
-	 * `<<<<<<< SEARCH` marker or search content without a closing `>>>>>>> REPLACE`).
+	 * that hasn't been completed yet. Two shapes count:
+	 *   (a) a trailing `File: xxx` line followed by partial or full `<` marker characters and no
+	 *       closing `>>>>>>> REPLACE` -- this is the canonical layout the runtime produces;
+	 *   (b) a trailing run of `<` characters (>= 3) at the start of a line, with or without a
+	 *       partially-typed `SEARCH` keyword and with no closing `>>>>>>> REPLACE`. Three is the
+	 *       smallest count that won't accidentally match prose like `if (x < 10)`.
 	 */
 	private looksLikePartialSearchReplaceBlock(text: string): boolean {
 		const normalized = text.replace(/\r\n/g, '\n');
-		// Look for a File: line near the end followed by partial SEARCH block content
+		// (a) File: line + trailing partial marker
 		const trailingPattern = /(?:^|\n)(?:[*-]\s*)?File:\s*.+(?:\n[\s\S]*)?$/;
 		const trailingMatch = normalized.match(trailingPattern);
-		if (!trailingMatch) {
-			return false;
+		if (trailingMatch) {
+			const trailing = normalized.slice(trailingMatch.index!);
+			if (/(?:^|\n)(?:[*-]\s*)?File:\s*.+/i.test(trailing) &&
+				(trailing.includes('<') || trailing.includes('<<<<<<< SEARCH')) &&
+				!trailing.includes('>>>>>>> REPLACE')) {
+				return true;
+			}
 		}
-		const trailing = normalized.slice(trailingMatch.index!);
-		// Must have at least a File: line and either partial or no SEARCH marker
-		return /(?:^|\n)(?:[*-]\s*)?File:\s*.+/i.test(trailing) &&
-			(trailing.includes('<') || trailing.includes('<<<<<<< SEARCH')) &&
-			!trailing.includes('>>>>>>> REPLACE');
+		// (b) Bare partial marker at line start at end of text. Also catches a complete
+		// `<<<<<<< SEARCH` followed by streamed body content without a closing marker yet.
+		if (!normalized.includes('>>>>>>> REPLACE') &&
+			/(?:^|\n)<{3,7}(?:< ?S(?:E(?:A(?:R(?:C(?:H)?)?)?)?)?)?[\s\S]*$/.test(normalized)) {
+			return true;
+		}
+		return false;
 	}
 
 	/**
@@ -4861,30 +5067,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const remaining = normalized.slice(cursor);
 
 		if (streaming) {
-			// Detect trailing partial block (File: line + incomplete SEARCH block)
-			const partialPattern = /(?:^|\n)((?:[*-]\s*)?File:\s*(.+?)[\t ]*)\n(?:(?:<{1,7}[\s\S]*)|(?:<<<<<<< SEARCH[\s\S]*))$/;
-			const partialMatch = remaining.match(partialPattern);
-			if (partialMatch && !remaining.slice(remaining.indexOf(partialMatch[0])).includes('>>>>>>> REPLACE')) {
-				const proseBeforePartial = remaining.slice(0, partialMatch.index! + (remaining[partialMatch.index!] === '\n' ? 1 : 0)).trim();
-				if (proseBeforePartial) {
-					this.appendMarkdownSegment(container, proseBeforePartial, "vsclone-thread-message-text-segment");
+			// Detect a trailing partial block. The previous implementation required a "File: xxx"
+			// line preceding the SEARCH marker; without one the raw `<<<<<<< SEARCH` text leaked
+			// through to the markdown renderer and the user saw the entire diff as plaintext until
+			// the closing `>>>>>>> REPLACE` arrived (then it abruptly "compressed" into a card).
+			// Now we accept the marker on its own and render a live diff card with whatever
+			// search/replace content has been emitted so far.
+			const partial = this.parseTrailingPartialSearchReplaceBlock(remaining);
+			if (partial) {
+				if (partial.proseBefore) {
+					this.appendMarkdownSegment(container, partial.proseBefore, "vsclone-thread-message-text-segment");
 				}
-
-				const fileName = partialMatch[2]?.trim();
-				const indicator = document.createElement("div");
-				indicator.className = "vsclone-streaming-edit-indicator";
-
-				const icon = document.createElement("span");
-				icon.className = "codicon codicon-loading codicon-modifier-spin";
-				indicator.appendChild(icon);
-
-				const label = document.createElement("span");
-				label.textContent = fileName
-					? localize("vsclone.thread.assistant.editingFile", "Editing {0}...", fileName)
-					: localize("vsclone.thread.assistant.editing", "Editing...");
-				indicator.appendChild(label);
-
-				container.appendChild(indicator);
+				container.appendChild(this.renderSearchReplaceDiffCard(
+					partial.filePath,
+					partial.searchText,
+					partial.replaceText,
+					/* streaming */ true,
+				));
 				return;
 			}
 		}
@@ -4897,68 +5096,191 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	}
 
 	/**
-	 * Renders a search/replace block as a compact diff card showing removed and added lines.
+	 * Detects an in-progress (no `>>>>>>> REPLACE`) SEARCH/REPLACE block at the tail of the given
+	 * text. Accepts both a fully-formed `<<<<<<< SEARCH` marker and a partial run of `<` characters
+	 * that hasn't typed out the keyword yet, with or without a preceding `File: xxx` line. Returns
+	 * the prose that comes before the block, the detected file path (empty string if none), and
+	 * whatever search/replace content has been emitted so far. Returns undefined when no in-progress
+	 * block is found at the tail.
+	 */
+	private parseTrailingPartialSearchReplaceBlock(text: string): {
+		readonly proseBefore: string;
+		readonly filePath: string;
+		readonly searchText: string;
+		readonly replaceText: string;
+	} | undefined {
+		// Find the start of the trailing in-progress marker. The full marker takes precedence;
+		// if no full marker is present we fall back to a partial `<{1,6}` run at end of text
+		// (with optional partially-typed " SEARC" suffix) so the card appears the moment the
+		// model starts typing the marker rather than after it completes.
+		let markerLineStart = -1;
+		const fullIdx = text.lastIndexOf('<<<<<<< SEARCH');
+		if (fullIdx !== -1 && !text.slice(fullIdx).includes('>>>>>>> REPLACE')) {
+			const lineStart = text.lastIndexOf('\n', fullIdx - 1);
+			markerLineStart = lineStart === -1 ? 0 : lineStart + 1;
+		} else {
+			const partialTailMatch = text.match(/(^|\n)(<{1,7}(?:< ?S(?:E(?:A(?:R(?:C(?:H)?)?)?)?)?)?)\s*$/);
+			if (partialTailMatch) {
+				markerLineStart = partialTailMatch.index! + partialTailMatch[1].length;
+			}
+		}
+		if (markerLineStart === -1) {
+			return undefined;
+		}
+
+		// Strip a single trailing newline before the marker so the prose section doesn't carry one.
+		const beforeMarker = text.slice(0, markerLineStart).replace(/\n+$/, '');
+
+		// An optional "File: xxx" line right before the marker becomes the file path. If absent we
+		// still render a card -- the title shows an empty filename and the diff body still streams.
+		let filePath = '';
+		let proseEnd = beforeMarker.length;
+		const fileMatch = beforeMarker.match(/(?:^|\n)((?:[*-]\s*)?File:\s*(.+?)[\t ]*)$/);
+		if (fileMatch) {
+			filePath = fileMatch[2].trim();
+			proseEnd = fileMatch.index! + (beforeMarker[fileMatch.index!] === '\n' ? 1 : 0);
+		}
+		const proseBefore = beforeMarker.slice(0, proseEnd).trim();
+
+		// Strip the marker (full or partial) and the newline that follows it from the in-progress
+		// content. Anything remaining is search/replace body the model has streamed in so far.
+		let body = text.slice(markerLineStart);
+		body = body.replace(/^<{1,7}(?:< ?S(?:E(?:A(?:R(?:C(?:H)?)?)?)?)?)?\s*\n?/, '');
+
+		const sepIdx = body.indexOf('\n=======\n');
+		let searchText: string;
+		let replaceText: string;
+		if (sepIdx === -1) {
+			// Phase A: still typing the search side. A partial separator like `\n====` at the end
+			// shouldn't be displayed as code, so trim it off.
+			const partialSepIdx = body.search(/\n={1,7}\s*$/);
+			searchText = partialSepIdx === -1 ? body.replace(/\n$/, '') : body.slice(0, partialSepIdx);
+			replaceText = '';
+		} else {
+			searchText = body.slice(0, sepIdx);
+			let afterSep = body.slice(sepIdx + '\n=======\n'.length);
+			// A partial closing marker `>{1,7}` at end is also stripped.
+			afterSep = afterSep.replace(/\n>{1,7}(?:> ?R(?:E(?:P(?:L(?:A(?:C(?:E)?)?)?)?)?)?)?\s*$/, '');
+			replaceText = afterSep.replace(/\n$/, '');
+		}
+
+		return {
+			proseBefore,
+			filePath,
+			searchText,
+			replaceText,
+		};
+	}
+
+	/**
+	 * Renders a search/replace block as a compact diff card showing removed and added lines. When
+	 * `streaming` is true, the card adds a `streaming` class plus a small spinner in the title bar
+	 * so an in-progress block reads as live edit-in-progress instead of a final result. Filename
+	 * may be empty during the early streaming window before the `File:` line has arrived; the card
+	 * shows a generic "(editing)" placeholder in that case rather than a misleading blank.
 	 */
 	private renderSearchReplaceDiffCard(
 		filePath: string,
 		searchText: string,
 		replaceText: string,
+		streaming: boolean = false,
 	): HTMLElement {
 		const card = document.createElement("div");
-		card.className = "vsclone-tool-diff-card";
+		card.className = streaming ? "vsclone-tool-diff-card streaming" : "vsclone-tool-diff-card";
 
 		// Title bar
 		const titleBar = document.createElement("div");
 		titleBar.className = "vsclone-tool-diff-title";
 
-		const filename = toCompactTargetLabel(filePath);
-		const langLabel = this.getLanguageLabelFromFilename(filename);
-		const langTag = document.createElement("span");
-		langTag.className = "vsclone-tool-diff-title-lang-tag";
-		const langColorClass = LANG_TAG_COLOR_CLASS[langLabel];
-		if (langColorClass) {
-			langTag.classList.add(langColorClass);
+		const filename = filePath ? toCompactTargetLabel(filePath) : "";
+		const langLabel = filename ? this.getLanguageLabelFromFilename(filename) : "";
+		if (langLabel) {
+			const langTag = document.createElement("span");
+			langTag.className = "vsclone-tool-diff-title-lang-tag";
+			const langColorClass = LANG_TAG_COLOR_CLASS[langLabel];
+			if (langColorClass) {
+				langTag.classList.add(langColorClass);
+			}
+			langTag.textContent = langLabel;
+			titleBar.appendChild(langTag);
 		}
-		langTag.textContent = langLabel;
-		titleBar.appendChild(langTag);
 
 		const fileLabel = document.createElement("span");
 		fileLabel.className = "vsclone-tool-diff-title-filename";
-		fileLabel.textContent = filename;
-		fileLabel.title = filePath;
+		if (filename) {
+			fileLabel.textContent = filename;
+			fileLabel.title = filePath;
+		} else {
+			fileLabel.textContent = localize("vsclone.thread.assistant.editingPlaceholder", "(editing)");
+			fileLabel.classList.add("placeholder");
+		}
 		titleBar.appendChild(fileLabel);
+
+		// Drop a single trailing empty line for each side so an in-progress search/replace where
+		// the model just typed `\n` doesn't show a stray blank row at the end.
+		const trimTrailingBlank = (text: string) => text.replace(/\n+$/, '');
+		const searchLines = trimTrailingBlank(searchText).length > 0 ? trimTrailingBlank(searchText).split('\n') : [];
+		const replaceLines = trimTrailingBlank(replaceText).length > 0 ? trimTrailingBlank(replaceText).split('\n') : [];
+
+		// "+N / -M" stats in the header chip -- matches the parsed-tool-diff card and Cursor's layout.
+		// While streaming the counts climb as the model types, so the spinner replaces them; once
+		// the block is complete the stats settle and read as a final summary.
+		if (!streaming && (searchLines.length > 0 || replaceLines.length > 0)) {
+			const stats = document.createElement("span");
+			stats.className = "vsclone-tool-diff-title-stats";
+			if (replaceLines.length > 0) {
+				const added = document.createElement("span");
+				added.className = "vsclone-tool-diff-title-stats-added";
+				added.textContent = `+${replaceLines.length}`;
+				stats.appendChild(added);
+			}
+			if (searchLines.length > 0) {
+				const removed = document.createElement("span");
+				removed.className = "vsclone-tool-diff-title-stats-removed";
+				removed.textContent = `-${searchLines.length}`;
+				stats.appendChild(removed);
+			}
+			titleBar.appendChild(stats);
+		}
+
+		if (streaming) {
+			const spinner = document.createElement("span");
+			spinner.className = "codicon codicon-loading codicon-modifier-spin vsclone-tool-diff-title-streaming";
+			spinner.setAttribute("aria-hidden", "true");
+			titleBar.appendChild(spinner);
+		}
 
 		card.appendChild(titleBar);
 
-		// Diff body
+		// Diff body. The outer `body` is the scrollable viewport; the inner `bodyInner` carries the
+		// content and uses `min-width: max-content` so every line shares the widest-line width and
+		// the colored backgrounds paint across the full scroll range instead of cutting off at the
+		// viewport's right edge.
 		const body = document.createElement("div");
 		body.className = "vsclone-tool-diff-body";
+		const bodyInner = document.createElement("div");
+		bodyInner.className = "vsclone-tool-diff-body-inner";
 
-		const searchLines = searchText.split('\n');
-		const replaceLines = replaceText.split('\n');
-
+		// `syntaxHighlightLine` strips a leading `+`/`-` if present, but the SEARCH/REPLACE blocks
+		// are stored without those prefixes -- pass the raw code line and the tokenizer treats the
+		// whole string as code. Resolving the language id from the filename once (instead of per
+		// line) avoids re-walking the language registry for every row.
+		const languageId = this.resolveDiffCardLanguageId(filePath);
 		for (const line of searchLines) {
 			const lineEl = document.createElement("div");
 			lineEl.className = "vsclone-tool-diff-line removed";
-
-			const content = document.createElement("span");
-			content.textContent = line;
-			lineEl.appendChild(content);
-
-			body.appendChild(lineEl);
+			lineEl.appendChild(this.syntaxHighlightLine(line, languageId));
+			bodyInner.appendChild(lineEl);
 		}
 
 		for (const line of replaceLines) {
 			const lineEl = document.createElement("div");
 			lineEl.className = "vsclone-tool-diff-line added";
-
-			const content = document.createElement("span");
-			content.textContent = line;
-			lineEl.appendChild(content);
-
-			body.appendChild(lineEl);
+			lineEl.appendChild(this.syntaxHighlightLine(line, languageId));
+			bodyInner.appendChild(lineEl);
 		}
 
+		body.appendChild(bodyInner);
 		card.appendChild(body);
 		return card;
 	}
@@ -5067,24 +5389,124 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 	 * Applies basic syntax highlighting to a code string by wrapping recognized tokens
 	 * in spans with appropriate CSS classes.
 	 */
-	private syntaxHighlightLine(code: string): HTMLSpanElement {
-		const container = document.createElement("span");
-		// Strip leading +/- diff prefix for highlighting purposes, but preserve it visually
-		let prefix = "";
+	/**
+	 * Resolve a TextMate-grammar language id from a filename, path, or file:// URI string.
+	 * Returns null when the file doesn't match any registered language so callers can skip the
+	 * language-specific tokenizer and fall back to the regex highlighter.
+	 */
+	private resolveDiffCardLanguageId(filenameOrUri: string | undefined): string | null {
+		if (!filenameOrUri) {
+			return null;
+		}
+		let resource: URI;
+		if (filenameOrUri.includes("://")) {
+			try {
+				resource = URI.parse(filenameOrUri);
+			} catch {
+				return null;
+			}
+		} else {
+			// `URI.file` requires an absolute-looking path; `guessLanguageIdByFilepathOrFirstLine`
+			// only inspects the basename for extension matching, so a synthetic prefix is fine for
+			// path-only filenames coming from SEARCH/REPLACE blocks.
+			const safePath = filenameOrUri.startsWith("/") ? filenameOrUri : `/${filenameOrUri}`;
+			resource = URI.file(safePath);
+		}
+		const langId = this.languageService.guessLanguageIdByFilepathOrFirstLine(resource);
+		return langId && langId !== "plaintext" ? langId : null;
+	}
+
+	/**
+	 * Try to tokenize a single code line with the given language's real TextMate grammar. Returns
+	 * undefined when the grammar isn't loaded yet -- the caller falls back to the regex tokenizer
+	 * for this render. We also fire-and-forget a `getOrCreate` to load the grammar; once it lands,
+	 * `TokenizationRegistry.onDidChange` triggers a conversation refresh and the next render uses
+	 * the real grammar.
+	 *
+	 * The DOM is built from the tokenizer output token-by-token instead of round-tripping through
+	 * `innerHTML` because the workbench enforces Trusted Types -- assigning a raw string to
+	 * `innerHTML` would throw `This document requires 'TrustedHTML' assignment`.
+	 */
+	private tokenizeLineWithLanguage(line: string, languageId: string): HTMLSpanElement | undefined {
+		const support = TokenizationRegistry.get(languageId);
+		if (!support) {
+			this.ensureLanguageGrammarLoaded(languageId);
+			return undefined;
+		}
+		const initialState = support.getInitialState();
+		const tokenizationResult = support.tokenizeEncoded(line, true, initialState);
+		LineTokens.convertToEndOffset(tokenizationResult.tokens, line.length);
+		const lineTokens = new LineTokens(tokenizationResult.tokens, line, this.languageService.languageIdCodec);
+		const viewLineTokens = lineTokens.inflate();
+
+		const result = document.createElement("span");
+		let startOffset = 0;
+		for (let i = 0, len = viewLineTokens.getCount(); i < len; i++) {
+			const endOffset = viewLineTokens.getEndOffset(i);
+			const className = viewLineTokens.getClassName(i);
+			const text = line.substring(startOffset, endOffset);
+			if (text.length > 0) {
+				const tokenSpan = document.createElement("span");
+				tokenSpan.className = className;
+				tokenSpan.textContent = text;
+				result.appendChild(tokenSpan);
+			}
+			startOffset = endOffset;
+		}
+		return result;
+	}
+
+	/**
+	 * Trigger basic language activation + factory resolution, and install a one-time listener so
+	 * the conversation re-renders when *any* requested grammar lands. The scheduled refresh is
+	 * debounced (~34ms) so several languages registering in a burst collapse to a single rerender.
+	 */
+	private ensureLanguageGrammarLoaded(languageId: string): void {
+		if (this.requestedTokenizationLanguageIds.has(languageId)) {
+			return;
+		}
+		this.requestedTokenizationLanguageIds.add(languageId);
+
+		this.languageService.requestBasicLanguageFeatures(languageId);
+		// Fire-and-forget: errors here only mean the grammar isn't available, which is the same
+		// outcome as having never requested it. We surface that to the user via the regex fallback.
+		void TokenizationRegistry.getOrCreate(languageId).then((support) => {
+			if (support) {
+				this.refreshConversationScheduler.schedule();
+			}
+		});
+
+		if (!this.tokenizationRegistryListenerInstalled) {
+			this.tokenizationRegistryListenerInstalled = true;
+			this._register(TokenizationRegistry.onDidChange((event) => {
+				if (event.changedLanguages.some((id) => this.requestedTokenizationLanguageIds.has(id))) {
+					this.refreshConversationScheduler.schedule();
+				}
+			}));
+		}
+	}
+
+	private syntaxHighlightLine(code: string, languageId: string | null = null): HTMLSpanElement {
+		// Strip the leading +/- diff prefix so the tokenized content reads like normal editor code.
+		// The colored background and 3px gutter already convey add/remove status, so re-rendering
+		// the prefix character is redundant -- Cursor's diff cards do the same thing.
 		let strippedCode = code;
 		if (code.startsWith("+") && !code.startsWith("+++")) {
-			prefix = "+";
 			strippedCode = code.slice(1);
 		} else if (code.startsWith("-") && !code.startsWith("---")) {
-			prefix = "-";
 			strippedCode = code.slice(1);
 		}
 
-		if (prefix) {
-			const prefixSpan = document.createElement("span");
-			prefixSpan.textContent = prefix;
-			container.appendChild(prefixSpan);
+		// Prefer the language's actual TextMate grammar when one is registered. Falls back to the
+		// JS-leaning regex tokenizer below when no language is known or the grammar is still loading.
+		if (languageId) {
+			const tokenized = this.tokenizeLineWithLanguage(strippedCode, languageId);
+			if (tokenized) {
+				return tokenized;
+			}
 		}
+
+		const container = document.createElement("span");
 
 		// Tokenize using regex patterns
 		const tokenRules: Array<{ pattern: RegExp; tokenClass: string }> = [
@@ -5216,6 +5638,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const renderedLines: IRenderedToolDiffLine[] = [];
 		let originalLineNumber: number | undefined;
 		let modifiedLineNumber: number | undefined;
+		// Tracks the last shown modified line so the next hunk can emit "N unmodified lines"
+		// between itself and the previous hunk. Stays undefined until the first hunk header lands.
+		let prevHunkLastModifiedLine: number | undefined;
 		const titleNavigation: IDiffLineNavigationState = {};
 		const diffLines = diff.split("\n");
 
@@ -5240,6 +5665,23 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 						titleNavigation.endLineNumber !== undefined
 							? Math.max(titleNavigation.endLineNumber, hunkEndLineNumber)
 							: hunkEndLineNumber;
+
+					// Emit a "{N} unmodified lines" placeholder when this hunk doesn't begin on the
+					// line immediately after the last hunk's range. First hunk is skipped -- there's
+					// no "previous range" to gap from, and the leading-context case (file starts
+					// at line >1) is rarer and would need full file length to render meaningfully.
+					if (prevHunkLastModifiedLine !== undefined) {
+						const gap = hunkHeader.modifiedStartLineNumber - prevHunkLastModifiedLine - 1;
+						if (gap > 0) {
+							renderedLines.push({
+								sourceLineIndex,
+								rawText: "",
+								kind: "gap",
+								gapLineCount: gap,
+							});
+						}
+					}
+					prevHunkLastModifiedLine = hunkEndLineNumber;
 				}
 				renderedLines.push({
 					sourceLineIndex,
@@ -5389,29 +5831,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			langTag.textContent = langLabel;
 			titleBar.appendChild(langTag);
 
-			// Make the filename a clickable link that opens the file
-			const fileLabel = document.createElement("a");
+			// Filename now sits inside a click-anywhere title bar -- keep its visual style (white
+			// weight, ellipsis on overflow) but drop the explicit <a> + href so it doesn't pull
+			// the cursor onto a single sliver of the header.
+			const fileLabel = document.createElement("span");
 			fileLabel.className = "vsclone-tool-diff-title-filename";
 			fileLabel.textContent = filename;
-			// Full URI stays in the tooltip regardless of line-navigation state so users never lose
-			// the path after we switched the label to basename-only.
-			fileLabel.title =
-				titleNavigation.startLineNumber !== undefined
-					? localize(
-						"vsclone.thread.toolDiff.openAtLineTitle",
-						"Open {0} at line {1}",
-						fileUri ?? filename,
-						titleNavigation.startLineNumber.toString(),
-					)
-					: (fileUri ?? filename);
-			if (fileUri) {
-				fileLabel.href = "#";
-				fileLabel.addEventListener("click", (e) => {
-					e.preventDefault();
-					this.openDiffTarget(fileUri, titleNavigation);
-				});
-				fileLabel.style.cursor = "pointer";
-			}
 			titleBar.appendChild(fileLabel);
 
 			if (addedCount > 0 || removedCount > 0) {
@@ -5457,11 +5882,59 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			titleBar.appendChild(label);
 		}
 
+		// Whole-header click-to-open: the entire title bar acts as a single button when the diff
+		// has a navigable file URI, instead of forcing the user to hit just the filename text.
+		// CSS handles the hover-lift and active-press feel; nothing else stops the bubble so a
+		// click on the lang tag, filename, or stats all open the file at the diff's first hunk.
+		if (fileUri) {
+			titleBar.classList.add("clickable");
+			titleBar.setAttribute("role", "button");
+			titleBar.setAttribute("tabindex", "0");
+			titleBar.title =
+				titleNavigation.startLineNumber !== undefined
+					? localize(
+						"vsclone.thread.toolDiff.openAtLineTitle",
+						"Open {0} at line {1}",
+						fileUri,
+						titleNavigation.startLineNumber.toString(),
+					)
+					: fileUri;
+			const openTarget = () => this.openDiffTarget(fileUri, titleNavigation);
+			titleBar.addEventListener("click", () => openTarget());
+			titleBar.addEventListener("keydown", (event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					openTarget();
+				}
+			});
+		}
+
 		card.appendChild(titleBar);
 
 		const body = document.createElement("div");
 		body.className = "vsclone-tool-diff-body";
+		const bodyInner = document.createElement("div");
+		bodyInner.className = "vsclone-tool-diff-body-inner";
+		// Resolve language id once per card (cheap, but the filename lookup walks the registry).
+		// Prefer the URI-derived path when available since it carries the full filename even when
+		// `filename` was reduced to a basename for the title bar.
+		const languageId = this.resolveDiffCardLanguageId(fileUri ?? filename);
 		for (const diffLine of renderedDiff.lines) {
+			// "{N} unmodified lines" placeholder rows render as a single muted strip between hunks
+			// -- tighter than collapsing a hunk header and far less janky than just snapping from one
+			// changed range to the next. They are not navigable themselves; the hunks above and
+			// below already let the user click through to the file.
+			if (diffLine.kind === "gap") {
+				const gap = document.createElement("div");
+				gap.className = "vsclone-tool-diff-line gap";
+				const count = diffLine.gapLineCount ?? 0;
+				gap.textContent = count === 1
+					? localize("vsclone.thread.toolDiff.gapOne", "1 unmodified line")
+					: localize("vsclone.thread.toolDiff.gapMany", "{0} unmodified lines", count.toString());
+				bodyInner.appendChild(gap);
+				continue;
+			}
+
 			const line = document.createElement("div");
 			line.className = "vsclone-tool-diff-line";
 			const lineNavigation: IDiffLineNavigationState = {
@@ -5472,7 +5945,8 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				diffLine.kind === "added" ||
 				diffLine.kind === "removed" ||
 				diffLine.kind === "hunk" ||
-				diffLine.kind === "file"
+				diffLine.kind === "file" ||
+				diffLine.kind === "context"
 			) {
 				line.classList.add(diffLine.kind);
 			}
@@ -5480,7 +5954,7 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			// Syntax-highlighted content keeps the diff prefix visible; the line gutter has been
 			// removed from the flat diff card to match the Codex-style inline preview.
 			if (diffLine.kind !== "file") {
-				line.appendChild(this.syntaxHighlightLine(diffLine.rawText));
+				line.appendChild(this.syntaxHighlightLine(diffLine.rawText, languageId));
 			}
 
 			if (fileUri && diffLine.kind !== "hunk" && diffLine.kind !== "file") {
@@ -5499,8 +5973,9 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 				});
 			}
 
-			body.appendChild(line);
+			bodyInner.appendChild(line);
 		}
+		body.appendChild(bodyInner);
 		card.appendChild(body);
 		return card;
 	}

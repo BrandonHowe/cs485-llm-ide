@@ -254,6 +254,20 @@ export type IVSCloneThreadRuntimeMessage =
 		 * existing persisted turns without reasoning deserialize cleanly.
 		 */
 		readonly anthropicReasoning?: readonly IVSCloneLLMMessageReasoningBlock[] | null;
+		/**
+		 * Google-specific function-call thought signature. Stored on the assistant turn because the
+		 * following tool result replays that assistant turn as a Gemini model functionCall part.
+		 */
+		readonly googleThoughtSignature?: string;
+		/**
+		 * Wall-clock timestamps (ms since epoch) bracketing the reasoning stream.
+		 * `reasoningStartedAt` is set on the first reasoning delta; `reasoningEndedAt` is updated on
+		 * every subsequent delta, so the difference is the model's thinking duration. Both are
+		 * optional so persisted turns from before this field shipped deserialize cleanly -- the
+		 * renderer falls back to a heuristic qualifier when they're absent.
+		 */
+		readonly reasoningStartedAt?: number;
+		readonly reasoningEndedAt?: number;
 	}
 	| IVSCloneThreadRuntimeToolRequestMessage
 	| IVSCloneThreadRuntimeToolProgressMessage
