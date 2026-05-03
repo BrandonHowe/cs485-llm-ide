@@ -139,6 +139,12 @@ jobs:
       - frontend-tests
     permissions:
       contents: read
+    # The VSClone Google OAuth secrets that get baked into product.json live
+    # in this GitHub Actions environment (not at the repo level), so the job
+    # has to opt in to that environment before `${{ secrets.* }}` can resolve
+    # them. Without this declaration the env block silently expands to empty
+    # strings and the packaged installer ships with no Google credentials.
+    environment: vsclone-live-providers
     env:
       npm_config_arch: x64
       VSCODE_ARCH: x64
@@ -252,6 +258,9 @@ jobs:
       - frontend-tests
     permissions:
       contents: read
+    # See note on the Windows job: this environment hosts the VSClone Google
+    # OAuth secrets that gulp bakes into product.json.
+    environment: vsclone-live-providers
     env:
       npm_config_arch: arm64
       VSCODE_ARCH: arm64
