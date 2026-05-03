@@ -417,9 +417,14 @@ function createConversationSurfaceHarness(): { pane: IConversationSurfaceHarness
 function createRuntimeRenderingHelperHarness(): IRuntimeRenderingHelperHarness {
 	// These render helpers are pure DOM builders once the runtime key sets exist, so this keeps the
 	// tests focused on transcript transformation and diff bookkeeping instead of workbench services.
+	// The real pane receives ILanguageService from DI, but these prototype-only tests skip the
+	// constructor; returning undefined keeps diff-card assertions independent from tokenization.
 	const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as IRuntimeRenderingHelperHarness;
 	pane.enteredRuntimeElementKeys = new Set<string>();
 	pane.currentRuntimeElementKeys = new Set<string>();
+	pane.languageService = {
+		guessLanguageIdByFilepathOrFirstLine: () => undefined,
+	};
 	return pane;
 }
 
@@ -806,6 +811,12 @@ function createRuntimeApprovalAndApplyHarness(options: { busy?: boolean; applySt
 		},
 		currentRuntimeElementKeys: new Set<string>(),
 		enteredRuntimeElementKeys: new Set<string>(),
+		languageService: {
+			// Approval previews render the same compact diff cards as assistant text; the real view
+			// gets this service from DI, while this helper intentionally constructs only the fields
+			// needed by the approval/apply controls under test.
+			guessLanguageIdByFilepathOrFirstLine: () => undefined,
+		},
 		getThreadRuntimeState: () => state,
 		isThreadBusy: () => options.busy === true,
 		isManualOnlyRuntimeAssistantApplyMessage: () => true,
@@ -1189,7 +1200,10 @@ suite('VSCloneUnifiedChatViewPane', () => {
 		assert.strictEqual(harness.looksLikePartialSearchReplaceBlock(partial), true);
 		harness.renderSearchReplaceAwareText(container, partial, true);
 
-		assert.strictEqual(container.querySelector('.vsclone-streaming-edit-indicator')?.textContent, 'Editing src/app.ts...');
+		const streamingCard = container.querySelector('.vsclone-tool-diff-card.streaming');
+		assert.ok(streamingCard);
+		assert.strictEqual(streamingCard.querySelector('.vsclone-tool-diff-title-filename')?.textContent, 'app.ts');
+		assert.ok(streamingCard.querySelector('.vsclone-tool-diff-title-streaming'));
 		assert.strictEqual(container.textContent?.includes('I will patch this next.'), true);
 		assert.strictEqual(container.textContent?.includes('<<<<<<< SEARCH'), false);
 	});
