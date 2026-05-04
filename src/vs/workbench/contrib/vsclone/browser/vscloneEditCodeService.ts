@@ -21,7 +21,9 @@ import { ITextModelService } from '../../../../editor/common/services/resolverSe
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { SaveReason } from '../../../common/editor.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
 import { IVSCloneConsistentItemService } from './helperServices/vscloneConsistentItemService.js';
 import { VSCloneAcceptRejectInlineWidget } from './vscloneAcceptRejectInlineWidget.js';
 import { findDiffs } from './helpers/findDiffs.js';
@@ -98,6 +100,7 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 		@IFileService private readonly fileService: IFileService,
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IEditorService private readonly editorService: IEditorService,
+		@ITextFileService private readonly textFileService: ITextFileService,
 		@IModelService private readonly _modelService: IModelService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@IVSCloneConsistentItemService private readonly _consistentItemService: IVSCloneConsistentItemService,
@@ -782,6 +785,8 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			}
 		}
 
+		const saveFailures = await this.saveModifiedFilesAfterVSCloneEdit(modifiedFiles);
+
 		if (modifiedFiles.length > 0) {
 			await this.editorService.openEditor({ resource: modifiedFiles[0] });
 		}
@@ -790,7 +795,7 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			attemptedEdits: parsedEdits.length,
 			appliedEdits,
 			modifiedFiles,
-			failures,
+			failures: [...failures, ...saveFailures],
 			fileChanges: [...pendingFileChanges.values()],
 		};
 	}
@@ -859,12 +864,13 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			});
 		}
 
+		const saveFailures = await this.saveModifiedFilesAfterVSCloneEdit([uri]);
 		await this.editorService.openEditor({ resource: uri });
 		return {
 			attemptedEdits: 1,
 			appliedEdits: 1,
 			modifiedFiles: [uri],
-			failures: [],
+			failures: saveFailures,
 			fileChanges: [{
 				uri,
 				displayPath: this.deriveDisplayPath(uri, this.workspaceContextService.getWorkspace().folders.map(folder => folder.uri)),
@@ -874,6 +880,38 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 				originalContent: originalContent.length === 0 ? undefined : originalContent,
 			}],
 		};
+	}
+
+	private async saveModifiedFilesAfterVSCloneEdit(resources: readonly URI[]): Promise<string[]> {
+		const failures: string[] = [];
+		const seen = new Set<string>();
+
+		for (const resource of resources) {
+			const key = resource.toString();
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+
+			if (!this.textFileService.isDirty(resource)) {
+				continue;
+			}
+
+			try {
+				// VSClone edits are already accepted by the user/model loop at this point. Saving here
+				// preserves the normal text-file pipeline, including save participants, while preventing
+				// agent-authored changes from lingering only in editor memory.
+				const savedResource = await this.textFileService.save(resource, { reason: SaveReason.AUTO });
+				if (!savedResource) {
+					failures.push(`Autosave did not complete for ${resource.toString()}.`);
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				failures.push(`Autosave failed for ${resource.toString()}: ${message}`);
+			}
+		}
+
+		return failures;
 	}
 
 	private async buildWholeFileRewriteEdit(uri: URI, text: string): Promise<ResourceTextEdit | ResourceFileEdit> {
@@ -1479,10 +1517,13 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 			return;
 		}
 		try {
-			await this.bulkEditService.apply([new ResourceTextEdit(uri, {
+			const result = await this.bulkEditService.apply([new ResourceTextEdit(uri, {
 				range: new Range(range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn),
 				text,
 			})], { label: 'VSClone reject diff' });
+			if (result.isApplied) {
+				await this.saveModifiedFilesAfterVSCloneEdit([uri]);
+			}
 		} finally {
 			modelReference.dispose();
 		}
@@ -1499,6 +1540,9 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 				ignoreIfExists: false,
 				contents: Promise.resolve(VSBuffer.fromString(text)),
 			})], { label: 'Restore VSClone file' });
+			if (result.isApplied) {
+				await this.saveModifiedFilesAfterVSCloneEdit([uri]);
+			}
 			return result.isApplied;
 		}
 
@@ -1511,6 +1555,9 @@ export class VSCloneEditCodeService extends Disposable implements IVSCloneEditCo
 				text,
 			});
 			const result = await this.bulkEditService.apply([edit], { label: 'Restore VSClone file' });
+			if (result.isApplied) {
+				await this.saveModifiedFilesAfterVSCloneEdit([uri]);
+			}
 			return result.isApplied;
 		} finally {
 			modelReference.dispose();

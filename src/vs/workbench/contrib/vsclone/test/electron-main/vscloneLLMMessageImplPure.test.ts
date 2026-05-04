@@ -141,6 +141,13 @@ suite('VSCloneLLMMessage pure provider translators', () => {
 			messages: [{ role: 'user', parts: [{ text: 'Question' }] }],
 			toolDefinitions: [sampleTool],
 		}), new AbortController().signal);
+		const googleMinimal = VSCloneLLMMessageTestHooks.buildGoogleChatRequest(createChatPayload({
+			vendor: 'google',
+			modelId: 'gemini-3-flash-preview',
+			modelIdentifier: 'google/gemini-3-flash-preview',
+			reasoningEffort: 'minimal',
+			messages: [{ role: 'user', parts: [{ text: 'Question' }] }],
+		}), new AbortController().signal);
 
 		// Anthropic chat requests use the transport-local Claude Code preset map. The lower budget
 		// keeps normal chat responses usable while the catalog-level reasoning adapter still pins
@@ -159,6 +166,10 @@ suite('VSCloneLLMMessage pure provider translators', () => {
 		assert.strictEqual(google.config.systemInstruction, 'Be precise.');
 		assert.strictEqual(google.config.toolConfig.functionCallingConfig.mode, 'AUTO');
 		assert.strictEqual(google.config.tools[0].functionDeclarations[0].parameters.properties.path.type, 'STRING');
+		// Gemini's reasoning dropdown maps only `minimal` to provider config. The default/high option
+		// omits config so Gemini keeps its provider-native dynamic thinking behavior.
+		assert.strictEqual(google.config.thinkingConfig, undefined);
+		assert.deepStrictEqual(googleMinimal.config.thinkingConfig, { thinkingLevel: 'minimal' });
 	});
 
 	test('converts structured MCP JSON schema into Gemini-compatible tool declarations', () => {

@@ -26,6 +26,7 @@ import {
 	type IVSCloneOpenAILLMChatMessage,
 } from '../common/vscloneLLMMessageTypes.js';
 import {
+	getVSCloneGoogleReasoningConfig,
 	getVSCloneProviderReasoningIOSettings,
 	getVSCloneReservedOutputTokenSpaceForReasoning,
 	getVSCloneSendableReasoningInfo,
@@ -881,6 +882,13 @@ function buildGoogleChatRequest(prepared: IVSCloneLLMPreparedChatPayload, signal
  * the minimum shape from the already-prepared fields before calling the helper.
  */
 function buildProviderReasoningFragment(prepared: IVSCloneLLMPreparedChatPayload): Record<string, unknown> | null {
+	if (prepared.vendor === 'google') {
+		// Gemini uses the same dropdown UI as effort-slider models, but only `minimal` maps to a
+		// provider-specific config. The default/high option intentionally omits config so Gemini keeps
+		// its SDK-native dynamic thinking and thought-signature behavior.
+		return getVSCloneGoogleReasoningConfig(prepared.modelId, prepared.reasoningEffort);
+	}
+
 	const info: VSCloneSendableReasoningInfo = getVSCloneSendableReasoningInfo(
 		'Chat',
 		prepared.vendor,

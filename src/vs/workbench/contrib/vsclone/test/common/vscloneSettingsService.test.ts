@@ -101,6 +101,20 @@ suite('VSCloneSettingsService', () => {
 		);
 	});
 
+	test('uses Gemini 3 Flash as the default Google chat fallback', async () => {
+		const { oauthService, settingsService } = await createHarness();
+		oauthService.setReady('openai', false);
+		oauthService.setReady('anthropic', false);
+		oauthService.setReady('google', true);
+		await settingsService.refreshState();
+
+		const current = settingsService.getCurrentSelectionForFeature('', 'chat');
+		// Chat fallback candidates keep OpenAI first globally, but when Google is the only selectable
+		// provider the default should be Gemini 3 Flash so the reasoning dropdown uses `thinkingLevel`.
+		assert.strictEqual(current?.modelIdentifier, 'google/gemini-3-flash-preview');
+		assert.strictEqual(current?.reasoningEffort, 'high');
+	});
+
 	test('surfaces oauth-derived provider and model eligibility records', async () => {
 		const { settingsService } = await createHarness();
 		await settingsService.markModelIneligible('openai/gpt-5.3-codex-spark', 'upgrade required');

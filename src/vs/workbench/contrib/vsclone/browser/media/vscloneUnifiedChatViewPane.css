@@ -114,6 +114,9 @@
 .vsclone-unified-chat-view-pane.thread-rail-screen .vsclone-chat-left-rail {
 	width: 100% !important;
 	border-right: none;
+	/* The search screen is a full-pane mode, so let the parent glass surface own the
+	 * background and edge treatment instead of layering the legacy opaque side rail over it. */
+	background: transparent;
 }
 
 .vsclone-unified-chat-view-pane.thread-rail-screen .vsclone-chat-conversation {
@@ -136,12 +139,14 @@
 	gap: 8px;
 	height: 24px;
 	padding: 0 8px;
-	border: 1px solid var(--vsclone-subtle-accent-border);
+	border: 1px solid transparent;
 	border-radius: 8px;
 	cursor: pointer;
-	font-size: 11px;
+	/* The Threads action is the primary way back to history, so it needs a slightly stronger
+	 * label than the compact utility controls around it without increasing the toolbar height. */
+	font-size: 13px;
 	font-weight: 600;
-	background: var(--vsclone-subtle-accent-surface);
+	background: transparent;
 	color: #d9dce5;
 }
 
@@ -149,7 +154,7 @@
 	flex: 1;
 }
 
-/* The gear is icon-only, so give it the same visual treatment as text actions with a fixed square hit target. */
+/* Icon-only header actions use the same borderless treatment as the text action, with a fixed square hit target. */
 .vsclone-thread-action-overflow {
 	display: inline-flex;
 	align-items: center;
@@ -157,10 +162,10 @@
 	width: 24px;
 	height: 24px;
 	padding: 0;
-	border: 1px solid var(--vsclone-subtle-accent-border);
+	border: 1px solid transparent;
 	border-radius: 8px;
 	cursor: pointer;
-	background: var(--vsclone-subtle-accent-surface);
+	background: transparent;
 	color: #aeb4c2;
 }
 
@@ -213,23 +218,6 @@
 
 .vsclone-thread-empty-state.hidden {
 	display: none;
-}
-
-.vsclone-thread-empty-state-icon {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 48px;
-	height: 48px;
-	border-radius: 14px;
-	border: 1px solid #3a3d44;
-	background: #222326;
-	color: var(--vsclone-subtle-accent);
-	margin-bottom: 10px;
-}
-
-.vsclone-thread-empty-state-icon .codicon {
-	font-size: 20px;
 }
 
 .vsclone-thread-empty-state-title {
@@ -2296,16 +2284,16 @@
 .vsclone-thread-composer-toolbar {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 4px;
 	padding: 0 8px 6px;
 	background: transparent;
 }
 
 .vsclone-thread-composer-send {
 	flex: none;
-	width: auto;
+	width: 28px;
 	height: 24px;
-	padding: 0 9px;
+	padding: 0;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -2319,8 +2307,9 @@
 }
 
 .vsclone-thread-composer-send::before {
-	content: "Send";
-	margin-right: 6px;
+	/* The composer already exposes "Send message" through title/ARIA; keeping the toolbar button
+	 * icon-only preserves model-name space in the narrow side panel without losing accessibility. */
+	content: none;
 }
 
 .vsclone-thread-composer-send:hover {
@@ -2356,7 +2345,7 @@
 	align-items: center;
 	/* Anchors the usage ring + Send to the right edge of the toolbar so the meter sits next to
 	 * the Send button instead of floating in the middle of whatever leftover space remains. */
-	margin-left: auto;
+	margin-left: 2px;
 }
 
 .vsclone-thread-context-usage {
@@ -2560,20 +2549,21 @@
 	display: flex;
 	align-items: center;
 	flex: 1 1 auto;
-	gap: 6px;
+	gap: 4px;
 	min-width: 0;
 }
 
 .vsclone-thread-model-switcher {
 	position: relative;
 	flex: 0 1 auto;
-	max-width: 168px;
+	width: max-content;
+	max-width: 190px;
 	min-width: 0;
 }
 
 .vsclone-thread-reasoning-level {
 	flex: 0 0 auto;
-	min-width: 106px;
+	min-width: 0;
 }
 
 .vsclone-thread-reasoning-level.hidden {
@@ -2777,14 +2767,14 @@
 	color: #bfc1ca;
 	font-size: 12px;
 	font-weight: 600;
-	padding: 0 22px 0 10px;
+	padding: 0 20px 0 8px;
 	box-sizing: border-box;
 	outline: none;
 	cursor: pointer;
 	transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
 	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23cccccc' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 	background-repeat: no-repeat;
-	background-position: right 7px center;
+	background-position: right 6px center;
 }
 
 .vsclone-unified-chat-view-pane .vsclone-thread-reasoning-level-select:hover {
@@ -2805,12 +2795,14 @@
 
 .vsclone-model-switcher-root {
 	position: relative;
+	width: max-content;
 	max-width: 100%;
+	min-width: 0;
 }
 
 .vsclone-model-switcher-button {
 	height: 24px;
-	width: 100%;
+	width: auto;
 	max-width: 100%;
 	min-width: 0;
 	border-radius: 7px;
@@ -2842,7 +2834,7 @@
 }
 
 .vsclone-model-switcher-button-model {
-	flex: 1 1 auto;
+	flex: 0 1 auto;
 	min-width: 0;
 	white-space: nowrap;
 	text-overflow: ellipsis;
@@ -2872,7 +2864,9 @@
 	position: absolute;
 	left: 0;
 	bottom: calc(100% + 6px);
-	width: min(340px, calc(100vw - 56px));
+	/* The trigger is content-sized, so the menu can stay left-aligned without inheriting the old
+	 * right-edge overflow. Keep the panel only wide enough for common model names. */
+	width: min(236px, calc(100vw - 32px));
 	border: 1px solid #3f4248;
 	border-radius: 10px;
 	background: #252527;
@@ -2889,7 +2883,7 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 10px 12px;
+	padding: 9px 10px;
 	border-bottom: 1px solid #3a3a3d;
 }
 
@@ -2925,7 +2919,7 @@
 .vsclone-model-switcher-menu-body {
 	max-height: min(420px, 60vh);
 	overflow: auto;
-	padding: 10px 8px;
+	padding: 8px 6px;
 	display: flex;
 	flex-direction: column;
 	gap: 1px;
@@ -2935,7 +2929,7 @@
 	display: flex;
 	align-items: baseline;
 	gap: 4px;
-	padding: 8px 8px 4px;
+	padding: 8px 6px 4px;
 	height: auto;
 	background: transparent;
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 52%, transparent 48%);
@@ -2965,7 +2959,7 @@
 	background: transparent;
 	color: color-mix(in srgb, var(--vscode-editor-foreground) 92%, white 8%);
 	min-height: 34px;
-	padding: 0 10px;
+	padding: 0 8px;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
 	align-items: center;
@@ -3043,7 +3037,7 @@
 	align-items: center;
 	justify-content: flex-start;
 	gap: 6px;
-	padding: 0 10px;
+	padding: 0 8px;
 	line-height: 1.15;
 	text-align: left;
 }
@@ -3164,13 +3158,13 @@
 
 @media (max-width: 620px) {
 	.vsclone-thread-model-switcher {
-		/* The composer toolbar has several fixed-width controls. Keep the selected model
-		 * readable while forcing long provider labels to ellipsize before they collide with Send. */
-		max-width: 136px;
+		/* With Send reduced to an icon and adjacent controls tightened, the model name can use the
+		 * flexible middle of the toolbar while still yielding before fixed controls overflow. */
+		max-width: 176px;
 	}
 
 	.vsclone-model-switcher-menu {
-		width: min(320px, 96vw);
+		width: min(228px, calc(100vw - 24px));
 	}
 
 	.vsclone-thread-message {
@@ -3184,7 +3178,9 @@
 	height: 100%;
 	min-height: 0;
 	position: relative;
-	background: #1f1f1f;
+	/* In split-rail mode this remains visually equivalent because the rail container behind it
+	 * paints #1f1f1f; in full search mode it allows the pane's liquid-glass treatment through. */
+	background: transparent;
 	color: #d0d0d0;
 }
 
@@ -3192,6 +3188,10 @@
 	flex: none;
 	padding: 10px 12px;
 	border-bottom: 1px solid #333335;
+	/* The header floats over the glass pane on the search screen, while still reading as the same
+	 * compact rail header in the normal split layout. */
+	background: color-mix(in srgb, #1f1f1f 82%, transparent 18%);
+	backdrop-filter: blur(18px) saturate(1.1);
 }
 
 .vsclone-thread-rail-search-wrap {
@@ -3200,9 +3200,17 @@
 	align-items: center;
 	height: 34px;
 	padding: 0 12px;
-	border: 1px solid #424245;
+	border: 1px solid color-mix(in srgb, #5d626d 70%, transparent 30%);
 	border-radius: 9px;
-	background: #242426;
+	/* Keep the field itself mostly transparent so the pane's liquid-glass lighting is visible
+	 * through the search control instead of being hidden behind a flat input fill. */
+	background:
+		linear-gradient(180deg, rgb(255 255 255 / 8%), rgb(255 255 255 / 2%)),
+		color-mix(in srgb, #242426 42%, transparent 58%);
+	backdrop-filter: blur(20px) saturate(1.18);
+	box-shadow:
+		inset 0 1px 0 rgb(255 255 255 / 12%),
+		inset 0 -1px 0 rgb(0 0 0 / 24%);
 }
 
 .vsclone-thread-rail-search-wrap:focus-within {
@@ -3254,6 +3262,9 @@
 	position: relative;
 	flex: 1;
 	min-height: 0;
+	/* Body content should sit directly on the shared pane surface so empty space in the thread
+	 * search screen does not become a separate dark slab. */
+	background: transparent;
 }
 
 .vsclone-thread-rail-list,
@@ -3268,6 +3279,10 @@
 	flex: none;
 	padding: 10px 12px;
 	border-top: 1px solid #333335;
+	/* Match the header's translucent treatment so the full search screen keeps one continuous
+	 * liquid-glass surface from top search box through the bottom action bar. */
+	background: color-mix(in srgb, #1f1f1f 82%, transparent 18%);
+	backdrop-filter: blur(18px) saturate(1.1);
 }
 
 .vsclone-thread-rail-new-chat {

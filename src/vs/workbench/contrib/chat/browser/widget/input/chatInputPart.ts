@@ -130,6 +130,10 @@ import { Target } from '../../../common/promptSyntax/service/promptsService.js';
 const $ = dom.$;
 
 const INPUT_EDITOR_MAX_HEIGHT = 250;
+const DEFAULT_INPUT_EDITOR_LINE_HEIGHT = 20;
+const DEFAULT_INPUT_EDITOR_PADDING = { top: 8, bottom: 8 };
+const COMPACT_INPUT_EDITOR_PADDING = { top: 2, bottom: 2 };
+const DEFAULT_INPUT_EDITOR_MIN_LINES = 2;
 const CachedLanguageModelsKey = 'chat.cachedLanguageModels.v2';
 
 export interface IChatInputStyles {
@@ -271,6 +275,7 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 	private readonly _contextResourceLabels: ResourceLabels;
 
 	private readonly inputEditorMaxHeight: number;
+	private readonly inputEditorMinHeight: number;
 	private inputEditorHeight: number = 0;
 	private container!: HTMLElement;
 
@@ -549,6 +554,11 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 		this.dnd = this._register(this.instantiationService.createInstance(ChatDragAndDrop, () => this._widget, this._attachmentModel, styles));
 
 		this.inputEditorMaxHeight = this.options.renderStyle === 'compact' ? INPUT_EDITOR_MAX_HEIGHT / 3 : INPUT_EDITOR_MAX_HEIGHT;
+		// The chat input should not collapse to a single-line field when empty. Keeping
+		// the minimum in TS ensures Monaco's measured content height and the parent
+		// ResizeObserver agree during first layout and subsequent content changes.
+		const inputEditorPadding = this.options.renderStyle === 'compact' ? COMPACT_INPUT_EDITOR_PADDING : DEFAULT_INPUT_EDITOR_PADDING;
+		this.inputEditorMinHeight = (DEFAULT_INPUT_EDITOR_LINE_HEIGHT * DEFAULT_INPUT_EDITOR_MIN_LINES) + inputEditorPadding.top + inputEditorPadding.bottom;
 
 		this.inputEditorHasText = ChatContextKeys.inputHasText.bindTo(contextKeyService);
 		this.chatCursorAtTop = ChatContextKeys.inputCursorAtTop.bindTo(contextKeyService);
@@ -1864,8 +1874,8 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 		options.ariaLabel = this._getAriaLabel();
 		options.fontFamily = DEFAULT_FONT_FAMILY;
 		options.fontSize = 13;
-		options.lineHeight = 20;
-		options.padding = this.options.renderStyle === 'compact' ? { top: 2, bottom: 2 } : { top: 8, bottom: 8 };
+		options.lineHeight = DEFAULT_INPUT_EDITOR_LINE_HEIGHT;
+		options.padding = this.options.renderStyle === 'compact' ? COMPACT_INPUT_EDITOR_PADDING : DEFAULT_INPUT_EDITOR_PADDING;
 		options.cursorWidth = 1;
 		options.wrappingStrategy = 'advanced';
 		options.bracketPairColorization = { enabled: false };
@@ -1911,7 +1921,7 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 		}));
 
 		this._register(this._inputEditor.onDidChangeModelContent(() => {
-			const currentHeight = Math.min(this._inputEditor.getContentHeight(), this.inputEditorMaxHeight);
+			const currentHeight = this.getInputEditorLayoutHeight();
 			if (currentHeight !== this.inputEditorHeight) {
 				this.inputEditorHeight = currentHeight;
 				// Directly update editor layout - ResizeObserver will notify parent about height change
@@ -1929,7 +1939,7 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 		}));
 		this._register(this._inputEditor.onDidContentSizeChange(e => {
 			if (e.contentHeightChanged) {
-				this.inputEditorHeight = !this.inline ? e.contentHeight : this.inputEditorHeight;
+				this.inputEditorHeight = !this.inline ? this.getInputEditorLayoutHeight() : this.inputEditorHeight;
 				// Directly update editor layout - ResizeObserver will notify parent about height change
 				if (this.cachedWidth) {
 					this._layout(this.cachedWidth);
@@ -2895,7 +2905,7 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 
 		const initialEditorScrollWidth = this._inputEditor.getScrollWidth();
 		const newEditorWidth = width - data.inputPartHorizontalPadding - data.editorBorder - data.inputPartHorizontalPaddingInside - data.toolbarsWidth - data.sideToolbarWidth;
-		const inputEditorHeight = Math.min(this._inputEditor.getContentHeight(), this.inputEditorMaxHeight);
+		const inputEditorHeight = this.getInputEditorLayoutHeight();
 		const newDimension = { width: newEditorWidth, height: inputEditorHeight };
 		if (!this.previousInputEditorDimension || (this.previousInputEditorDimension.width !== newDimension.width || this.previousInputEditorDimension.height !== newDimension.height)) {
 			// This layout call has side-effects that are hard to understand. eg if we are calling this inside a onDidChangeContent handler, this can trigger the next onDidChangeContent handler
@@ -2908,6 +2918,10 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 			// This is probably the initial layout. Now that the editor is layed out with its correct width, it should report the correct contentHeight
 			return this._layout(width, false);
 		}
+	}
+
+	private getInputEditorLayoutHeight(): number {
+		return Math.max(this.inputEditorMinHeight, Math.min(this._inputEditor.getContentHeight(), this.inputEditorMaxHeight));
 	}
 
 	private getLayoutData() {

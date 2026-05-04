@@ -208,51 +208,79 @@ export const VSCLONE_MODEL_DEFINITIONS_BY_PROVIDER: Record<VSCloneModelVendor, r
 			modelId: 'gemini-2.5-pro',
 			modelName: 'Gemini 2.5 Pro',
 			// Gemini's native tool path requires thought signatures when explicit thinking is replayed
-			// with function calls. Until the runtime preserves those signatures, rely on Google's
-			// model-side presets instead of exposing a generic VSClone thinking slider.
+			// with function calls. Pro cannot be fully disabled, so leave it on Google's dynamic
+			// default instead of exposing a misleading toggle.
 			reasoningCapabilities: false,
 		},
 		{
 			vendor: 'google',
 			modelId: 'gemini-2.5-flash',
 			modelName: 'Gemini 2.5 Flash',
-			// Keep Google thinking preset-based for the same reason as Pro: replaying explicit
-			// thinking alongside function calls needs provider-issued thought signatures.
-			reasoningCapabilities: false,
+			reasoningEffortLevels: ['high', 'minimal'],
+			defaultReasoningEffort: 'high',
+			// Flash uses an effort-shaped dropdown for UI consistency, but the values are intentionally
+			// coarse: `high` keeps Google's provider default and `minimal` sends the documented
+			// low-latency/off config for the model family.
+			reasoningCapabilities: {
+				supportsReasoning: true,
+				canTurnOffReasoning: true,
+				canIOReasoning: false,
+				reasoningSlider: { type: 'effort_slider', values: ['high', 'minimal'], default: 'high' },
+			},
 		},
 		{
 			vendor: 'google',
 			modelId: 'gemini-2.5-flash-lite',
 			modelName: 'Gemini 2.5 Flash Lite',
+			reasoningEffortLevels: ['high', 'minimal'],
+			defaultReasoningEffort: 'high',
 			supportsFIM: true,
-			// Flash Lite is the autocomplete fallback too, so do not attach chat thinking controls that
-			// would make the native Gemini tool loop depend on unpersisted thought signatures.
-			reasoningCapabilities: false,
+			// Flash Lite defaults to no thinking, but keep the same dropdown contract as Flash so chat
+			// users can explicitly choose provider-default dynamic thinking or minimal/off behavior.
+			reasoningCapabilities: {
+				supportsReasoning: true,
+				canTurnOffReasoning: true,
+				canIOReasoning: false,
+				reasoningSlider: { type: 'effort_slider', values: ['high', 'minimal'], default: 'high' },
+			},
 		},
 		{
 			vendor: 'google',
 			modelId: 'gemini-3.1-pro-preview',
 			modelName: 'Gemini 3.1 Pro',
-			// Preview entries are retained for existing persisted selections, but they follow the same
-			// preset-only thinking policy as the stable Gemini 2.5 family.
+			// Gemini 3.1 Pro does not support a true off/minimal toggle, so preserve provider defaults.
 			reasoningCapabilities: false,
 		},
 		{
 			vendor: 'google',
 			modelId: 'gemini-3-flash-preview',
 			modelName: 'Gemini 3 Flash',
-			// Keep Google thinking preset-based for the same reason as Pro: replaying explicit
-			// thinking alongside function calls needs provider-issued thought signatures.
-			reasoningCapabilities: false,
+			reasoningEffortLevels: ['high', 'minimal'],
+			defaultReasoningEffort: 'high',
+			// Gemini 3 Flash cannot guarantee full off, but Google's documented `minimal` level is the
+			// closest low-latency state. Expose it through the same reasoning dropdown as other models.
+			reasoningCapabilities: {
+				supportsReasoning: true,
+				canTurnOffReasoning: true,
+				canIOReasoning: false,
+				reasoningSlider: { type: 'effort_slider', values: ['high', 'minimal'], default: 'high' },
+			},
 		},
 		{
 			vendor: 'google',
 			modelId: 'gemini-3.1-flash-lite-preview',
 			modelName: 'Gemini 3.1 Flash Lite',
+			reasoningEffortLevels: ['high', 'minimal'],
+			defaultReasoningEffort: 'high',
 			supportsFIM: true,
-			// Flash Lite is the autocomplete fallback too, so do not attach chat thinking controls that
-			// would make the native Gemini tool loop depend on unpersisted thought signatures.
-			reasoningCapabilities: false,
+			// Flash Lite's `minimal` level is not a hard off state, but it matches the dropdown's
+			// low-latency intent without pretending Gemini 3 exposes raw token-budget control.
+			reasoningCapabilities: {
+				supportsReasoning: true,
+				canTurnOffReasoning: true,
+				canIOReasoning: false,
+				reasoningSlider: { type: 'effort_slider', values: ['high', 'minimal'], default: 'high' },
+			},
 		},
 	],
 };
@@ -457,6 +485,27 @@ const googleReasoningIOSettings: IVSCloneProviderReasoningIOSettings = {
 		},
 	},
 };
+
+/**
+ * Gemini uses the normal reasoning dropdown in VSClone, but `high` intentionally means "provider
+ * default" rather than a literal wire-level high value. Only `minimal` injects provider config so
+ * Gemini can keep dynamic thinking and thought-signature handling on the SDK-native path otherwise.
+ */
+export function getVSCloneGoogleReasoningConfig(modelId: string, effort: VSCloneReasoningEffortLevel | undefined): Record<string, unknown> | null {
+	if (effort !== 'minimal') {
+		return null;
+	}
+	switch (modelId) {
+		case 'gemini-2.5-flash':
+		case 'gemini-2.5-flash-lite':
+			return { thinkingConfig: { thinkingBudget: 0 } };
+		case 'gemini-3-flash-preview':
+		case 'gemini-3.1-flash-lite-preview':
+			return { thinkingConfig: { thinkingLevel: 'minimal' } };
+		default:
+			return null;
+	}
+}
 
 const VSCLONE_PROVIDER_REASONING_IO_SETTINGS: Record<VSCloneModelVendor, IVSCloneProviderReasoningIOSettings> = {
 	anthropic: anthropicReasoningIOSettings,

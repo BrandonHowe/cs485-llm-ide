@@ -272,6 +272,11 @@ jobs:
       VSCODE_VSCLONE_GOOGLE_CLIENT_ID: ${{ secrets.VSCODE_VSCLONE_GOOGLE_CLIENT_ID }}
       VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET: ${{ secrets.VSCODE_VSCLONE_GOOGLE_CLIENT_SECRET }}
       VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT: ${{ secrets.VSCODE_VSCLONE_GOOGLE_QUOTA_PROJECT }}
+      MACOS_DEVELOPER_ID_CERTIFICATE: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE }}
+      MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+      MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.MACOS_NOTARIZATION_APPLE_ID }}
+      MACOS_NOTARIZATION_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
+      MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
@@ -326,10 +331,69 @@ jobs:
             exit 1
           fi
 
+      - name: Verify macOS Signing Secrets
+        # GitHub release assets inherit a quarantine attribute when users
+        # download them in a browser. macOS treats unsigned quarantined apps as
+        # damaged, so fail the release job instead of publishing a DMG that
+        # users must bypass locally.
+        run: |
+          set -e
+          if [ -z "${MACOS_DEVELOPER_ID_CERTIFICATE}" ]; then
+            echo "ERROR: MACOS_DEVELOPER_ID_CERTIFICATE secret is missing; refusing to ship an unsigned macOS DMG." >&2
+            exit 1
+          fi
+          if [ -z "${MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD}" ]; then
+            echo "ERROR: MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD secret is missing; refusing to ship an unsigned macOS DMG." >&2
+            exit 1
+          fi
+          if [ -z "${MACOS_NOTARIZATION_APPLE_ID}" ]; then
+            echo "ERROR: MACOS_NOTARIZATION_APPLE_ID secret is missing; refusing to ship an unnotarized macOS DMG." >&2
+            exit 1
+          fi
+          if [ -z "${MACOS_NOTARIZATION_PASSWORD}" ]; then
+            echo "ERROR: MACOS_NOTARIZATION_PASSWORD secret is missing; refusing to ship an unnotarized macOS DMG." >&2
+            exit 1
+          fi
+          if [ -z "${MACOS_NOTARIZATION_TEAM_ID}" ]; then
+            echo "ERROR: MACOS_NOTARIZATION_TEAM_ID secret is missing; refusing to ship an unnotarized macOS DMG." >&2
+            exit 1
+          fi
+
       - name: Build macOS arm64 Client
         run: npm run gulp "vscode-darwin-arm64-min-ci"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign macOS arm64 Client
+        # The upstream signing helper already applies Electron-specific
+        # hardened-runtime entitlements to the main app and nested helper apps.
+        # Reusing it avoids a shallow codesign pass that leaves helper bundles
+        # invalid under Gatekeeper.
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/buildagent.keychain"
+          CERT_PATH="$RUNNER_TEMP/developer-id-application.p12"
+          echo "${MACOS_DEVELOPER_ID_CERTIFICATE}" | base64 -D > "$CERT_PATH"
+          security create-keychain -p pwd "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p pwd "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "${MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k pwd "$KEYCHAIN_PATH"
+          export AGENT_TEMPDIRECTORY="$RUNNER_TEMP"
+          export CODESIGN_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -oEi '([0-9A-F]{40})' | head -n 1)"
+          if [ -z "$CODESIGN_IDENTITY" ]; then
+            echo "ERROR: no codesigning identity was imported from MACOS_DEVELOPER_ID_CERTIFICATE." >&2
+            exit 1
+          fi
+          APP_PATH="$(find .. .build -type d -name '*.app' -path '*/VSCode-darwin-arm64/*' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: macOS app bundle was not produced." >&2
+            find .. .build -type d -name 'VSCode-darwin-arm64' -print >&2
+            exit 1
+          fi
+          BUILD_DIR="$(cd "$(dirname "$(dirname "$APP_PATH")")" && pwd)"
+          DEBUG=electron-osx-sign* node build/darwin/sign.ts "$BUILD_DIR"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
       - name: Stage macOS arm64 Release Asset
         run: |
@@ -359,6 +423,15 @@ jobs:
           # bundle, and DMG are found regardless of the helper's working directory.
           node build/darwin/create-dmg.ts "$BUILD_DIR" "$DMG_OUT"
           python3 build/darwin/patch-dmg.py "$DMG_OUT/VSCode-darwin-arm64.dmg" resources/darwin/code.icns
+          # patch-dmg.py rewrites the container after create-dmg runs, so
+          # notarize and staple only after the final bytes are in place.
+          xcrun notarytool submit "$DMG_OUT/VSCode-darwin-arm64.dmg" \
+            --apple-id "${MACOS_NOTARIZATION_APPLE_ID}" \
+            --password "${MACOS_NOTARIZATION_PASSWORD}" \
+            --team-id "${MACOS_NOTARIZATION_TEAM_ID}" \
+            --wait
+          xcrun stapler staple "$DMG_OUT/VSCode-darwin-arm64.dmg"
+          spctl --assess --type open --context context:primary-signature --verbose "$DMG_OUT/VSCode-darwin-arm64.dmg"
           cp "$DMG_OUT/VSCode-darwin-arm64.dmg" "release/VSCode-darwin-arm64-${VERSION}.dmg"
           # Stable alias so deep links like /releases/latest/download/VSCode-darwin-arm64-latest.dmg
           # keep resolving when package.json version bumps change the versioned filename.
@@ -422,11 +495,11 @@ jobs:
 
           Assets:
           - Windows: unsigned x64 installer \`.exe\`
-          - macOS: unsigned Apple Silicon (arm64) \`.dmg\`
+          - macOS: signed and notarized Apple Silicon (arm64) \`.dmg\`
 
           Install notes:
           - Windows: if SmartScreen warns, click "More info" and then "Run anyway".
-          - macOS: if Gatekeeper blocks the app, use "Open Anyway" in Privacy & Security and relaunch it once.
+          - macOS: open the DMG, drag the app into Applications, then launch it normally.
           EOF
 
           if gh release view "$TAG" >/dev/null 2>&1; then

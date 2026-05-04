@@ -1159,12 +1159,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 
 		const emptyState = document.createElement("div");
 		emptyState.className = "vsclone-thread-empty-state";
-		const emptyIcon = document.createElement("div");
-		emptyIcon.className = "vsclone-thread-empty-state-icon";
-		const emptyIconGlyph = document.createElement("span");
-		emptyIconGlyph.className = "codicon codicon-sparkle";
-		emptyIconGlyph.setAttribute("aria-hidden", "true");
-		emptyIcon.appendChild(emptyIconGlyph);
 		const emptyTitle = document.createElement("div");
 		emptyTitle.className = "vsclone-thread-empty-state-title";
 		emptyTitle.textContent = localize(
@@ -1177,7 +1171,6 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 			"vsclone.thread.empty.description",
 			"Describe a change, ask a question, or pick a suggestion below to get going.",
 		);
-		emptyState.appendChild(emptyIcon);
 		emptyState.appendChild(emptyTitle);
 		emptyState.appendChild(emptyDescription);
 		const suggestions = document.createElement("div");
@@ -3641,9 +3634,12 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		const statusClass = "running";
 		switch (state.streamState.kind) {
 			case "llm":
+				if (this.hasVisibleRuntimeAssistantText(state.messages)) {
+					return undefined;
+				}
 				label = localize(
 					"vsclone.thread.runtime.status.llm",
-					"Assistant is thinking...",
+					"Thinking...",
 				);
 				break;
 			case "awaiting_user":
@@ -3665,24 +3661,47 @@ export class VSCloneUnifiedChatViewPane extends ViewPane {
 		}
 
 		const status = document.createElement("div");
-		status.className = "vsclone-thread-message assistant runtime runtime-status";
+		status.className = state.streamState.kind === "llm"
+			? "vsclone-thread-message assistant runtime runtime-tool runtime-tool-compact runtime-status"
+			: "vsclone-thread-message assistant runtime runtime-status";
 		status.classList.add(`status-${statusClass}`);
 		this.markRuntimeElementEntrance(status, `status:${state.threadId}:${state.streamState.kind}:${state.streamState.kind === 'tool' ? state.streamState.toolName : ''}`);
 
-		const body = document.createElement("div");
-		body.className = "vsclone-thread-message-body";
 		const badge = document.createElement("div");
-		badge.className = "vsclone-runtime-status-badge";
+		badge.className = state.streamState.kind === "llm"
+			? "vsclone-runtime-tool-compact-line"
+			: "vsclone-runtime-status-badge";
 		const icon = document.createElement("span");
-		icon.className = "codicon codicon-loading codicon-modifier-spin";
+		icon.className = state.streamState.kind === "llm"
+			? "codicon codicon-loading codicon-modifier-spin vsclone-runtime-tool-compact-icon"
+			: "codicon codicon-loading codicon-modifier-spin";
 		icon.setAttribute("aria-hidden", "true");
 		badge.appendChild(icon);
 		const text = document.createElement("span");
+		if (state.streamState.kind === "llm") {
+			text.className = "vsclone-runtime-tool-compact-verb";
+		}
 		text.textContent = label;
 		badge.appendChild(text);
-		body.appendChild(badge);
-		status.appendChild(body);
+		status.appendChild(badge);
 		return status;
+	}
+
+	private hasVisibleRuntimeAssistantText(
+		messages: readonly IVSCloneThreadRuntimeMessage[],
+	): boolean {
+		for (let index = messages.length - 1; index >= 0; index--) {
+			const message = messages[index];
+			if (message.role === "user") {
+				break;
+			}
+			// The transient Thinking row is only for the pre-token gap in the current turn. Once
+			// provider text has reached the active assistant row, that row owns the streaming state.
+			if (message.role === "assistant" && this.stripRuntimeAssistantWorkflowMarkup(message.content).trim().length > 0) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private hasVisibleRunningRuntimeTool(

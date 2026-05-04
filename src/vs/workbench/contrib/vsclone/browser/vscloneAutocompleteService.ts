@@ -142,8 +142,8 @@ interface IVSCloneInlineCompletionFallbackCandidate {
 const editorInlineCompletionFallbackCandidates: readonly IVSCloneInlineCompletionFallbackCandidate[] = [
 	{ modelIdentifier: 'openai/gpt-5.3-codex-spark', reasoningEffort: 'lite' },
 	{ modelIdentifier: 'openai/gpt-5-nano', reasoningEffort: 'none' },
-	// Google thinking is model-preset-driven in VSClone, so the inline fallback deliberately omits
-	// an effort override that the Gemini transport would ignore for FIM anyway.
+	// Autocomplete still needs FIM support, so Google falls back to Flash Lite rather than the
+	// chat-default Gemini 3 Flash model.
 	{ modelIdentifier: 'google/gemini-2.5-flash-lite' },
 	{ modelIdentifier: 'google/gemini-3.1-flash-lite-preview' },
 	{ modelIdentifier: 'anthropic/claude-haiku-4-5-20251001' },

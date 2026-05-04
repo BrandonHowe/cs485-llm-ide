@@ -1050,9 +1050,6 @@ export function VSCloneUnifiedConversationSurface(props: IVSCloneConversationSur
 				ref={props.conversationEmptyStateRef}
 				className={props.emptyStateHidden ? 'vsclone-thread-empty-state hidden' : 'vsclone-thread-empty-state'}
 			>
-				<div className="vsclone-thread-empty-state-icon" aria-hidden="true">
-					<span className="codicon codicon-comment-discussion" />
-				</div>
 				<div className="vsclone-thread-empty-state-title">
 					{localize('vsclone.thread.empty.title', 'Start a new chat')}
 				</div>

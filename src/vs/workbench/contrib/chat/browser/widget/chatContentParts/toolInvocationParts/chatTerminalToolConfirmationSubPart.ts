@@ -113,7 +113,7 @@ export class ChatTerminalToolConfirmationSubPart extends BaseChatToolInvocationS
 		const isReadOnly = !!terminalData.presentationOverrides;
 
 		const autoApproveEnabled = this.configurationService.getValue(TerminalContribSettingId.EnableAutoApprove) === true;
-		const autoApproveWarningAccepted = this.storageService.getBoolean(TerminalToolConfirmationStorageKeys.TerminalAutoApproveWarningAccepted, StorageScope.APPLICATION, false);
+		let autoApproveWarningAccepted = this.storageService.getBoolean(TerminalToolConfirmationStorageKeys.TerminalAutoApproveWarningAccepted, StorageScope.APPLICATION, false);
 		let moreActions: (IChatConfirmationButton<TerminalNewAutoApproveButtonData> | Separator)[] | undefined = undefined;
 		if (autoApproveEnabled) {
 			moreActions = [];
@@ -207,7 +207,7 @@ export class ChatTerminalToolConfirmationSubPart extends BaseChatToolInvocationS
 				title,
 				icon: Codicon.terminal,
 				message: elements.root,
-				buttons: this._createButtons(moreActions)
+				buttons: this._createButtons(moreActions, autoApproveEnabled)
 			},
 		));
 
@@ -238,6 +238,7 @@ export class ChatTerminalToolConfirmationSubPart extends BaseChatToolInvocationS
 						const optedIn = await this._showAutoApproveWarning();
 						if (optedIn) {
 							this.storageService.store(TerminalToolConfirmationStorageKeys.TerminalAutoApproveWarningAccepted, true, StorageScope.APPLICATION, StorageTarget.USER);
+							autoApproveWarningAccepted = true;
 							// If this command would have been auto-approved, approve immediately
 							if (terminalData.autoApproveInfo) {
 								toolConfirmKind = ToolConfirmKind.UserAction;
@@ -251,7 +252,7 @@ export class ChatTerminalToolConfirmationSubPart extends BaseChatToolInvocationS
 									}
 								}
 
-								confirmWidget.updateButtons(this._createButtons(terminalCustomActions));
+								confirmWidget.updateButtons(this._createButtons(terminalCustomActions, autoApproveEnabled));
 								doComplete = false;
 							}
 						} else {
@@ -363,6 +364,18 @@ export class ChatTerminalToolConfirmationSubPart extends BaseChatToolInvocationS
 						break;
 					}
 					case 'sessionApproval': {
+						// Session approval is intentionally available as a top-level affordance. Keep the
+						// same opt-in warning that protects the nested auto-approve actions so the more
+						// discoverable button does not silently bypass the terminal approval risk notice.
+						if (!autoApproveWarningAccepted) {
+							const optedIn = await this._showAutoApproveWarning();
+							if (!optedIn) {
+								doComplete = false;
+								break;
+							}
+							this.storageService.store(TerminalToolConfirmationStorageKeys.TerminalAutoApproveWarningAccepted, true, StorageScope.APPLICATION, StorageTarget.USER);
+							autoApproveWarningAccepted = true;
+						}
 						const sessionResource = this.context.element.sessionResource;
 						this.terminalChatService.setChatSessionAutoApproval(sessionResource, true);
 						const disableUri = createCommandUri(TerminalContribCommandId.DisableSessionAutoApproval, sessionResource);
@@ -387,23 +400,32 @@ export class ChatTerminalToolConfirmationSubPart extends BaseChatToolInvocationS
 		this.domNode = confirmWidget.domNode;
 	}
 
-	private _createButtons(moreActions: (IChatConfirmationButton<TerminalNewAutoApproveButtonData> | Separator)[] | undefined): IChatConfirmationButton<boolean | TerminalNewAutoApproveButtonData>[] {
+	private _createButtons(moreActions: (IChatConfirmationButton<TerminalNewAutoApproveButtonData> | Separator)[] | undefined, autoApproveEnabled: boolean): IChatConfirmationButton<boolean | TerminalNewAutoApproveButtonData>[] {
 		const getLabelAndTooltip = (label: string, actionId: string, tooltipDetail: string = label): { label: string; tooltip: string } => {
 			const tooltip = this.keybindingService.appendKeybinding(tooltipDetail, actionId);
 			return { label, tooltip };
 		};
-		return [
+		const buttons: IChatConfirmationButton<boolean | TerminalNewAutoApproveButtonData>[] = [
 			{
 				...getLabelAndTooltip(localize('tool.allow', "Allow"), AcceptToolConfirmationActionId),
 				data: true,
 				moreActions,
 			},
-			{
-				...getLabelAndTooltip(localize('tool.skip', "Skip"), SkipToolConfirmationActionId, localize('skip.detail', 'Proceed without executing this command')),
-				data: { type: 'skip' },
-				isSecondary: true,
-			},
 		];
+		if (autoApproveEnabled) {
+			buttons.push({
+				label: localize('tool.allowAllCommands', "Allow All Commands"),
+				tooltip: localize('tool.allowAllCommands.tooltip', "Allow this tool to run terminal commands without confirmation for the rest of this chat session."),
+				data: { type: 'sessionApproval' },
+				isSecondary: true,
+			});
+		}
+		buttons.push({
+			...getLabelAndTooltip(localize('tool.skip', "Skip"), SkipToolConfirmationActionId, localize('skip.detail', 'Proceed without executing this command')),
+			data: { type: 'skip' },
+			isSecondary: true,
+		});
+		return buttons;
 	}
 
 	private async _showAutoApproveWarning(): Promise<boolean> {

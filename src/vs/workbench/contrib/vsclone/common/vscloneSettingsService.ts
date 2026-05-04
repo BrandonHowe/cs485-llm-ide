@@ -106,16 +106,26 @@ const settingsStorageKey = 'vsclone.settings.v1';
 const legacyModelEligibilityStorageKey = 'vsclone.modelEligibility.v1';
 
 const providerOrder = new Map(VSCLONE_PROVIDER_SETTINGS_DEFAULTS.map((provider, index) => [provider.vendor, index]));
+const chatFallbackCandidates: readonly IVSCloneSelectionFallbackCandidate[] = [
+	{ modelIdentifier: 'openai/gpt-5.4', reasoningEffort: 'medium' },
+	{ modelIdentifier: 'anthropic/claude-haiku-4-5-20251001', reasoningEffort: 'medium' },
+	// When Google supplies the fallback model, prefer Gemini 3 Flash because it uses the current
+	// `thinkingLevel` API and gives VSClone the same Auto/Minimal dropdown shape as other models.
+	{ modelIdentifier: 'google/gemini-3-flash-preview', reasoningEffort: 'high' },
+];
 const featureFallbackCandidates: Partial<Record<VSCloneSettingsFeatureName, readonly IVSCloneSelectionFallbackCandidate[]>> = {
+	Chat: chatFallbackCandidates,
 	Autocomplete: [
 		{ modelIdentifier: 'openai/gpt-5.3-codex-spark', reasoningEffort: 'lite' },
 		{ modelIdentifier: 'openai/gpt-5-nano', reasoningEffort: 'none' },
-		// Gemini has no VSClone-side thinking slider; keep the fallback preset-only so selection
-		// normalization does not carry a stale effort into chat/tool requests.
+		// Autocomplete still needs FIM support, so Google falls back to Flash Lite rather than the
+		// chat-default Gemini 3 Flash model.
 		{ modelIdentifier: 'google/gemini-2.5-flash-lite' },
 		{ modelIdentifier: 'google/gemini-3.1-flash-lite-preview' },
 		{ modelIdentifier: 'anthropic/claude-haiku-4-5-20251001' },
 	],
+	Notebook: chatFallbackCandidates,
+	Terminal: chatFallbackCandidates,
 };
 
 function createEmptyStoredSettingsState(): IVSCloneStoredSettingsState {

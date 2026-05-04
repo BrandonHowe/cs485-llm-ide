@@ -143,6 +143,7 @@ interface IRuntimeConversationHarness {
 	currentRuntimeElementKeys: Set<string>;
 	threadRuntimeService: {
 		getState(threadId: string): IVSCloneThreadRuntimeState | undefined;
+		getAssistantEditApplicationState(threadId: string, messageId: string): unknown;
 	};
 	renderRuntimeConversationNodes(state: IVSCloneThreadRuntimeState): HTMLElement[];
 }
@@ -335,11 +336,15 @@ function createRuntimeConversationHarness(): IRuntimeConversationHarness {
 	const pane = Object.create(VSCloneUnifiedChatViewPane.prototype) as IRuntimeConversationHarness;
 	pane.enteredRuntimeElementKeys = new Set<string>();
 	pane.currentRuntimeElementKeys = new Set<string>();
+	// Assistant rows consult the apply-state cache even when the test message is plain prose.
+	// Mirror the constructor field so status-rendering tests can exercise the real assistant path.
+	(pane as unknown as { pendingAssistantApplyMessageIds: Set<string> }).pendingAssistantApplyMessageIds = new Set();
 	(pane as unknown as { streamedAssistantTextByMessageId: Map<string, string> }).streamedAssistantTextByMessageId = new Map();
 	(pane as unknown as { reasoningPanelStateByMessageId: Map<string, { userToggled: boolean; open: boolean }> }).reasoningPanelStateByMessageId = new Map();
 	(pane as unknown as { renderedMarkdownDisposables: { add<T>(value: T): T } }).renderedMarkdownDisposables = { add: value => value };
 	pane.threadRuntimeService = {
 		getState: (threadId: string) => states.get(threadId),
+		getAssistantEditApplicationState: () => undefined,
 	};
 	return pane;
 }
@@ -840,6 +845,16 @@ function createAssistantMessage(content: string): Extract<IVSCloneThreadRuntimeM
 	};
 }
 
+function createUserMessage(content: string): Extract<IVSCloneThreadRuntimeMessage, { readonly role: 'user' }> {
+	return {
+		id: `user-${content.length}`,
+		role: 'user',
+		mode: 'act',
+		createdAt: 1,
+		content,
+	};
+}
+
 suite('VSCloneUnifiedChatViewPane', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -979,10 +994,43 @@ suite('VSCloneUnifiedChatViewPane', () => {
 
 		assert.strictEqual(llmNodes.length, 1);
 		assert.strictEqual(llmNodes[0].classList.contains('runtime-status'), true);
-		assert.strictEqual(llmNodes[0].textContent?.includes('Assistant is thinking...'), true);
+		assert.strictEqual(llmNodes[0].classList.contains('runtime-tool-compact'), true);
+		assert.strictEqual(llmNodes[0].textContent?.includes('Thinking...'), true);
 		assert.strictEqual(toolNodes.length, 1);
 		assert.strictEqual(toolNodes[0].classList.contains('runtime-status'), true);
 		assert.strictEqual(toolNodes[0].textContent?.includes('Running tool: read_file'), true);
+	});
+
+	test('removes llm thinking status once assistant text starts streaming', () => {
+		const harness = createRuntimeConversationHarness();
+		const state: IVSCloneThreadRuntimeState = {
+			...createRuntimeState([createAssistantMessage('first token')]),
+			streamState: { kind: 'llm' },
+		};
+
+		const nodes = harness.renderRuntimeConversationNodes(state);
+
+		assert.strictEqual(nodes.some(node => node.classList.contains('runtime-status')), false);
+		assert.strictEqual(nodes.some(node => node.textContent?.includes('first token')), true);
+	});
+
+	test('keeps llm thinking status before tokens on later turns', () => {
+		const harness = createRuntimeConversationHarness();
+		const state: IVSCloneThreadRuntimeState = {
+			...createRuntimeState([
+				createUserMessage('first question'),
+				createAssistantMessage('previous answer'),
+				createUserMessage('second question'),
+			]),
+			streamState: { kind: 'llm' },
+		};
+
+		const nodes = harness.renderRuntimeConversationNodes(state);
+
+		const statusNode = nodes.find(node => node.classList.contains('runtime-status'));
+		assert.ok(statusNode);
+		assert.strictEqual(statusNode.textContent?.includes('Thinking...'), true);
+		assert.strictEqual(statusNode.classList.contains('runtime-tool-compact'), true);
 	});
 
 	test('suppresses duplicate status rows while awaiting user approval', () => {

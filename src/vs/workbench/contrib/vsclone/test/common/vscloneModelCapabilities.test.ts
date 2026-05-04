@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { getVSCloneIsReasoningEnabledState, getVSCloneModelCapabilityMetadata, getVSCloneProviderReasoningIOSettings, getVSCloneReservedOutputTokenSpaceForReasoning, getVSCloneSendableReasoningInfo, getVSCloneStaticModelDefinition, getVSCloneStaticModelDefinitionByIdentifier, isVSCloneReasoningEffortLevel, supportsVSCloneFeature, toVSCloneOpenAIReasoningEffort, VSCLONE_MODEL_IDENTIFIERS } from '../../common/vscloneModelCapabilities.js';
+import { getVSCloneGoogleReasoningConfig, getVSCloneIsReasoningEnabledState, getVSCloneModelCapabilityMetadata, getVSCloneProviderReasoningIOSettings, getVSCloneReservedOutputTokenSpaceForReasoning, getVSCloneSendableReasoningInfo, getVSCloneStaticModelDefinition, getVSCloneStaticModelDefinitionByIdentifier, isVSCloneReasoningEffortLevel, supportsVSCloneFeature, toVSCloneOpenAIReasoningEffort, VSCLONE_MODEL_IDENTIFIERS } from '../../common/vscloneModelCapabilities.js';
 
 suite('VSCloneModelCapabilities', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -54,20 +54,36 @@ suite('VSCloneModelCapabilities', () => {
 		assert.strictEqual(supportsVSCloneFeature('google', 'gemini-3.1-pro-preview', 'Autocomplete'), false);
 	});
 
-	test('keeps Gemini thinking preset-only instead of publishing a VSClone slider', () => {
+	test('exposes Gemini Flash thinking as a coarse dropdown without raw budget control', () => {
 		const gemini = getVSCloneStaticModelDefinitionByIdentifier('google/gemini-2.5-flash-lite');
+		const geminiPro = getVSCloneStaticModelDefinitionByIdentifier('google/gemini-2.5-pro');
 		assert.ok(gemini);
+		assert.ok(geminiPro);
 
 		const geminiCapabilities = getVSCloneModelCapabilityMetadata(gemini!);
-		// Gemini function-call replay needs provider-issued thought signatures when explicit
-		// thinking is included, so the catalog must not synthesize `thinkingConfig` from stale
-		// `reasoningBudget` or `reasoningEffort` selection fields.
-		assert.strictEqual(geminiCapabilities.reasoningCapabilities, false);
-		assert.strictEqual(getVSCloneSendableReasoningInfo('Chat', 'google', 'gemini-2.5-flash-lite', {
+		// Gemini function-call replay needs provider-issued thought signatures when explicit thinking
+		// is included, so Flash models expose a coarse Auto/Minimal dropdown instead of raw token
+		// budgets. The Google request builder owns the provider-specific mapping from that dropdown.
+		assert.deepStrictEqual(geminiCapabilities.reasoningCapabilities, {
+			supportsReasoning: true,
+			canTurnOffReasoning: true,
+			canIOReasoning: false,
+			reasoningSlider: { type: 'effort_slider', values: ['high', 'minimal'], default: 'high' },
+		});
+		assert.strictEqual(getVSCloneModelCapabilityMetadata(geminiPro!).reasoningCapabilities, false);
+		assert.deepStrictEqual(getVSCloneSendableReasoningInfo('Chat', 'google', 'gemini-2.5-flash-lite', {
 			reasoningEnabled: true,
 			reasoningBudget: 8192,
 			reasoningEffort: 'high',
-		}), null);
+		}), {
+			type: 'effort_slider_value',
+			isReasoningEnabled: true,
+			reasoningEffort: 'high',
+		});
+		assert.deepStrictEqual(getVSCloneGoogleReasoningConfig('gemini-2.5-flash-lite', 'minimal'), { thinkingConfig: { thinkingBudget: 0 } });
+		assert.deepStrictEqual(getVSCloneGoogleReasoningConfig('gemini-3-flash-preview', 'minimal'), { thinkingConfig: { thinkingLevel: 'minimal' } });
+		assert.strictEqual(getVSCloneGoogleReasoningConfig('gemini-3-flash-preview', 'high'), null);
+		assert.strictEqual(getVSCloneGoogleReasoningConfig('gemini-2.5-pro', 'minimal'), null);
 	});
 
 	test('resolves reasoning state and reserved output space for off-capable models', () => {

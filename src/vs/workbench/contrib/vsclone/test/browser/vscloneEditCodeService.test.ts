@@ -11,6 +11,7 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ResourceTextEdit } from '../../../../../editor/browser/services/bulkEditService.js';
+import { SaveReason } from '../../../../common/editor.js';
 import { VSCloneEditCodeService } from '../../browser/vscloneEditCodeService.js';
 import type { VSCloneParsedEdit } from '../../browser/vscloneEditCodeServiceInterface.js';
 
@@ -47,6 +48,7 @@ suite('VSCloneEditCodeService', () => {
 		_modelService: { getModel: (uri: URI) => null };
 		bulkEditService: { apply: (edits: readonly unknown[], options: { label: string }) => Promise<{ isApplied: boolean }> };
 		fileService: { exists: (uri: URI) => Promise<boolean>; createFolder: (uri: URI) => Promise<void> };
+		textFileService: { isDirty: (uri: URI) => boolean; save: (uri: URI, options: { reason: SaveReason }) => Promise<URI | undefined> };
 		textModelService: { createModelReference: (uri: URI) => Promise<{ object: { textEditorModel: { getValue: () => string; getLineCount: () => number; getLineMaxColumn: (lineNumber: number) => number } }; dispose: () => void }> };
 		workspaceContextService: { getWorkspace: () => { folders: Array<{ uri: URI; name: string; index: number }> } };
 		editorService: { openEditor: (input: { resource: URI }) => Promise<void> };
@@ -82,6 +84,10 @@ suite('VSCloneEditCodeService', () => {
 		service.fileService = {
 			exists: async () => false,
 			createFolder: async () => undefined,
+		};
+		service.textFileService = {
+			isDirty: () => false,
+			save: async uri => uri,
 		};
 		service.textModelService = {
 			createModelReference: async () => {
@@ -196,6 +202,7 @@ suite('VSCloneEditCodeService', () => {
 		const service = createServiceHarness();
 		const uri = URI.file('/workspace/src/app.ts');
 		const appliedResourceEdits: unknown[][] = [];
+		const savedResources: Array<{ uri: URI; reason: SaveReason }> = [];
 		service.safeCreateModelReference = async () => ({
 			object: {
 				textEditorModel: {
@@ -210,6 +217,13 @@ suite('VSCloneEditCodeService', () => {
 			apply: async (edits) => {
 				appliedResourceEdits.push([...edits]);
 				return { isApplied: true };
+			},
+		};
+		service.textFileService = {
+			isDirty: candidate => candidate.toString() === uri.toString(),
+			save: async (candidate, options) => {
+				savedResources.push({ uri: candidate, reason: options.reason });
+				return candidate;
 			},
 		};
 
@@ -230,6 +244,7 @@ suite('VSCloneEditCodeService', () => {
 		assert.strictEqual(appliedResourceEdits.length, 1);
 		assert.strictEqual(appliedResourceEdits[0].length, 1);
 		assert.ok(appliedResourceEdits[0][0] instanceof ResourceTextEdit);
+		assert.deepStrictEqual(savedResources, [{ uri, reason: SaveReason.AUTO }]);
 	});
 
 	test('startApplying routes bare SEARCH/REPLACE payloads through the edit path when the target URI is already known', async () => {
@@ -335,6 +350,7 @@ suite('VSCloneEditCodeService', () => {
 		const uri = URI.file('/workspace/src/new-file.ts');
 		const createdFolders: string[] = [];
 		const appliedLabels: string[] = [];
+		const savedResources: Array<{ uri: URI; reason: SaveReason }> = [];
 		let openedResource: URI | undefined;
 		service.fileService = {
 			exists: async () => false,
@@ -353,6 +369,13 @@ suite('VSCloneEditCodeService', () => {
 				openedResource = input.resource;
 			},
 		};
+		service.textFileService = {
+			isDirty: candidate => candidate.toString() === uri.toString(),
+			save: async (candidate, options) => {
+				savedResources.push({ uri: candidate, reason: options.reason });
+				return candidate;
+			},
+		};
 
 		const result = await service.instantlyRewriteFile({
 			uri,
@@ -361,6 +384,7 @@ suite('VSCloneEditCodeService', () => {
 
 		assert.deepStrictEqual(createdFolders, ['/workspace/src']);
 		assert.deepStrictEqual(appliedLabels, ['Rewrite VSClone file']);
+		assert.deepStrictEqual(savedResources, [{ uri, reason: SaveReason.AUTO }]);
 		assert.strictEqual(openedResource?.toString(), uri.toString());
 		assert.strictEqual(result.appliedEdits, 1);
 		assert.deepStrictEqual(result.modifiedFiles, [uri]);
@@ -379,6 +403,7 @@ suite('VSCloneEditCodeService', () => {
 		const service = createServiceHarness();
 		const uri = URI.file('/workspace/src/app.ts');
 		let openCalls = 0;
+		let saveCalls = 0;
 		service.safeCreateModelReference = async () => ({
 			object: {
 				textEditorModel: {
@@ -397,6 +422,13 @@ suite('VSCloneEditCodeService', () => {
 				openCalls += 1;
 			},
 		};
+		service.textFileService = {
+			isDirty: () => true,
+			save: async candidate => {
+				saveCalls += 1;
+				return candidate;
+			},
+		};
 
 		const result = await service.instantlyRewriteFile({
 			uri,
@@ -411,6 +443,7 @@ suite('VSCloneEditCodeService', () => {
 			fileChanges: [],
 		});
 		assert.strictEqual(openCalls, 0);
+		assert.strictEqual(saveCalls, 0);
 		assert.strictEqual(Object.keys(service.diffAreaOfId).length, 0);
 	});
 
